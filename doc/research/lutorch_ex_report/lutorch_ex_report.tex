@@ -122,16 +122,16 @@ $u$ (anchor-pair differences) and $m=|u|$, the per-table score is
  s \;=\; \Big(\textstyle\sum_j m_j\Big)\,\exp\!\Big(\gamma\textstyle\sum_j \log\sigma(\beta\,m_j)\Big),
 \]
 $\beta=e^{\log\beta}$, $\gamma=e^{\log\gamma}$ learnable (per layer; $g$ frozen at $0$ in the champion).
-\code{read\_top\_n}$=2$ blends the two most-confident cells with a $\tau$-temperature softmax over the deciding
-margin; \code{read\_top\_n}$=1$ reads the single scored cell. Gradients flow to $W$, $\beta$, $\gamma$ (and
-$\tau$ for $n{=}2$). \tbd{write the exact $n{=}2$ blend weights $(v,1{-}v)$ and the $\tau$ form from
-\code{confidence.py} / lut\_mechanisms \S confidence forms.}
+The $n{=}2$ read blends the addressed cell $c_1$ and the runner-up $c_2$ (obtained by flipping the
+least-certain address bit, i.e.\ the smallest margin $u^\star=\min_j u_j$) with a softmax over the deciding
+margin: $v=\sigma(2u^\star/\tau)$, and the table contributes $s\,[\,v\,W[c_1]+(1-v)\,W[c_2]\,]$; $n{=}1$ reads
+only the scored cell $s\,W[c_1]$. Gradients flow to $W$, $\beta$, $\gamma$ (and $\tau$ for $n{=}2$).
 \begin{lstlisting}
 from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
 cart = ConfidenceLUT(spec, seed=1, read_top_n=2, beta_init=2.0, gamma_init=1.0,
                      read_tau_init=0.5, read_tau_learnable=True)
-ffn  = ProjectionMHL(cart, d_model=512)   # drop-in d_model -> d_model FFN
+ffn  = ProjectionMHL(cart, d_model=384)   # drop-in d_model -> d_model FFN
 \end{lstlisting}
 
 \subsection{\code{QuantisedConfidenceLUT} (extended)}
@@ -154,13 +154,26 @@ scale $2^{\,e-6}$; \code{export\_deployment} folds that pure-power-of-two multip
 of the \code{decompress} weight (scaling column $k$ by $2^{\,e-6}$ only touches the fp32 exponent field). The
 deployed cartridge then returns the \emph{raw} int32 accumulator and reports \code{decompress\_scale()}$=$None
 (the scale is static in the stored weight). Requires \code{read\_top\_n}$=2$ and $h_\text{out}=G$ (the champion);
-fan-in would need a pre-route scale. \tbd{verify the exact $c_q$ constant and the \code{quant\_cfg}
-(bits/offset/Q/lo/hi) against \code{\_pow2.py}; cite lut\_ablation \S quant.}
+fan-in would need a pre-route scale.
+
+\textbf{Exact constants} (from the quantisation reference, \code{sources/quantisation\_simple\_norowops.md}).
+\code{quant\_cfg}: $b=8$ bits, offset $o=0$. Blend exponents: $q=\mathrm{clamp}\!\big(\lfloor 2u^\star/(\tau\ln
+2)+\tfrac12\rfloor,0,J\big)$ with $J=64$, $c_q=\log_2(1+2^{-q})$ for $q<C=8$ (else $0$); the second cell is
+dropped when $q>Q=3$. The weight exponent $k'=\mathrm{round}(\log_2 s-c_q)$ lives in an $L=8$ window
+$[-3,4]$ ($k_\text{max}=4$, 3 bits): $k'<-3$ \emph{skips} the table (weight 0, gradient kept), $k'>4$
+\emph{clamps} (fires on $\sim$0.001--0.007\% of tables). The per-(head,channel) weight exponent is
+$e_{h,c}=\big\lceil\log_2\max_{t\in h,\,\text{cells}}|W_t[\cdot]_c|\big\rceil-(b-1)+o$ --- the max over the
+\emph{head's} tables, so one exponent is shared across them (int8 $o=0$, never saturates; int4 $b=4,o=-1$).
+\code{FIXED\_POINT\_SHIFT}$=6$ because $k'+6\ge0$ and $k'+6-q\ge0$ for all $k'\ge-3,\,q\le3$, so the integer
+read is pure left-shifts-and-adds. The decompress fold is exact precisely because $e_{h,c}$ is shared across a
+head's tables (it factors out of the table sum) \emph{and} nothing sits between the table sum and
+\code{decompress}. Measured cost: $\sim$+0.003\,bpb vs the unquantised soft read; table footprint
+151.0\,MB fp32 $\to$ 37.75\,MB int8 ($4\times$) $\to$ 18.87\,MB int4 ($8\times$).
 \begin{lstlisting}
 from spiky.lutorch_ex import QuantisedConfidenceLUT, ProjectionMHL, export_deployment, load_deployment
 cart = QuantisedConfidenceLUT(spec, seed=1, quant_mode="p2_int8", read_top_n=2,
                               beta_init=2.0, gamma_init=1.0, read_tau_init=0.5)
-ffn  = ProjectionMHL(cart, d_model=512)
+ffn  = ProjectionMHL(cart, d_model=384)
 # ... train ...
 export_deployment(model, "m.lxq")                      # int8 bake + fold pow2 scale into decompress
 dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()   # fp32 table never allocated
@@ -172,7 +185,7 @@ non-smooth backward; tier-1 uses \code{embedding\_bag}. \tbd{exact forward/backw
 + \code{\_native\_ops.NativeHard}.}
 \begin{lstlisting}
 from spiky.lutorch_ex import FusedManifestoHardLUT, ProjectionMHL
-ffn = ProjectionMHL(FusedManifestoHardLUT(spec, seed=1), d_model=512)
+ffn = ProjectionMHL(FusedManifestoHardLUT(spec, seed=1), d_model=384)
 \end{lstlisting}
 
 \subsection{\code{FusedManifestoSoftLUT}}
@@ -187,7 +200,7 @@ uses the straight-through value, smooth the true blend. The surrogate's $m$/$T$ 
 \code{\_native\_softsign.py}; lut\_mechanisms has the Gen-2 forms.}
 \begin{lstlisting}
 from spiky.lutorch_ex import FusedSoftSignHardLUT, FusedSoftSignSmoothLUT, ProjectionMHL
-ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1), d_model=512)
+ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1), d_model=384)
 \end{lstlisting}
 
 % ======================================================================================================
@@ -195,10 +208,12 @@ ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1), d_model=512)
 \label{sec:ml}
 
 Seven configurations, all at the champion topology and regularisation: $h{=}8$, \code{tph}$=64$, \code{nap}$=8$,
-$d_\text{in}=d_\text{out}=48$ (6 blocks, $\approx$68.2M params), cell-TV $\lambda=10$, head-dropout $0.2$,
-48{,}000 steps, cosine schedule (10\% warmup, floor $0.1\times$lr), seed 1, faithful small-std default init.
-wandb project \code{Spiky}, group \code{lutorch\_ex}. \tbd{confirm lr/weight\_decay/batch from the config.json
-and add them here.}
+$d_\text{in}=d_\text{out}=48$, model width $d_\text{model}=384$ (6 blocks, $\approx$68.2M params), cell-TV
+$\lambda=10$, head-dropout $0.2$, seed 1, faithful small-std default init. Training: AdamW
+lr $3\!\times\!10^{-4}$, weight decay $0.1$ (none on the LUT tables), $48{,}000$ steps, cosine schedule with
+$10\%$ warmup and a $0.1\times$ floor, sequence length $512$, device batch $12$, total batch $24{,}576$ tokens,
+eval every $500$ steps. wandb project \code{Spiky}, group \code{lutorch\_ex}; per-run artifacts (config,
+metrics, summary) are under \code{experiments/lutorch\_ex/}.
 
 \subsection{Regularisation and training recipe}
 \label{sec:reg}
@@ -227,23 +242,29 @@ train-time and grad-only (eval reads all tables). By randomly removing whole tab
 discourages co-adaptation among a head's \code{tph} tables. The same keep-mask multiplies the backward, so the
 weight-gradient and the input-grad carriers inherit the per-table factor.
 
+All seven runs are complete. Final \code{val\_bpb} (best$\to$worst):
+
 \begin{longtable}{@{}l l l r@{}}
 \toprule
 Configuration & cartridge / mode & wandb run & final \code{val\_bpb} \\
 \midrule
-ConfidenceLUT $n{=}2$        & scored, float        & \code{lutorch\_ex\_abl47\_conf\_1004\_1148}      & 1.10606 \\
-QuantConfidence $n{=}2$      & scored, p2\_int8     & \code{lutorch\_ex\_abl47\_quant\_1004\_1148}     & 1.10724 \\
-ConfidenceLUT $n{=}1$        & scored, float, $n{=}1$ & \code{lutorch\_ex\_abl47\_conf\_n1\_vm\_1004\_1806}  & \tbd{queued (VM)} \\
-FusedManifestoHard          & hard                 & \code{lutorch\_ex\_abl47\_fmh\_wk\_1004\_1510}   & \tbd{running (worker)} \\
-FusedManifestoSoft          & soft                 & \code{lutorch\_ex\_abl47\_fms\_wk\_1004\_1510}   & \tbd{queued (worker)} \\
-FusedSoftSignHard           & soft-sign, hard      & \code{lutorch\_ex\_abl47\_fss\_hard\_wk\_1004\_1510} & \tbd{queued (worker)} \\
-FusedSoftSignSmooth         & soft-sign, smooth    & \code{lutorch\_ex\_abl47\_fss\_smooth\_vm\_1004\_1806} & \tbd{running (VM)} \\
+ConfidenceLUT $n{=}2$        & scored, float          & \code{lutorch\_ex\_abl47\_conf\_1004\_1148}            & \textbf{1.10606} \\
+QuantConfidence $n{=}2$      & scored, p2\_int8       & \code{lutorch\_ex\_abl47\_quant\_1004\_1148}           & 1.10724 \\
+ConfidenceLUT $n{=}1$        & scored, float, $n{=}1$ & \code{lutorch\_ex\_abl47\_conf\_n1\_vm\_1004\_1806}    & 1.11737 \\
+FusedSoftSignSmooth         & soft-sign, smooth      & \code{lutorch\_ex\_abl47\_fss\_smooth\_vm\_1004\_1806} & 1.12941 \\
+FusedManifestoSoft          & soft                   & \code{lutorch\_ex\_abl47\_fms\_wk\_1004\_1510}         & 1.13949 \\
+FusedManifestoHard          & hard                   & \code{lutorch\_ex\_abl47\_fmh\_wk\_1004\_1510}         & 1.15152 \\
+FusedSoftSignHard           & soft-sign, hard        & \code{lutorch\_ex\_abl47\_fss\_hard\_wk\_1004\_1510}   & 1.15647 \\
 \bottomrule
 \end{longtable}
 
-\paragraph{Status (2026-10-04).} 2 done (ConfidenceLUT $n{=}2$, QuantConfidence $n{=}2$), 2 running
-(FusedSoftSignSmooth on the VM, FusedManifestoHard on the worker), 3 queued (ConfidenceLUT $n{=}1$;
-FusedManifestoSoft, FusedSoftSignHard). \tbd{insert the val\_bpb learning-curve figure (7 curves) once the
-runs complete; pull per-step from wandb or the local \code{metrics.csv}.}
+\paragraph{Reading the results.} The scored \code{ConfidenceLUT} line wins: $n{=}2$ is best at
+\textbf{1.10606}, and int8 power-of-two quantisation of it (\code{QuantConfidence} $n{=}2$) costs only
+$+0.0012$ bpb (1.10724) --- consistent with the reference's $\sim$+0.003 bpb upper bound --- for a $4\times$
+smaller table. Dropping the confidence blend to a single cell ($n{=}1$) costs $+0.0113$. The non-scored
+families trail: the soft reads (FusedSoftSignSmooth 1.12941, FusedManifestoSoft 1.13949) beat their hard
+counterparts (FusedManifestoHard 1.15152, FusedSoftSignHard 1.15647), i.e.\ a soft/blended read and a learned
+confidence score each help, and they stack. \tbd{insert the \code{val\_bpb} learning-curve figure (7 curves);
+data is in \code{experiments/lutorch\_ex/*/metrics.csv}.}
 
 \end{document}
