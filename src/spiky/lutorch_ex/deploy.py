@@ -113,7 +113,12 @@ def export_deployment(model: nn.Module, path: str) -> dict:
         tensors[f"{name}::decompress.weight"] = dec_w
         if mod.decompress.bias is not None:
             tensors[f"{name}::decompress.bias"] = mod.decompress.bias.detach()
-        meta["ffns"][name] = {**payload["meta"], "format": payload["format"], "d_model": mod.d_model,
+        # input_dim / output_dim are the wrapper's widths (they may differ); "d_model" is kept for
+        # readers of older files and is only meaningful (and only written) when the two are equal.
+        dims = {"input_dim": mod.input_dim, "output_dim": mod.output_dim}
+        if mod.input_dim == mod.output_dim:
+            dims["d_model"] = mod.input_dim
+        meta["ffns"][name] = {**payload["meta"], "format": payload["format"], **dims,
                               "has_compress_bias": mod.compress.bias is not None,
                               "has_decompress_bias": mod.decompress.bias is not None}
         compacted.append(name)
@@ -160,7 +165,11 @@ def load_deployment(path: str, make_skeleton: Callable[[], nn.Module], device=No
                         and not k.startswith(prefix + "compress.")
                         and not k.startswith(prefix + "decompress.")}
         dep = get_rebuilder(ff["format"])(spec, cart_tensors, ff, device=device)
-        proj = ProjectionMHL(dep, d_model=ff["d_model"], bias=ff["has_decompress_bias"], device=device)
+        # Files written before input_dim/output_dim existed carry only "d_model" (square wrappers).
+        in_dim = ff.get("input_dim", ff.get("d_model"))
+        out_dim = ff.get("output_dim", ff.get("d_model"))
+        proj = ProjectionMHL(dep, input_dim=in_dim, output_dim=out_dim,
+                             bias=ff["has_decompress_bias"], device=device)
         with torch.no_grad():
             proj.compress.weight.copy_(tensors[f"{name}::compress.weight"].to(proj.compress.weight.device))
             if ff["has_compress_bias"]:
