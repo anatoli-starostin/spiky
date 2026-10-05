@@ -10,6 +10,8 @@
 \usepackage{booktabs,longtable,array}
 \usepackage{xcolor}
 \usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,backgrounds,fit,calc}
 \usepackage{hyperref}
 \hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
 
@@ -80,9 +82,51 @@ default), reproducing the OLD LightMHL draw bit-for-bit.
 \section{ProjectionLUT: input and output projections}
 \label{sec:projection}
 
-On its own a table reads a narrow per-head vector. \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper) turns a
-cartridge into a plain $d_\text{model}\!\to\!d_\text{model}$ FFN with a linear map on each side, for two
-reasons:
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[>=Latex, font=\footnotesize,
+  box/.style={draw, rounded corners, align=center, inner sep=3pt, minimum height=9mm},
+  io/.style={box, fill=black!6},
+  proj/.style={box, fill=blue!8, minimum width=18mm},
+  tbl/.style={draw, fill=orange!14, align=center, inner sep=3pt, minimum width=22mm, minimum height=9mm},
+  sumop/.style={draw, circle, inner sep=1pt, minimum size=7mm, fill=green!10}]
+\node[io] (x) {$x$\\$\scriptstyle d_\text{model}$};
+\node[proj, right=7mm of x] (cmp) {input\\projection\\\code{compress}};
+\node[tbl, right=16mm of cmp, yshift=12mm] (t1) {head $1$ tables\\$\scriptstyle \text{tph}\times(K{=}2^{\text{nap}})$};
+\node[tbl, right=16mm of cmp, yshift=-12mm] (t2) {head $H$ tables\\$\scriptstyle \text{tph}\times(K{=}2^{\text{nap}})$};
+\node at ($(t1)!0.5!(t2)$) {$\vdots$};
+\node[sumop, right=16mm of cmp, xshift=24mm] (sum) {$\Sigma$};
+\node[proj, right=8mm of sum] (dec) {output\\projection\\\code{decompress}};
+\node[io, right=7mm of dec] (y) {$y$\\$\scriptstyle d_\text{model}$};
+% stack effect (multiple tables per head)
+\begin{scope}[on background layer]
+  \foreach \t in {t1,t2}{ \foreach \dx in {1.4,2.8}{
+    \draw[fill=orange!14, draw=black] ([xshift=\dx mm,yshift=\dx mm]\t.south east) rectangle ([xshift=\dx mm,yshift=\dx mm]\t.north west); }}
+\end{scope}
+\draw[->] (x) -- (cmp);
+\draw[->] (cmp.east) to[out=25,in=180] node[above,sloped,font=\scriptsize]{$z_1$} (t1.west);
+\draw[->] (cmp.east) to[out=-25,in=180] node[below,sloped,font=\scriptsize]{$z_H$} (t2.west);
+\draw[->] (t1.east) to[out=0,in=150] (sum);
+\draw[->] (t2.east) to[out=0,in=210] (sum);
+\draw[->] (sum) -- node[above,font=\scriptsize]{route} (dec);
+\draw[->] (dec) -- (y);
+\node[below=10mm of cmp.south, text width=34mm, align=center, font=\scriptsize, text=black!60] (cn)
+  {arbitrary hyperplanes = primitive anchors applied to $\mathrm{compress}(x)$};
+\draw[->, black!45, shorten >=1pt] (cn) -- (cmp);
+\node[above=9mm of $(t1.north)$, text width=46mm, align=center, font=\scriptsize, text=black!60] (an)
+  {per head: sign bits of primitive anchors ($z[a]{-}z[b]$ or $z[a]$) address a cell; cells read \& summed over tph tables};
+\end{tikzpicture}
+\caption{The ProjectionLUT data path. The input $x$ is projected by \code{compress} into $H$ per-head spaces;
+each head's primitive-anchor LSH addresses its own stack of \code{tph} discrete tables ($K=2^{\text{nap}}$ cells
+each); the per-head reads are summed and routed, then \code{decompress} projects back to $y$. Only the input
+projection realises arbitrary hyperplanes --- the cartridge itself sees primitive $\{-1,+1\}$/single-coordinate
+anchors with zero bias.}
+\label{fig:projlut}
+\end{figure}
+
+On its own a table reads a narrow per-head vector. \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, drawn in
+Figure~\ref{fig:projlut}) turns a cartridge into a plain $d_\text{model}\!\to\!d_\text{model}$ FFN with a linear
+map on each side, for two reasons:
 \begin{itemize}
 \item \textbf{input projection (\code{compress})} --- a Linear $d_\text{model}\!\to\!\code{in\_features}$ learns
   the coordinates the hash reads, i.e.\ it \emph{shapes the hashing} so the sign bits fall where they carry
