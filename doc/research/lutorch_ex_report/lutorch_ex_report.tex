@@ -25,37 +25,40 @@
 
 \begin{document}
 \maketitle
-\begin{abstract}
-\code{lutorch\_ex} is a clean, cartridge-based re-implementation of the lookup-table feed-forward layer, with
-zero imports from the old \code{spiky.lutorch}. This report builds up the design top-to-bottom: the basic idea
-(many small discrete tables addressed by a locality-sensitive hash), the projection wrapper that makes it a
-drop-in FFN, the cartridge abstraction, each concrete cartridge's math and usage, and finally a seven-way
-champion-topology sweep at 48k steps.
-\end{abstract}
 
 % ======================================================================================================
 \section{The basic idea: lookup tables over an LSH}
 \label{sec:idea}
 
-A lookup-table (LUT) feed-forward layer replaces the dense MLP with many small \emph{discrete} tables, each
-addressed by a locality-sensitive hash (LSH) of the input. The hash is cheap --- a handful of sign bits --- so
-a table ``read'' is a gather plus a few adds rather than a matrix multiply.
+A lookup table (LUT), here, is a learnable map built from a \emph{discrete} address: hash the input to a small
+integer with a locality-sensitive hash (LSH), and read a stored vector at that address. The hash is cheap --- a
+handful of sign bits --- so a ``read'' is a gather plus a few adds, not a matrix multiply. \code{lutorch\_ex}
+builds many such tables and sums them into an expressive learnable map. This is a general construction; using it
+as a drop-in feed-forward layer (the setting benchmarked in \S\ref{sec:ml}) is just one application of it, not
+its defining purpose.
 
 \paragraph{One table.} Work in a per-head space $z\in\mathbb{R}^{d_\text{in}}$. A table picks \code{nap}
-\emph{anchors} and forms \code{nap} scalar differences $u_j$; the \emph{signs} of the $u_j$ form an
+\emph{anchors}, each defining one scalar form $u_j$ of $z$; the \emph{signs} of the $u_j$ form an
 \code{nap}-bit address $c\in[0,K)$ into $K=2^{\text{nap}}$ cells, and each cell holds a learnable vector
-$W[c]\in\mathbb{R}^{d_\text{out}}$. The address is the LSH: inputs that fall on the same side of every anchor
-hyperplane map to the same cell. The margins $u_j$ (how far each difference is from flipping its sign) measure
-how confident that address is --- small margins mean a bit is near its boundary.
+$W[c]\in\mathbb{R}^{d_\text{out}}$. Each sign bit is one LSH bit --- which side of a hyperplane $u_j=0$ the
+input lies on; inputs on the same side of all \code{nap} hyperplanes share a cell. The margins $u_j$ (how far
+each form is from flipping its sign) measure the address's confidence --- a small margin means a bit is near
+its boundary.
 
-\paragraph{Anchor-pair vs single-anchor tables.} Two addressing modes:
+\paragraph{Primitive hyperplanes only (at the cartridge level).} The hyperplanes a cartridge can use are
+deliberately \emph{primitive}: each passes through the origin (zero bias) and has trivial coefficients. Two
+modes:
 \begin{itemize}
-\item \textbf{pairs} (\code{anchor\_mode="pairs"}): $u_j = z[a_j]-z[b_j]$, a difference of two coordinates --- a
-  random-hyperplane LSH on coordinate pairs.
-\item \textbf{single} (\code{anchor\_mode="single"}): $u_j = z[a_j]$, the raw coordinate, so the bit is just its
-  sign --- an axis-aligned LSH.
+\item \textbf{pairs} (\code{anchor\_mode="pairs"}): $u_j = z[a_j]-z[b_j]$ --- coefficients in $\{-1,+1\}$ on two
+  coordinates (the \emph{anchor pairs}).
+\item \textbf{single} (\code{anchor\_mode="single"}): $u_j = z[a_j]$ --- a single $+1$ coefficient (the even
+  simpler \emph{single anchors}), so the bit is just the sign of one coordinate.
 \end{itemize}
-Both share the same read; only how the \code{nap} differences are formed changes.
+Both share the same read; only how the \code{nap} forms are built changes. Crucially, \emph{arbitrary}
+hyperplanes ($w^\top z$ with general $w$ and bias) are \textbf{not} available at the cartridge level --- that is
+exactly what \S\ref{sec:projection}'s input projection provides: a learned Linear maps the input first, and the
+primitive $\{-1,+1\}$/single-coordinate hashing is then applied in the projected space, so a primitive form on
+$\text{compress}(x)$ realises an arbitrary learned hyperplane on $x$.
 
 \paragraph{Many tables, many heads.} The layer stacks \code{tph} tables per head over $G$ head-groups
 ($G=\code{n\_groups}=\max(h_\text{in},h_\text{out})$). A head's read \emph{sums} the addressed cell(s) over its
