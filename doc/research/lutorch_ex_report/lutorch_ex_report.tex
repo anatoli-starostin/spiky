@@ -64,8 +64,9 @@ contributes one bit $[\,u_j>0\,]$, so an address $c\in[0,K)$ has \code{nap} bits
 $K=2^{\text{nap}}$ cells, each holding a learnable row $W[c]\in\mathbb{R}^{d_\text{out}}$. The magnitudes $|u_j|$ are the
 \emph{margins}: how far each bit is from flipping. The smallest one, $u^\star=\min_j|u_j|$, marks the
 least certain bit, and flipping that bit gives the \emph{neighbour} cell $c'$ --- the one the input would
-land in under the smallest perturbation. Every cartridge in this library uses $c$, $u$, and $c'$ and nothing
-else from the input.
+land in under the smallest perturbation. Every read mathematics in this library --- every
+\emph{cartridge}, in the vocabulary of \S\ref{sec:cartridges} --- uses $c$, $u$, and $c'$ and nothing else
+from the input.
 
 \paragraph{Two kinds of probe.} Which kind a layer uses is fixed when the layer is built. In the default,
 pair form, every probe compares two coordinates of $z$: this is the manifesto's Eq.~1, where the bit
@@ -138,7 +139,7 @@ several heads into one shared output by summing them.
 \caption{One lookup table in each of the two modes, \code{nap}$=2$. A probe yields one sign bit; the
 bits, most significant first, form the row index $c$, which selects one learnable row of the
 $K=2^{\text{nap}}$-row table. The probe with the smallest margin is the least certain, and flipping its
-bit names the neighbour row $c'$ (lighter), which the soft and surrogate reads also touch. (a) Anchor
+bit names the neighbour row $c'$ (lighter), which the richer read forms described later also fetch. (a) Anchor
 pairs compare two coordinates of $z$; (b) single anchors test one coordinate against zero. A layer sums
 many such tables.}
 \label{fig:table}
@@ -150,7 +151,8 @@ many such tables.}
 
 On its own a table reads a narrow per-group vector of a space whose axes it cannot choose.
 \code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
-each side of the cartridge and so turns it into a plain dense-width layer. The wrapper takes an input
+each side of the cartridge --- the stack of tables together with its read mathematics --- and so turns it
+into a plain dense-width layer. The wrapper takes an input
 width and an output width that are independent and may differ; in every configuration used here both
 are the model width, $d_\text{model}\!\to d_\text{model}$. Writing
 $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$, $d_\text{out}$
