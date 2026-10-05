@@ -183,11 +183,8 @@ the output projection consumes (fan-in).}):
   manifesto's ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}).
   Pairs are the stronger form. The input projection already gives both modes arbitrary learned
   hyperplanes; pairwise comparison sits on top of that, and the same projection yields far more distinct
-  planes in pair form than in single form, so tables partition the space differently instead of re-using
-  the same few bits. Single anchors are the simpler special case, and the weaker one in practice: in one
-  matched experiment of the earlier LightMHL line, single-anchor addressing trailed pair addressing by
-  $0.008$ bpb at 48k steps ($1.13884$ vs.\ $1.13120$, H8/\code{tph}64/\code{nap}8/$d$48, matched parameter
-  count, one seed per arm) --- background, not a \code{lutorch\_ex} result.
+  planes in pair form, so tables partition the space differently instead of re-using the same few bits.
+  Single anchors are the simpler special case, and the weaker one in practice.
 \item \textbf{The output projection compresses the tables.} A layer holds an exponential number of
   cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads, so the count is
   exponential in \code{nap} --- and every cell stores a $d_\text{out}$-wide row, so the per-cell width
