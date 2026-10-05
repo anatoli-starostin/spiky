@@ -12,8 +12,7 @@ ported (PR #138: idx, q/k exponents, STE weights, fake-quant tables, packed rows
 no test in lutorch_ex compares against the old module. Keeping it a separate module keeps
 Gen-1/Gen-2/ConfidenceLUT and the shared ``lutorch_cuda`` untouched.
 
-Reference note: ``doc/research/lut_ablation/quantisation_simple.tex``.
-log2 s is in the log domain, log2 S + (g + gamma*sum_i logsigmoid(beta u_i))/ln2 (g=0 in the
+The formulas: log2 s is in the log domain, log2 S + (g + gamma*sum_i logsigmoid(beta u_i))/ln2 (g=0 in the
 frozen-g rows); q = clamp(floor(2 u*/(tau ln2) + 1/2), 0, J); c_q = log2(1+2^-q) for q<C else 0;
 round(xi) = floor(xi + 1/2) (half up). Integer read keeps the head sum in units of 2^-6 in int32,
 each table adding (W_hat[c1] << (k'+6)) + (W_hat[c2] << (k'+6-q)); int8 only.
