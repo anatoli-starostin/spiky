@@ -1,0 +1,9 @@
+{
+  "exp_name": "lutorch_ex_abl47_conf_n2_rerun_ckpt_1006_1537",
+  "cart": "conf_n2",
+  "best_val_bpb": 1.1067056960699821,
+  "total_params": 68237586,
+  "peak_gb": 7.683,
+  "hours": 3.7452,
+  "n_steps": 48000
+}
