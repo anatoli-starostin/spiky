@@ -36,6 +36,24 @@ sign-off**, rather than diving straight into implementation. Especially importan
   UNATTENDED/delegated-task mode where blocking for input isn't possible, the plan itself is a
   valid RESULT: report the plan back and let Anatoli approve in Slack before proceeding.
 
+## Never run a long run without checkpointing
+
+**NEVER run long runs without checkpointing — "long" means any run expected to take more than
+15 minutes. Any training/experiment run over ~15 min MUST use a harness that writes checkpoints
+(e.g. `train_multi.py`, which saves `ckpt.pt` periodically), not a non-checkpointing script like
+`train_lutorch_ex.py`.**
+
+- **Why:** a long run with no checkpoint is a single point of failure — if it is killed (OOM,
+  preemption, a dropped connection, a manual stop) every GPU-hour is lost with no way to resume,
+  and the run's trained weights can never be recovered afterwards. The lutorch_ex sweep learned
+  this the hard way: its conf/quant arms ran under the non-checkpointing `train_lutorch_ex.py`, so
+  a killed run couldn't be resumed and those runs' weights could never be pulled.
+- **How to apply:** before launching anything expected to exceed ~15 min, confirm the launch
+  script periodically writes a checkpoint (`ckpt.pt` / `state_dict`, with resume-on-restart). If it
+  doesn't, switch to a harness that does (`train_multi.py`) or add checkpointing **before** starting
+  — not after. (These checkpoints are for crash-resume *during* a run; they still never go in git —
+  results are reproduced from `config.json`, per [experiment-methodology.md](experiment-methodology.md).)
+
 ## Don't merge PRs
 
 **PR merges are done by Anatoli personally in most cases. Do not merge PRs yourself** — open them
