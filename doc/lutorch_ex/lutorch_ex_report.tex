@@ -515,15 +515,15 @@ per table per token.
 
 \subsection{Benchmarks: CPU, RTX 5090, H100}
 \label{sec:bench}
-Table~\ref{tab:bench} times the layer alone, at the sweep geometry, for the seven optimised configurations
-the sweep used: the four fused twins and the three Gen-3 configurations (which have no separate twin:
+Table~\ref{tab:bench} times the layer alone, at the sweep geometry, for eight optimised configurations, the
+seven the sweep used and Quantised $n{=}1$: the four fused twins and the four Gen-3 configurations (which have no separate twin:
 their \code{embedding\_bag} read with a compiled forward is already the fast path). Gen-1 and Gen-2 also
 exist as plain-PyTorch \emph{reference} cartridges (\code{ManifestoHardLUT} and so on): written for
 readability, and the oracle the fused twins are tested against for equal results. They are not tuned for
 speed and the sweep did not train with them, so the table leaves them out. The CPU and RTX 5090 columns
 were measured for this report with the library's benchmark harness, the module
 \code{spiky.lutorch\_ex.bench} (\code{src/spiky/lutorch\_ex/bench.py}), driven by a small script that
-runs the seven configurations at the sweep geometry.
+runs the configurations at the sweep geometry.
 
 \begin{table}[h]
 \centering\footnotesize
@@ -561,7 +561,7 @@ training batch and is dominated by the backward ($17$--$19$ ms), the scatter int
 \code{ConfidenceLUT} $n{=}1$ is both the cheapest step ($11.5$ ms) and the smallest footprint ($1.1$
 GB), because its compiled forward fuses the score's chain of small kernels and reads one cell. Reading two
 cells ($n{=}2$, the soft forms) roughly doubles the eval forward ($1.0\to3.5$ ms for Manifesto,
-$1.5\to4.6$ ms for Confidence). The quantised cartridge's eval forward is not faster than the float one
+$1.5\to4.6$ ms for Confidence, $2.0\to4.1$ ms for its int8 twin). The quantised cartridge's eval forward is not faster than the float one
 --- its training-time read still fetches float rows for the straight-through estimator; the integer read
 belongs to the deployed cartridge (\S\ref{sec:quant}). The fused twins earn their place:
 \code{FusedSoftSignHardLUT}'s native training step is $1.6\times$ faster and uses $2.7\times$ less memory
