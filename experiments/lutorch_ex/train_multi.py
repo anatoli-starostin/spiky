@@ -1,4 +1,4 @@
-"""Champion-topology lutorch_ex runs for the new-library report (SCRATCH). Launch: TRAIN_MULTI_LAUNCH.md. Cartridge via env CART:
+"""Champion-topology lutorch_ex runs for the new-library report (SCRATCH). Cartridge via env CART:
   fss_smooth -> FusedSoftSignSmoothLUT   conf_n1 -> ConfidenceLUT(read_top_n=1)
   fmh -> FusedManifestoHardLUT           fms -> FusedManifestoSoftLUT   fss_hard -> FusedSoftSignHardLUT
 Champion topology (h8/tph64/nap8/d48) WITH TV (lambda=10) + head dropout (0.2), 48k steps, seed1, champion
@@ -24,7 +24,6 @@ from spiky.lutorch_ex import (LUTSpec, ConfidenceLUT, QuantisedConfidenceLUT, Pr
 CART = os.environ["CART"]
 _BUILDERS = {"fss_smooth": "FusedSoftSignSmoothLUT", "conf_n1": "ConfidenceLUT(read_top_n=1)",
              "conf_n2": "ConfidenceLUT(read_top_n=2)", "quant": "QuantisedConfidenceLUT(p2_int8, read_top_n=2)",
-             "quant_n1": "QuantisedConfidenceLUT(p2_int8, read_top_n=1)",
              "fmh": "FusedManifestoHardLUT", "fms": "FusedManifestoSoftLUT", "fss_hard": "FusedSoftSignHardLUT"}
 assert CART in _BUILDERS, f"CART must be one of {list(_BUILDERS)}, got {CART}"
 CFG = os.environ["ABL47_CONFIG"]
@@ -69,8 +68,8 @@ def make_cart(seed):
                              beta_init=cfg["lut_learned_margin_beta_init"],
                              gamma_init=cfg["lut_learned_margin_gamma_init"], read_tau_init=cfg["lut_read_tau"],
                              read_tau_learnable=bool(cfg["lut_read_tau_learnable"]), **base)
-    if CART in ("quant", "quant_n1"):
-        return QuantisedConfidenceLUT(spec, quant_mode="p2_int8", read_top_n=(1 if CART == "quant_n1" else 2),
+    if CART == "quant":
+        return QuantisedConfidenceLUT(spec, quant_mode="p2_int8", read_top_n=2,
                              beta_init=cfg["lut_learned_margin_beta_init"],
                              gamma_init=cfg["lut_learned_margin_gamma_init"], read_tau_init=cfg["lut_read_tau"],
                              read_tau_learnable=bool(cfg["lut_read_tau_learnable"]), **base)
@@ -143,8 +142,6 @@ _DESC = {"fss_smooth": "FusedSoftSignSmooth cartridge (Gen-2 soft-sign, smooth b
          "conf_n1": "ConfidenceLUT with read_top_n=1 (learned-margin confidence score, single-cell read).",
          "conf_n2": "ConfidenceLUT with read_top_n=2 (learned-margin confidence score, two-cell tau-blended read).",
          "quant": "QuantisedConfidenceLUT read_top_n=2, p2_int8 (power-of-two int8 quant-aware read, straight-through STE).",
-         "quant_n1": "QuantisedConfidenceLUT read_top_n=1, p2_int8 (power-of-two int8 quant-aware single-cell read, "
-                     "straight-through STE; trains and evaluates, not exportable).",
          "fmh": "FusedManifestoHard cartridge (hard argmax LUT read).",
          "fms": "FusedManifestoSoft cartridge (soft temperature-blended LUT read).",
          "fss_hard": "FusedSoftSignHard cartridge (Gen-2 soft-sign, hard read)."}
