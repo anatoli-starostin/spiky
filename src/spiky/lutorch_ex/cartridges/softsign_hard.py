@@ -13,7 +13,8 @@ hard value; eval reads a single cell per table. Backward is plain autograd — t
 read on CUDA only (inherited from the base). fp32/fp64 only: like the other non-fused cartridges
 it carries no mixed-precision handling, so the base ``forward`` raises on bf16/fp16 (bf16 was
 benchmarked and dropped — the embedding_bag read upcasts to fp32 for accumulation, so it gave no
-speedup). No native lutorch_cuda kernel (those hardcode the Gen-1 inverse-L1 uncertainty).
+speedup). No native kernel of its own (the native lprojection kernels hardcode the Gen-1
+inverse-L1 uncertainty).
 """
 from __future__ import annotations
 

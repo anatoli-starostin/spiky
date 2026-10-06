@@ -15,8 +15,8 @@ read + scale + tph sum); eval uses the plain two-cell read + blend. Backward is 
 blend, including the temperatures, is differentiable — no custom ``autograd.Function``).
 torch.compile wraps the eval read on CUDA only (inherited). fp32/fp64 only — the base ``forward``
 raises on bf16/fp16 (bf16 benchmarked and dropped: the embedding_bag read upcasts to fp32 for
-accumulation, so it gave no speedup). No native lutorch_cuda kernel (Gen-1 kernels hardcode the
-inverse-L1 uncertainty, not this learned-temperature sigmoid).
+accumulation, so it gave no speedup). No native kernel of its own (the native lprojection kernels
+hardcode the Gen-1 inverse-L1 uncertainty, not this learned-temperature sigmoid).
 """
 from __future__ import annotations
 

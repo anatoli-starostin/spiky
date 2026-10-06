@@ -77,3 +77,48 @@ def test_fused_equiv_cpu_f64(PureCls, FusedCls, name, h_in, h_out, backend, anch
 def test_fused_equiv_cuda_f32(PureCls, FusedCls, name, h_in, h_out, B, backend, anchor_mode):
     _check(PureCls, FusedCls, h_in, h_out, B, "cuda", torch.float32, backend,
            exact=False, anchor_mode=anchor_mode)
+
+
+# ---- backend validation: every accepted name runs; a wrong-but-plausible name raises ----------------
+from spiky.lutorch_ex.cartridges._native_ops import native_available  # noqa: E402
+
+_TRAINABLE = {"auto", "tier1", "native", "pure"}       # 'pure_eval' is the eval-only read
+
+
+def _run_backend(FusedCls, backend):
+    if backend == "native" and not (torch.cuda.is_available() and native_available(torch.device("cuda"))):
+        pytest.skip("native lutorch_cuda ops not available")
+    dev = "cuda" if backend == "native" else "cpu"
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).to(dev)
+    x = torch.randn(8, 2, 6, device=dev, requires_grad=True)
+    m.eval()
+    with torch.no_grad():
+        assert m(x).shape == (8, 2, 5)
+    if backend in _TRAINABLE:
+        m.train()
+        m(x).sum().backward()
+        assert m.weights.grad is not None and x.grad is not None
+
+
+@pytest.mark.parametrize("FusedCls,backend",
+                         [(C, b) for C in (FusedManifestoHardLUT, FusedManifestoSoftLUT) for b in C._BACKENDS])
+def test_every_accepted_backend_runs(FusedCls, backend):
+    _run_backend(FusedCls, backend)
+
+
+@pytest.mark.parametrize("FusedCls,bad,hint", [
+    (FusedManifestoHardLUT, "pure", "this class uses 'pure_eval'"),
+    (FusedManifestoSoftLUT, "pure_eval", "this class uses 'pure'"),
+    (FusedManifestoHardLUT, "fastest", None),
+    (FusedManifestoSoftLUT, "fastest", None),
+])
+def test_invalid_backend_raises(FusedCls, bad, hint):
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    with pytest.raises(ValueError) as ei:
+        FusedCls(spec, seed=0, backend=bad)
+    msg = str(ei.value)
+    assert FusedCls.__name__ in msg and repr(bad) in msg
+    assert all(repr(b) in msg for b in FusedCls._BACKENDS)
+    if hint is not None:
+        assert hint in msg

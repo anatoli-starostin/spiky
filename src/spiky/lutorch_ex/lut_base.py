@@ -20,9 +20,13 @@ routed, over ``n_groups = max(h_in, h_out)`` table groups; group ``g`` reads inp
 * ``h_in == H, h_out == 1`` (fan-in) — each group reads its own input head ``x[:, g, :]``
   and *all* group contributions are summed into the single shared output ``y[:, 0, :]``.
 
-Semantics: the module returns the hard lookup value at eval; in training the value is
-still the hard read, but a surrogate gradient flows (how exactly is the cartridge's
-business).
+Semantics: what the value and the gradient are is the cartridge's business, and the families
+differ. A *hard* cartridge (ManifestoHardLUT, SoftSignHardLUT and their fused twins) returns the
+hard lookup value at train and eval, and in training lets a surrogate gradient flow through a
+two-cell blend. A *soft* cartridge (ManifestoSoftLUT, SoftSignSmoothLUT, their fused twins) returns
+that blend itself as the value, at train and eval. The confidence cartridges (ConfidenceLUT,
+QuantisedConfidenceLUT) return a score-weighted read -- one cell, or a two-cell blend -- at train
+and eval, and differentiate that value directly.
 """
 from __future__ import annotations
 

@@ -4,9 +4,9 @@ Both Manifesto cartridges share everything except the final step — how the add
 cell ``c_t`` is combined with its least-confident-bit-flip neighbour ``c_t'``:
 
 * :class:`~spiky.lutorch_ex.cartridges.manifesto_hard.ManifestoHardLUT` — hard value with
-  a straight-through surrogate gradient (gen-1 variant 1.1, ``smooth_mode=False``).
+  a straight-through surrogate gradient (Gen-1 variant 1.1).
 * :class:`~spiky.lutorch_ex.cartridges.manifesto_soft.ManifestoSoftLUT` — the ``(1-U)``/``U``
-  two-cell blend as both value and gradient (gen-1 variant 1.2, ``smooth_mode=True``).
+  two-cell blend as both value and gradient (Gen-1 variant 1.2).
 
 Everything else lives here and is identical between them:
 
@@ -21,8 +21,13 @@ Everything else lives here and is identical between them:
   margin ``j* = argmin_j |u_j|`` flipped. Only the margin changes between modes; the whole
   two-cell structure and routing below are identical, so every cartridge supports both.
 - **Head routing** (the shape-contract invariant): ``G = max(h_in, h_out)`` groups, group
-  ``g`` reads input head ``g % h_in`` and writes output head ``g % h_out``, groups summed
-  into the output (fan-in sums all groups into head 0).
+  ``g`` reads input head ``g % h_in``. A head always sums its own tables; across heads the
+  outputs are routed one-to-one and concatenated, and summed only in fan-in. Concretely,
+  ``per_table.sum(dim=2)`` gives ``[B, G, d_out]``; :meth:`_route` returns it unchanged when
+  ``h_out == G`` (per-head; fan-out, where every group reads input head 0) and
+  ``.sum(dim=1, keepdim=True)`` -> ``[B, 1, d_out]`` when ``h_out == 1`` (fan-in);
+  ``ProjectionMHL.forward`` then reshapes ``[B, h_out, d_out]`` to ``[B, h_out * d_out]``,
+  the concatenation.
 
 Subclasses implement only :meth:`_combine`.
 """
@@ -69,13 +74,15 @@ class ManifestoLUT(MultiHeadLUT):
     # Gen-1/Gen-2 cartridges the train step is memory-bound and eager is fastest. The Gen-3
     # confidence cartridges set this True -- their score/blend read-out fans out into ~10 tiny
     # elementwise kernels (abs/logsigmoid/exp/sum/sigmoid/gather/cat/psw) that inductor folds into
-    # 1-2 (graph break at embedding_bag), cutting the train step AND its peak memory substantially
-    # (matches the OLD LightMHL blend-compile lever). CUDA-only; see :meth:`forward`.
+    # 1-2 fused kernels, cutting the train step AND its peak memory substantially. Dynamo captures
+    # each Gen-3 train forward as one graph with no graph break; embedding_bag stays in that graph
+    # but runs as its own ATen kernel (an inductor fallback), so fusion stops at it on both sides.
+    # CUDA-only; see :meth:`forward`.
     _COMPILE_TRAIN: bool = False
     # `dynamic=` for the TRAIN compile. True (default) traces one shape-agnostic graph (no recompiles
-    # across batch sizes). A cartridge whose hot train path needs the reference's exact fusion can set
-    # None (torch.compile's auto: specialise on the first shape, matching OLD LightMHL's compile) --
-    # that produces a cheaper fused backward for the quant monolith. Only consulted when _COMPILE_TRAIN.
+    # across batch sizes). A cartridge whose hot train path fuses better when specialised can set
+    # None (torch.compile's auto: specialise on the first shape) -- that produces a cheaper fused
+    # backward for the quant monolith. Only consulted when _COMPILE_TRAIN.
     _COMPILE_TRAIN_DYNAMIC = True
 
     def __init__(
@@ -125,10 +132,9 @@ class ManifestoLUT(MultiHeadLUT):
         self.register_buffer("in_head", torch.arange(G, dtype=torch.long) % spec.h_in)
         self.register_buffer("out_head", torch.arange(G, dtype=torch.long) % spec.h_out)
 
-        # Learnable cell tables W[g, t, c, :], c in [0, K). Default init = the OLD LightMHL faithful
-        # scheme: per-head CPU generator seeded (seed + h + 1), Uniform[-weight_init_std, +weight_init_std]
-        # (realised std = weight_init_std / sqrt(3) ~= 5.77e-4 at the 1e-3 default). Reproduces OLD's
-        # per-head table draw bit-for-bit at a given seed. (Previously Normal(0, weight_init_std).)
+        # Learnable cell tables W[g, t, c, :], c in [0, K). Default init: per-head CPU generator seeded
+        # (seed + h + 1), Uniform[-weight_init_std, +weight_init_std] (realised std = weight_init_std /
+        # sqrt(3) ~= 5.77e-4 at the 1e-3 default), so a given seed reproduces the same tables bit-for-bit.
         blocks = [(torch.rand(tph, spec.n_cells, d_out,
                               generator=torch.Generator().manual_seed(seed + h + 1)) - 0.5) * (2.0 * weight_init_std)
                   for h in range(G)]
@@ -209,8 +215,7 @@ class ManifestoLUT(MultiHeadLUT):
         (``[G*tph, 2, 2, ..., 2, d_out]``) and sum ``(v_c - v_c')**2`` over every Hamming-1 pair
         (each counted once, via a size-2 ``diff`` along each of the nap bit-axes), then divide by the
         pair count ``n_tables * nap * 2**(nap-1)`` -- the mean over pairs (and tables) of
-        ``||v_c - v_c'||**2`` (d_out summed in, not averaged). Bit-for-bit the reference
-        ``LightMultiHeadLUT.cell_tv``. Differentiable w.r.t. ``weights``; adds no nodes to the forward
+        ``||v_c - v_c'||**2`` (d_out summed in, not averaged). Differentiable w.r.t. ``weights``; adds no nodes to the forward
         (called only by the trainer when its TV lambda > 0)."""
         G, tph, K, d_out = self.weights.shape
         nap = self.spec.nap

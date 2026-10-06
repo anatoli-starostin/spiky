@@ -1,10 +1,9 @@
 """Anchor sampling for lutorch_ex cartridges.
 
 **Canonical full coverage** is the one policy, provided in two flavours that mirror each
-other exactly — both standalone ports (zero imports from the old ``lutorch``):
+other exactly:
 
-* :func:`canonical_full_coverage_pairs` — the gen-1 ``CANONICAL_FULL_COVERAGE`` sampler
-  (originally ``spiky.lutorch.lut_helpers._get_canonical_full_coverage_pairs``). For each
+* :func:`canonical_full_coverage_pairs` — the ``CANONICAL_FULL_COVERAGE`` pair sampler. For each
   table group it draws ``nap`` *canonical* coordinate pairs ``(a, b)`` with ``a < b`` from
   the pool of all ``P = C(d_in, 2)`` possible pairs.
 
@@ -19,8 +18,7 @@ other exactly — both standalone ports (zero imports from the old ``lutorch``):
 Both use tiled ``randperm`` (sampling without replacement) so the elements a group uses
 are distinct and, when ``tph * nap`` reaches the pool size, cover the whole pool. A repair
 pass guarantees no table ever repeats an element even across a tile boundary. Each group
-``g`` is seeded ``seed + g`` — the same per-head seeding the gen-1 LightMHL path uses
-(``random_seed + h``).
+``g`` is seeded ``seed + g`` (per-head seeding).
 """
 from __future__ import annotations
 
@@ -45,7 +43,7 @@ def _repair_intra_table_duplicates(pairs_table: torch.Tensor) -> None:
     Only tables straddling a ``randperm``-tile boundary can carry duplicates, so the
     affected row count is tiny in practice. For each such table, swap one duplicate slot
     with a slot in another table so both tables stay duplicate-free. Raises if no valid
-    swap partner exists (pool too tight). Ported verbatim from gen-1.
+    swap partner exists (pool too tight).
     """
     n_tables, nap = pairs_table.shape
     for t in range(n_tables):

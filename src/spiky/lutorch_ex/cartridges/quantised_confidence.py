@@ -1,4 +1,4 @@
-"""QuantisedConfidenceLUT — the p2_int8 quant-aware sibling of ConfidenceLUT (Gen-3 LightMHL).
+"""QuantisedConfidenceLUT — the p2_int8 quant-aware sibling of ConfidenceLUT (Gen-3).
 
 Same learned-margin confidence score and τ-blend as :class:`ConfidenceLUT` (inherited), but the
 read is **quant-aware**: the cell tables are fake-quantised to int8 with a per-(group, channel)
@@ -7,9 +7,7 @@ straight-through estimator, so the forward value is the quantised read while gra
 float master weights, β, γ (and τ for n=2) through the exact float surrogate. This reproduces the
 quantised champion (ablation row 3.2 int8 / abl_48).
 
-The quantisation math is the reference's, vendored verbatim in :mod:`._pow2` (from
-``spiky.lutorch.pow2_read`` on ``research/ffn_replacement_fix``), so this cartridge is a thin wiring
-layer over it:
+The quantisation math lives in :mod:`._pow2`, so this cartridge is a thin wiring layer over it:
 
   s_t      = (Σ_j|u_j|)·exp(γ·Σ_j logσ(β|u_j|))             # the ConfidenceLUT score (g dropped)
   W_hat·2^e= ste_tables(W)                                  # int8 fake-quant, per-(group,channel) 2^e
@@ -43,14 +41,16 @@ from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION
 class QuantisedConfidenceLUT(ConfidenceLUT):
     """p2_int8 quant-aware twin of :class:`ConfidenceLUT`; see module docstring."""
 
-    # The n=2 quant train path is the OLD-matching monolith (see _quant_read_monolith). To reproduce
-    # OLD LightMHL's fused backward it must also compile the way OLD does -- torch.compile(dynamic=None)
-    # (auto: specialise on the first shape), not the base's dynamic=True. With dynamic=True the backward
+    # The n=2 quant train path is the flat monolith (see _quant_read_monolith). For its cheaper fused
+    # backward it compiles with torch.compile(dynamic=None) (auto: specialise on the first shape), not
+    # the base's dynamic=True. With dynamic=True the backward
     # fuses ~0.65 ms worse; dynamic=None closes it (step 24.9 -> 24.4, backward 21.0 -> 20.3).
     _COMPILE_TRAIN_DYNAMIC = None
 
-    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
-        super().__init__(spec, **kw)
+    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
+        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the
+        # only one deployment supports. read_top_n=1 stays constructible and trainable, just not exportable.
+        super().__init__(spec, read_top_n=read_top_n, **kw)
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
         if self._quant is None:
             raise ValueError("QuantisedConfidenceLUT requires a quant_mode (e.g. 'p2_int8')")
@@ -144,14 +144,14 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
     def _quant_read_monolith(self, x: torch.Tensor) -> torch.Tensor:
-        """n=2 CUDA-fp32 TRAIN read, a flat port of OLD LightMHL._quant_read (one compile unit).
+        """n=2 CUDA-fp32 TRAIN read, written flat as one compile unit.
 
         This cartridge is ALLOWED to diverge from the shared ManifestoLUT primitives for the hot quant
         n=2 train path (owner-approved): instead of composing _addresses / _quant_grp_out / _route /
-        _fake_quant_tables / _global_cells, it inlines OLD's exact op sequence -- margins, the native
+        _fake_quant_tables / _global_cells, it inlines one flat op sequence -- margins, the native
         p2_scalars op (cells + straight-through power-of-two weights), ste_tables at the read site, and
-        OLD's offsets-based 1-D flat_idx embedding_bag -- so aot-autograd/inductor see OLD's FX graph and
-        emit OLD's (cheaper) fused backward. Pairs mode only; the gate in :meth:`_forward_impl` keeps
+        an offsets-based 1-D flat_idx embedding_bag -- so aot-autograd/inductor see a single FX graph and
+        emit a cheaper fused backward. Pairs mode only; the gate in :meth:`_forward_impl` keeps
         n=1 / eval / CPU / single-anchor / no-op on the shared path. Forward value + grads are bit-
         identical to the shared path (the op's cells equal our c/c_alt; same ste_tables / embedding_bag)."""
         G, tph, K, d_out = self.weights.shape
@@ -161,7 +161,7 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         z = x[:, self.in_head, :]                                           # route (identity when h_in==G)
         idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
         idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
-        d = (z.gather(2, idx_a) - z.gather(2, idx_b)).view(B, G, tph, nap)  # OLD's d
+        d = (z.gather(2, idx_a) - z.gather(2, idx_b)).view(B, G, tph, nap)  # signed margins
         beta, gamma = self._betagamma(d.dtype)
         g0 = torch.zeros((), dtype=d.dtype, device=d.device)
         tau = self.log_read_tau.to(d.dtype).exp()
@@ -182,8 +182,8 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         return self._route(grp_out, x)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        # Hot path: n=2 CUDA-fp32 TRAIN uses the flat OLD-matching monolith (see _quant_read_monolith)
-        # to get OLD's cheaper fused backward. Everything else -- n=1, eval, CPU, single-anchor, or when
+        # Hot path: n=2 CUDA-fp32 TRAIN uses the flat monolith (see _quant_read_monolith) for its
+        # cheaper fused backward. Everything else -- n=1, eval, CPU, single-anchor, or when
         # the native op is unavailable -- uses the shared _addresses + _quant_grp_out + _route path.
         if (self.training and self.read_top_n == 2 and not self.single
                 and x.is_cuda and x.dtype == torch.float32 and _pow2_int8._enabled):
@@ -273,7 +273,10 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
                 f"to_deployment supports h_out == n_groups only (got h_out={self.spec.h_out}, n_groups={G}); "
                 "the per-(group,channel) output scale folds 1:1 into decompress out_features in that case.")
         if self.read_top_n != 2:
-            raise NotImplementedError("to_deployment supports read_top_n==2 (the reference integer read).")
+            raise NotImplementedError(
+                f"to_deployment supports read_top_n==2 only (the reference integer read); this cartridge has "
+                f"read_top_n={self.read_top_n}. A read_top_n=1 QuantisedConfidenceLUT trains and evaluates, but cannot "
+                f"be exported yet.")
         Wflat = self.weights.reshape(G * tph, K, d_out)
         e = _pow2.head_chan_exponents(Wflat, G, cfg["bits"], cfg["offset"])                 # [G, d_out]
         packed = _pow2.pack_tables(_pow2.quantise_tables(Wflat, e, cfg["bits"]), cfg["bits"]).contiguous()  # [n_tables,K,d_out] int8

@@ -1,4 +1,4 @@
-"""Gen-3 ConfidenceLUT (LightMHL learned-margin score, scored-only).
+"""Gen-3 ConfidenceLUT (learned-margin confidence score, scored-only).
 
 Covers: fp64 gradcheck of the scored backward (input, weights, β, γ, and τ for n=2); both anchor
 modes; read_top_n ∈ {1,2}; gradients reach β/γ/τ; the address is detached (x gets gradient ONLY

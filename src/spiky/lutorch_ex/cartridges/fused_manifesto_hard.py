@@ -6,7 +6,7 @@ forward/backward dispatch to whichever implementation is fastest for the current
 it (the oracle):
 
 * eval  -> the pure compiled gather read (fastest on the inference path);
-* train -> tier-2 NATIVE lutorch_cuda kernels when available, else tier-1 embedding_bag +
+* train -> tier-2 NATIVE lprojection kernels when available, else tier-1 embedding_bag +
   the custom straight-through autograd.Function.
 
 ``backend`` forces a path ('pure_eval'/'tier1'/'native'/'auto'); 'auto' is the hybrid.
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import torch
 
-from ._fused_ops import FusedHardSTE, _acc_dtype
+from ._fused_ops import FusedHardSTE, _acc_dtype, validate_backend
 from ._native_ops import NativeHard, native_available
 from .manifesto_base import ManifestoLUT
 
@@ -23,7 +23,11 @@ _LOW_PREC = (torch.bfloat16, torch.float16)
 
 
 class FusedManifestoHardLUT(ManifestoLUT):
+    #: Every backend _forward_impl dispatches on ('auto' picks one of the others per call).
+    _BACKENDS = ("auto", "pure_eval", "tier1", "native")
+
     def __init__(self, spec, *, backend: str = "auto", **kw):
+        validate_backend(type(self).__name__, backend, self._BACKENDS)
         super().__init__(spec, **kw)
         self.backend = backend
 

@@ -1,8 +1,4 @@
-// Vendored verbatim from spiky.lutorch / native/lutorch (JIT-kernel migration; lutorch_ex self-contained).
-// Shared common utilities (profiling, allocators, CUDA helpers) used by both
-// the main `spiky_cuda` extension and the lightweight `lutorch_cuda` module.
-// This file is mirrored from the original implementation under
-// `spiky_cuda/misc/misc.h` to make it reusable across native modules.
+// Shared common utilities (profiling, allocators, CUDA helpers) for the lutorch_ex native extensions.
 
 #pragma once
 

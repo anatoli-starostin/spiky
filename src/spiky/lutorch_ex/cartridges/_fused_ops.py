@@ -4,8 +4,8 @@ Pure-PyTorch tier: the gather+sum over a group's ``tph`` tables is fused into a 
 ``torch.nn.functional.embedding_bag`` call (itself a fused CUDA kernel), and the hard
 cartridge's straight-through backward is a custom ``torch.autograd.Function`` with a
 hand-written scatter backward (which also avoids the inductor mis-schedule of the STE
-composite). This is the graceful fallback path; an optional native fast-path (reusing the
-``lutorch_cuda`` lprojection kernels) can sit behind an availability check later.
+composite). This is the graceful fallback path; the native fast path (the lprojection kernels,
+see ``_native_ops``) sits behind an availability check.
 
 Numerically identical to the pure ManifestoHardLUT / ManifestoSoftLUT (the oracle).
 """
@@ -23,6 +23,29 @@ import torch.nn.functional as F
 def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
     """fp32 for bf16/fp16, else the dtype itself (fp32->fp32, fp64->fp64)."""
     return torch.float32 if dtype in (torch.bfloat16, torch.float16) else dtype
+
+
+# The fused twins do not share one spelling for their pure-read backend: FusedManifestoSoftLUT calls
+# it "pure" (it also serves CPU training there), FusedManifestoHardLUT and the FusedSoftSign twins call
+# it "pure_eval". Each class lists its own names in a _BACKENDS class constant next to its dispatch.
+_PURE_NAME_HINT = {
+    "pure_eval": "this class uses 'pure_eval' (FusedManifestoSoftLUT is the one that calls its pure path 'pure')",
+    "pure": "this class uses 'pure' (FusedManifestoHardLUT and the FusedSoftSign twins call their pure path "
+            "'pure_eval')",
+}
+
+
+def validate_backend(owner: str, backend, accepted: tuple) -> str:
+    """Return ``backend`` if it is one of ``accepted``; otherwise raise ValueError naming the accepted values
+    (and, for the sibling's spelling of the pure path, which spelling this class uses). A dispatch that
+    meets an unknown name would otherwise fall through to tier1 silently."""
+    if backend in accepted:
+        return backend
+    msg = f"{owner}: backend={backend!r} is not valid here; this class accepts {', '.join(map(repr, accepted))}"
+    if backend in ("pure", "pure_eval"):
+        own_pure = "pure" if "pure" in accepted else "pure_eval"
+        msg += f". backend={backend!r} is the sibling class's name: {_PURE_NAME_HINT[own_pure]}"
+    raise ValueError(msg + ".")
 
 
 def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
@@ -67,7 +90,7 @@ def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor
 
 
 class FusedHardSTE(torch.autograd.Function):
-    """Hard forward (value = sum_t W[c_t]) with the gen-1 straight-through backward:
+    """Hard forward (value = sum_t W[c_t]) with the Manifesto straight-through backward:
     weight gradient is HARD (only the addressed cell c_t), input gradient flows through the
     two-alternative rational-uncertainty surrogate. Hand-written scatter backward.
     """

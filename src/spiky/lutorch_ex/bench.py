@@ -13,7 +13,9 @@ repeats reported as median and min (ms) plus throughput (rows/s), ``no_grad`` fo
 present (or whose measurement is disabled) yields a clear ``placeholder`` row instead of
 crashing, and any per-cell failure (e.g. OOM) is caught and reported as an ``error`` row.
 
-Usable as a library (``benchmark(...)``) or a script (``python -m spiky.lutorch_ex.bench``).
+Usable as a library (``benchmark(...)``, the general harness) or as a demo script
+(``python -m spiky.lutorch_ex.bench``, which times only ManifestoHardLUT / ManifestoSoftLUT at one small
+fixed geometry).
 """
 from __future__ import annotations
 
@@ -220,12 +222,19 @@ def rows_to_csv(rows: Sequence[BenchRow]) -> str:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Demo CLI: time ManifestoHardLUT and ManifestoSoftLUT at one small fixed geometry.
+
+    For any other cartridge or geometry, call :func:`benchmark` (the general harness) directly.
+    """
     import argparse
 
     from .cartridges import ManifestoHardLUT, ManifestoSoftLUT
     from .lut_spec import LUTSpec
 
-    p = argparse.ArgumentParser(description="Benchmark the Manifesto cartridges.")
+    p = argparse.ArgumentParser(
+        description="Demo: time ManifestoHardLUT and ManifestoSoftLUT at one small fixed geometry "
+                    "(LUTSpec(h_in=2, h_out=2, tph=8, nap=5, d_in=16, d_out=16)). For any other cartridge "
+                    "or geometry, call spiky.lutorch_ex.bench.benchmark() from Python.")
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--repeats", type=int, default=10)
     p.add_argument("--measure-cuda", action="store_true",

@@ -1,16 +1,13 @@
-"""Tier-2 native fast-path: the gen-1 lprojection / anchor_pairs CUDA kernels.
+"""Tier-2 native fast-path: the lprojection / anchor_pairs CUDA kernels.
 
-These kernels are now vendored co-located under ``cartridges/csrc/`` (lprojection.cu +
-lprojection_py.cpp + common_misc.cpp) and JIT-built as the ``lutorch_ex_lprojection`` extension
-(see :func:`_lprojection_ext`). lutorch_ex is fully self-contained: the prebuilt ``lutorch_cuda``
-library is no longer consulted, and nothing here references ``native/lutorch``. They implement the
-manifesto primitives, reused for the fused cartridges with thin adapters for lutorch_ex's
-representation:
+The kernels live under ``cartridges/csrc/`` (lprojection.cu + lprojection_py.cpp + common_misc.cpp)
+and are JIT-built as the ``lutorch_ex_lprojection`` extension (see :func:`_lprojection_ext`). They
+implement the manifesto primitives, used by the fused cartridges through thin adapters:
 
 * MSB-first addressing: lprojection reads ``weights[table, index]`` and is agnostic to how
   the index was packed, so we pass OUR MSB indices and OUR weight table directly — no
   bit-reversal needed.
-* weight layout [G, tph, K, d_out] -> gen-1's flat [n_tables=G*tph, K, d_out];
+* weight layout [G, tph, K, d_out] -> the kernels' flat [n_tables=G*tph, K, d_out];
 * per-head input: z [B, G, d_in] is flattened to [B, G*d_in] and anchor coords are shifted
   to global (g*d_in + local), so the native input-gradient scatter lands in the right head;
 * n_alternatives = 1 (the two-cell blend / single neighbour).
@@ -41,14 +38,13 @@ _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
 _TRIED = False
 
-# Co-located CUDA sources (vendored from native/lutorch so lutorch_ex is self-contained) and a stable,
-# persistent extension cache so the ~117 KB lprojection nvcc compile is paid once across processes.
+# Co-located CUDA sources and a stable, persistent extension cache so the ~117 KB lprojection nvcc compile is paid once across processes.
 _CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
 os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
 
 
 def _pick_gpp():
-    """A host compiler for nvcc --compiler-bindir (parity with native/lutorch/setup.py); None if none."""
+    """A host compiler for nvcc --compiler-bindir; None if none."""
     import shutil
     for c in ("g++-13", "g++-12", "g++-11", "g++-10", "g++-9", "g++-8", "g++"):
         p = shutil.which(c)
@@ -62,10 +58,9 @@ _LPROJ_TRIED = False
 
 
 def _lprojection_ext():
-    """Build/load the co-located ``lutorch_ex_lprojection`` JIT extension (the vendored lprojection /
-    anchor_pairs kernels + LUTorchManager). Mirrors the ``lutorch_ex_pow2_int8_read`` setup: lazy, cached,
-    device-gated, never raises -> ``None`` falls through to the prebuilt lib / pure-torch path. nvcc flags
-    match native/lutorch/setup.py (-std=c++20, -O3, -lcuda, --compiler-bindir, -I cuda/include)."""
+    """Build/load the co-located ``lutorch_ex_lprojection`` JIT extension (the lprojection / anchor_pairs
+    kernels + LUTorchManager). Mirrors the ``lutorch_ex_pow2_int8_read`` setup: lazy, cached, device-gated,
+    never raises -> ``None`` falls through to the pure-torch path."""
     global _LPROJ_EXT, _LPROJ_TRIED
     if _LPROJ_TRIED:
         return _LPROJ_EXT
@@ -78,7 +73,7 @@ def _lprojection_ext():
             return None
         from torch.utils.cpp_extension import load
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        # Mirror the working pow2_int8 build (and the prebuilt lutorch_cuda's semantics): cpp_extension
+        # Mirror the working pow2_int8 build: cpp_extension
         # already supplies the correct CUDA_HOME include paths and a compatible host compiler, so we do
         # NOT hardcode -I/usr/local/cuda/include or --compiler-bindir (a stray -I mixes toolkits and
         # breaks the build: "CUDA compiler and CUDA toolkit headers are incompatible"). -lcuda matches
@@ -126,7 +121,6 @@ def _single_ig_ext():
     try:
         from torch.utils.cpp_extension import load
 
-        # Vendored, co-located source (no longer reaches into native/lutorch).
         src = os.path.join(_CSRC, "single_anchor_input_grad.cu")
         _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src], verbose=False)
     except Exception:
@@ -137,9 +131,7 @@ def _single_ig_ext():
 def native_manager():
     """Return a LUTorchManager, or None if unavailable. Resolution order:
     (1) the co-located ``lutorch_ex_lprojection`` JIT extension (self-contained);
-    (2) ``None`` -> callers use the pure/tier-1 torch path.
-    The prebuilt ``lutorch_cuda`` library is no longer consulted: lutorch_ex is fully
-    self-contained and never references native/lutorch."""
+    (2) ``None`` -> callers use the pure/tier-1 torch path."""
     global _MANAGER, _TRIED
     if _TRIED:
         return _MANAGER
@@ -199,7 +191,7 @@ def _single_input_grad(gc_main, gc_alt, delta, a_glob, B, G, d_in, nt):
 
 
 def _flatten(weights, c, c_alt, u_signed_star):
-    """Common reshapes to gen-1 flat layout. Returns (W, li, lai, lad, nt, B, G, tph, K, d_out).
+    """Common reshapes to the kernels' flat layout. Returns (W, li, lai, lad, nt, B, G, tph, K, d_out).
 
     lad (the signed deciding margin) is cast to the weight dtype: the native kernels dispatch
     on the weight dtype, so the margin must match it (addressing was computed in fp32 upstream;
@@ -217,7 +209,7 @@ def _flatten(weights, c, c_alt, u_signed_star):
 
 
 class NativeSoft(torch.autograd.Function):
-    """Soft blend via lutorch_cuda lprojection_forward_smooth (+ its na1 smooth backward)."""
+    """Soft blend via the native lprojection_forward_smooth (+ its na1 smooth backward)."""
 
     @staticmethod
     def forward(ctx, weights, z, c, c_alt, u_signed_star, a_glob, b_glob, single, drop_mask=None):
@@ -273,7 +265,7 @@ class NativeHard(torch.autograd.Function):
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
         tif = _table_indices(B, nt, z.device)
-        # Hard value: sum_t W[c_t]. lutorch_cuda has no nonsmooth forward, so fuse the per-table
+        # Hard value: sum_t W[c_t]. The native kernels have no nonsmooth forward, so fuse the per-table
         # gather + tph-sum with embedding_bag (fp32-accumulated for bf16/fp16, cast back to the
         # weight dtype) instead of the eager W[tif,li].sum(2), which materialized the full
         # [B,G,tph,d_out] cell tensor (~2.4 GB at the champion batch). Numerically identical; the

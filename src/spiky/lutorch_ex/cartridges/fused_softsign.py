@@ -1,8 +1,8 @@
 """Fused, GPU-efficient twins of the Gen-2 soft-sign cartridges.
 
 ``FusedSoftSignHardLUT`` / ``FusedSoftSignSmoothLUT`` are numerically equivalent to the pure
-``SoftSignHardLUT`` / ``SoftSignSmoothLUT`` (the oracle) but dispatch the training step to native
-``lutorch_cuda`` kernels, reusing the gen-1 fused read / weight-grad / carrier machinery and
+``SoftSignHardLUT`` / ``SoftSignSmoothLUT`` (the oracle) but dispatch the training step to the native
+lprojection kernels, reusing the Gen-1 fused read / weight-grad / carrier machinery and
 adding only the soft-sign-specific margin/temperature gradient (see ``_native_softsign``). The
 native backward forms the weight gradient and the two carriers ``grad.W[c]`` / ``grad.W[c']`` in
 one fused pass WITHOUT materialising the ``[B, G, tph, d_out]`` cell tensors — the whole point of
@@ -10,7 +10,10 @@ Option 2.
 
 Dispatch (``backend`` forces a path; 'auto' is the hybrid):
 * eval  -> pure compiled gather read (fastest on the inference path, inherited);
-* train -> 'native' (H100 + lutorch_cuda) else 'tier1' (pure embedding_bag path, CPU / no ext).
+* train -> 'native' whenever native_available(): a CUDA device with the native ops loaded (any
+  architecture the extension builds for -- e.g. H100 or RTX 5090), else 'tier1' (pure embedding_bag path,
+  CPU / no ext). FusedSoftSignSmoothLUT overrides this: its 'auto' always trains on 'tier1' (native is no
+  faster there); 'native' stays reachable with backend="native".
 
 bf16/fp16: addressing runs in fp32 (so the discrete bit decisions don't drift), reads/reductions
 accumulate in fp32, output cast back once. Kept only if it is a real H100 speedup (evaluated in
@@ -21,7 +24,7 @@ from __future__ import annotations
 
 import torch
 
-from ._fused_ops import _acc_dtype, _global_cells, fused_blend_read, fused_hard_read
+from ._fused_ops import _acc_dtype, _global_cells, fused_blend_read, fused_hard_read, validate_backend
 from ._native_ops import native_available
 from ._native_softsign import NativeSoftSignHard, NativeSoftSignSmooth
 from .softsign_base import SoftSignLUT
@@ -35,7 +38,11 @@ class FusedSoftSignLUT(SoftSignLUT):
     #: bf16/fp16 support — a real H100 speedup keeps it True, otherwise flipped to False (drop).
     _SUPPORTS_LOW_PRECISION = True
 
+    #: Every backend the twins' _forward_impl dispatches on ('auto' picks one of the others per call).
+    _BACKENDS = ("auto", "pure_eval", "tier1", "native")
+
     def __init__(self, spec, *, backend: str = "auto", **kw):
+        validate_backend(type(self).__name__, backend, self._BACKENDS)
         super().__init__(spec, **kw)
         self.backend = backend
 

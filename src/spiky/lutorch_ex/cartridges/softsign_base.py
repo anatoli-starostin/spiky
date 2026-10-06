@@ -1,17 +1,17 @@
-"""Shared structure for the Gen-2 "soft-sign" cartridge family (FastMHL math, 2-alternative).
+"""Shared structure for the Gen-2 "soft-sign" cartridge family (2-alternative).
 
 The Gen-2 cartridges keep everything the Gen-1 Manifesto family has — MSB-first sign-bit
 addressing, the single least-confident Hamming-1 neighbour ``c'`` (``j* = argmin_j |u_j|``),
 the two-cell read, head routing — and change only the blend/surrogate *weight*. Where Gen-1
 uses the fixed rational uncertainty ``U(u) = 0.5/(1+|u|)``, Gen-2 uses a squashed-margin sigmoid
-with two **learned per-layer temperatures** (exactly FastMultiHeadLut's ``hybrid_smooth`` weight):
+with two **learned per-layer temperatures**:
 
     rho = |u_{j*}| / (T_soft_score + |u_{j*}|)     (a rational soft-sign of the deciding margin)
     w   = sigmoid(-2 * rho / T_select)  in (0, 1/2]  (the weight on the neighbour cell c')
 
 so the two-cell blend is ``(1 - w) W[c] + w W[c']``, continuous across a bit flip (``w = 1/2`` at
 ``u = 0``) and tending to the hard read as the margin grows. ``T_soft_score`` and ``T_select`` are
-stored log-parametrised and learned per layer (initialised at 0.5, as in FastMHL).
+stored log-parametrised and learned per layer (initialised at 0.5).
 
 This is the **2-alternative** backward only (``backward_topk = 1``): the surrogate softmax is
 restricted to the two cells ``{c, c'}``, whose renormalised weight on ``c'`` is exactly ``w`` — so

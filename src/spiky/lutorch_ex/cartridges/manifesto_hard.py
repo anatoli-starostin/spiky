@@ -1,16 +1,13 @@
-"""ManifestoHardLUT — the gen-1 reference cartridge (hard variant 1.1).
+"""ManifestoHardLUT — the Gen-1 reference cartridge (hard variant 1.1).
 
 "Hard forward, two-alternative soft backward with a rational uncertainty function."
-Greenfield re-implementation of the original ``spiky.lutorch.multi_head_lut.MultiHeadLut``
-(variant 1.1 in the LUT-ablation table, ``smooth_mode=False``), built to the cartridge
-contract with zero imports from the old ``lutorch``.
 
 All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell
 read) lives in :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`; this
 class supplies only :meth:`_combine`.
 
-The gen-1 math
-==============
+The math
+========
 Per group ``g`` and table ``t`` the base computes the hard cell ``c_t`` (MSB-first
 sign-bit address over the table's ``nap`` margins ``u_j = z[a_j] - z[b_j]``), its
 least-confident-bit-flip neighbour ``c_t'`` (``j* = argmin_j |u_j|``), and the deciding
@@ -26,7 +23,7 @@ Two-alternative soft backward.
     ``U_t = U(u_{j*}) = 0.5/(1 + |u_{j*}|)`` (rational uncertainty: ``U(0)=0.5``, ``U->0``
     as ``|u|->inf``, in ``(0, 0.5]``). The index set ``c_t, c_t', j*`` is stop-gradient.
 
-Gradient asymmetry (by design, matching gen-1 ``smooth_mode=False``).
+Gradient asymmetry (by design).
     The **weight-table** gradient is hard: only the addressed cell ``c_t`` receives
     gradient (coefficient 1); the alternative ``c_t'`` gets none. The uncertainty blend
     ``y~`` shapes the **input/addressing** gradient only. (The soft-forward sibling,

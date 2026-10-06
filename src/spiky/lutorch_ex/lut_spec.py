@@ -20,10 +20,9 @@ Addressing mode
 input slice ``z`` (``[d_in]`` per group):
 
 * ``"pairs"`` (default) — each bit compares *two* coordinates, ``bit_j = [z[a_j] - z[b_j]
-  > eps]`` (fixed anchor **pairs**, the gen-1 Manifesto front-end).
+  > eps]`` (fixed anchor **pairs**, the Manifesto front-end).
 * ``"single"`` — each bit compares *one* coordinate against zero, ``bit_j = [z[a_j] >
-  eps]`` (single anchor vs zero). This mirrors the old ``HyperplaneMultiHeadLUT`` special
-  case: composed with a learned input projection (a ``ProjectionMHL`` compress with bias,
+  eps]`` (single anchor vs zero). Composed with a learned input projection (a ``ProjectionMHL`` compress with bias,
   ``z = W x + b``) each bit becomes a learned hyperplane test ``[⟨w_j, x⟩ + b_j > 0]``.
 
 Everything cartridge-specific (the lookup math, quantisation, …) lives in the cartridge;

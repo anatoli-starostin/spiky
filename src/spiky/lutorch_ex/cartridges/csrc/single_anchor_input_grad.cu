@@ -1,8 +1,7 @@
-// Vendored verbatim from spiky.lutorch / native/lutorch (JIT-kernel migration; lutorch_ex self-contained).
 // Single-anchor input-gradient kernel for lutorch_ex (anchor_mode="single").
 //
 // The pairs front-end's input gradient is one fused CUDA kernel
-// (anchor_pairs_lookup_backward_all in lutorch.cu) that forms, per (batch, table),
+// (anchor_pairs_lookup_backward_all in lprojection.cu) that forms, per (batch, table),
 //   du = (grad.W[c] - grad.W[c']) * 0.5*sign(delta)/(1+|delta|)^2
 // and scatters +du to anchor a and -du to anchor b. Single-anchor mode compares one
 // coordinate against zero, so it keeps only the +du-to-a half. Doing that in eager
@@ -10,8 +9,8 @@
 // dominate the (launch-bound) backward at small batch. This kernel collapses it to ONE
 // launch, matching the pairs path, so the single-anchor backward is <= pairs at every batch.
 //
-// Built standalone via torch.utils.cpp_extension.load (NOT part of the lutorch_cuda
-// extension), so it never touches the shared build; _native_ops falls back to the eager
+// Built standalone via torch.utils.cpp_extension.load (NOT part of the lutorch_ex_lprojection
+// extension), so it never touches that build; _native_ops falls back to the eager
 // body when it cannot be compiled/loaded.
 #include <torch/extension.h>
 #include <ATen/AccumulateType.h>
