@@ -1,0 +1,20 @@
+{
+  "_runtime": 18680.295004364,
+  "_step": 48000,
+  "_timestamp": 1791175760.5365734,
+  "_wandb.runtime": 18680,
+  "best_val_bpb": 1.1564712270274782,
+  "cart": "fss_hard",
+  "exp_name": "lutorch_ex_abl47_fss_hard_wk_1004_1510",
+  "hours": 5.189,
+  "lut_tv": 0.003730176016688347,
+  "n_steps": 48000,
+  "peak_gb": 9.432,
+  "time/sec_per_step": 0.3821587085723877,
+  "total_params": 68237580,
+  "train/loss": 3.626465737819672,
+  "train/loss_ema": 3.631398352444781,
+  "train/lr": 2.9999999999999997e-05,
+  "train_loss": 3.631398352444781,
+  "val_bpb": 1.1570144481823992
+}

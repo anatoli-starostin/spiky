@@ -1,0 +1,9 @@
+{
+  "exp_name": "lutorch_ex_abl47_fss_smooth_vm_1004_1806",
+  "cart": "fss_smooth",
+  "best_val_bpb": 1.1294133900483907,
+  "total_params": 68237580,
+  "peak_gb": 7.683,
+  "hours": 4.1726,
+  "n_steps": 48000
+}

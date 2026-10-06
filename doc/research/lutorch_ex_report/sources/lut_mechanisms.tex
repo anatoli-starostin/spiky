@@ -1,0 +1,372 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{xurl}
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+\renewcommand{\arraystretch}{1.15}
+\setlength{\tabcolsep}{4.5pt}
+
+\newcommand{\NAP}{N}
+\newcommand{\sgn}{\operatorname{sign}}
+\newcommand{\Rows}{K}
+
+\title{\vspace{-1.2cm}\textbf{The Mathematics of Our LUT Mechanisms}}
+\author{DeepSpike Inc.}
+\date{Draft, \today}
+
+\begin{document}
+\maketitle
+\vspace{-0.8cm}
+
+\begin{abstract}
+\noindent A compact reference for the lookup-table mechanisms currently in the codebase and
+how they differ from one another. It follows the notation of the LUTGPT research
+report~\cite{lutgpt}, condensing its account of \textbf{FastMHL} rather than restating it,
+and adds the two layers that report does not cover: \textbf{LightMHL}, whose address is
+non-differentiable by construction so that gradient reaches the input only through a
+confidence score, and \textbf{CompressionMHL}, the projection wrapper both live inside. A
+separate section treats the confidence score itself, since that is where the current
+experimental work sits. The last section states the mechanism of
+LookupFFN~\cite{lookupffn} and its relationship to ours; the two turn out to share their
+score function exactly, and to differ in which vector they take signs of.
+\end{abstract}
+
+\section{Shared setup and notation}
+
+We keep the notation of the LUTGPT report~\cite{lutgpt}. A multi-head LUT layer is
+parameterised by an input width $E$, a per-head output width $D_{\text{out}}$, a head
+count $H$, a number of tables per head $\mathrm{tph}$, and a number of anchor pairs
+$\NAP$ (NAP) per table. The layer holds $H\cdot\mathrm{tph}$ independent tables; the
+per-head output is the sum of that head's $\mathrm{tph}$ tables.
+
+Each table fixes $\NAP$ \emph{anchor pairs} $(a_j,b_j)_{j=1}^{\NAP}$ once at module
+initialisation and never moves them. They are drawn from the module's
+\texttt{random\_seed} and stored as \texttt{register\_buffer}s, so they are not
+parameters and receive no gradient. For an input $x$ the pair differences, or
+\emph{margins}, are
+\begin{equation}
+  d_j \;=\; x_{a_j} - x_{b_j}, \qquad m_j \;:=\; |d_j|, \qquad j=1,\dots,\NAP .
+  \label{eq:margins}
+\end{equation}
+The map $x\mapsto(d_1,\dots,d_\NAP)$ is linear and sparse: each $d_j$ depends only on
+$x_{a_j}$ and $x_{b_j}$, so any gradient with respect to $d$ returns to $x$ as a
+scatter-add at the anchor positions. A weight table $W\in\mathbb{R}^{\Rows\times
+D_{\text{out}}}$ with $\Rows=2^{\NAP}$ rows is indexed by $b\in\{0,1\}^{\NAP}$, and we
+write $\chi_j(b):=2b_j-1\in\{-1,+1\}$ for the bit parity.
+
+The encoding is purely \emph{rank-coded}: each bit asks only whether one coordinate
+exceeds another, so it is invariant to any positive rescaling of $x$. Both layers below
+share equation~\eqref{eq:margins} and the table shape; they differ in what they do
+between the margins and the output.
+
+\section{FastMHL}
+
+FastMHL is derived in full in Section~2 of the research report~\cite{lutgpt}; we condense
+it here and do not restate the derivation.
+
+\paragraph{Soft sign and row score.}
+Two scalar temperatures, shared by all tables and stored in log-space, control the layer:
+$T_{\text{soft}}$ (per-anchor sign sharpness) and $T_{\text{sel}}$ (row-selection
+sharpness). For each anchor pair,
+\begin{equation}
+  p_j \;=\; \frac{d_j}{T_{\text{soft}}+|d_j|}
+        \;=\; \sgn(d_j)\,\frac{|d_j|}{T_{\text{soft}}+|d_j|} \;\in\;(-1,+1),
+  \qquad
+  S(b) \;=\; \sum_{j=1}^{\NAP} p_j\,\chi_j(b),
+\end{equation}
+with $z(b)=S(b)/T_{\text{sel}}$ and $\pi(b)=\operatorname{softmax}_b z(b)$ the full-$\Rows$
+distribution over rows. The argmax of $S$ is the hard sign-pack,
+\begin{equation}
+  b^\star = \arg\max_b S(b), \qquad b^\star_j = [\,d_j>0\,].
+  \label{eq:bstar}
+\end{equation}
+
+\paragraph{Forward modes.}
+In \emph{hard} mode the output is the single selected row, $y^{\text{hard}}=W[b^\star]$,
+and the temperatures play no role in the forward. In \emph{hybrid-smooth} mode the layer
+takes an exact two-row softmax over $b^\star$ and its least-confident Hamming-1 neighbour
+$b^{\text{alt}}=b^\star\oplus e_{j^\star}$, $j^\star=\arg\min_j|d_j|$. With
+$d_{\min}:=|d_{j^\star}|$ the score gap is
+$\Delta = 2|p_{j^\star}| = 2d_{\min}/(T_{\text{soft}}+d_{\min})$, and
+\begin{equation}
+  u=\sigma\!\left(-\Delta/T_{\text{sel}}\right)\in(0,\tfrac12],
+  \qquad
+  y^{\text{hyb}} = (1-u)\,W[b^\star] + u\,W[b^{\text{alt}}].
+\end{equation}
+As $d_{\min}/T_{\text{soft}}\to\infty$ or $T_{\text{sel}}\to0^+$, $u\to0$ and
+$y^{\text{hyb}}\to y^{\text{hard}}$.
+
+\paragraph{What makes it differentiable through the address.}
+This is the load-bearing point for the comparison that follows, so we state it exactly as
+the report does. The backward splits in two. Weight gradient flows only through the rows
+that actually contributed to the forward --- one row in hard mode, two in hybrid-smooth.
+\emph{Input and temperature gradients are computed as the analytic gradient of the
+full-$\Rows$ soft forward} $y_{\text{full}}=\sum_b \pi(b)\,W[b]$, ignoring the truncation
+the actual forward applied. So FastMHL is not differentiable through its address in any
+literal sense: the address is a discrete argmax. It is trained through a
+\emph{surrogate} in which the row choice is replaced by the full softmax $\pi$, which is
+dense in all $\NAP$ anchor pairs and therefore delivers a signal to every coordinate of
+$x$ that any anchor touches. The report is explicit that this is a deliberate mismatch:
+the forward is a sign-pack lookup, the backward is the gradient of a different, smooth
+function.
+
+\paragraph{The confidence gate.}
+Recent work added an opt-in gate (\texttt{forward\_confidence}). When it is set, each
+gathered row is scaled by the smooth scalar $s$ of Section~\ref{sec:forms}, computed from
+the same margins:
+\begin{equation}
+  y \;\longmapsto\; s(m)\cdot y .
+\end{equation}
+The gate is off by default, and the layer is bit-identical to the published one when it is.
+
+\section{LightMHL}
+
+LightMHL is not covered by the research report. What follows is derived from the source,
+\path{src/spiky/lutorch/light_multi_head_lut.py}.
+
+Its defining property is that \textbf{the address is a non-differentiable integer and
+there is no straight-through estimator}. Consequently gradient reaches the input
+\emph{only} through the confidence score. Where FastMHL replaces the discrete choice by a
+dense softmax surrogate in the backward, LightMHL does not replace it at all.
+
+\paragraph{Shapes.}
+In the per-head configuration the layer receives $z\in\mathbb{R}^{B\times H\times E}$ and
+holds anchors of shape $[H,\mathrm{tph},\NAP]$ and tables of shape
+$[H\!\cdot\!\mathrm{tph},\,2^{\NAP},\,D_{\text{out}}]$. Anchors are drawn per head from
+generator seed $\texttt{random\_seed}+h$ and \textbf{indexed head-locally}: head $h$'s
+anchors address only that head's own $E$ coordinates. (A flattened copy carrying per-head
+offsets is registered separately, purely so the fused CUDA kernel can take a single
+$[\,\cdot\,,\NAP]$ anchor table over a flat $x$; it is the same geometry.) The tables are
+initialised $\mathrm{Uniform}[-\varepsilon,+\varepsilon]$. There are \textbf{no
+temperatures} --- the layer has no $T_{\text{soft}}$, $T_{\text{sel}}$, and hence 2 fewer
+parameters per layer than the Fast configuration it is compared against.
+
+\paragraph{Forward, identical in training and evaluation.}
+With margins $d_{h,t,j}$ from~\eqref{eq:margins} computed inside head $h$ for table $t$,
+\begin{align}
+  \text{address:} \quad
+    &c_{h,t} \;=\; \sum_{j=1}^{\NAP} \mathbf{1}\!\left[\,\mathrm{sd}(d_{h,t,j})>0\,\right]\,
+       2^{\,\NAP-j}
+     \;\in\;\{0,\dots,2^{\NAP}-1\},
+     \label{eq:lightaddr}\\[2pt]
+  \text{score:} \quad & s_{h,t} \;=\; s\!\left(|d_{h,t,\cdot}|\right) \in \mathbb{R},\\[2pt]
+  \text{output:} \quad & y_h \;=\; \sum_{t=1}^{\mathrm{tph}} s_{h,t}\;
+      W_{h,t}\!\left[c_{h,t}\right] \;\in\;\mathbb{R}^{D_{\text{out}}} .
+      \label{eq:lightout}
+\end{align}
+Here $\mathrm{sd}(\cdot)$ denotes \texttt{.detach()}: the sign is taken of a detached
+tensor, so $c$ carries no gradient. The bits are packed \emph{MSB-first}, matching
+FastMHL's index convention --- the leading anchor pair contributes $2^{\NAP-1}$. The sum
+in~\eqref{eq:lightout} is evaluated with \texttt{F.embedding\_bag} using the scores as
+\texttt{per\_sample\_weights}, which is algebraically the gather-scale-sum written above
+but never materialises the $[B,H,\mathrm{tph},D_{\text{out}}]$ row tensor.
+
+\paragraph{The gradient.}
+Since $c$ is detached, $\partial y_h/\partial W$ is a scatter into the addressed rows
+scaled by $s$, and the entire input gradient factors through the score:
+\begin{equation}
+  \frac{\partial \mathcal{L}}{\partial d_j}
+   \;=\;
+   \underbrace{\left\langle \frac{\partial \mathcal{L}}{\partial y},\,W[c]\right\rangle}_{
+      g_s,\ \text{scalar}}
+   \cdot \frac{\partial s}{\partial m_j}\cdot \sgn(d_j),
+   \label{eq:lightgrad}
+\end{equation}
+returned to $z$ by scatter-add at the anchor positions. Two consequences follow directly
+and are the reason Section~\ref{sec:forms} matters. First, if $\partial s/\partial m_j$
+is small the input receives almost nothing, regardless of how informative the routing
+would be. Second, the whole of $\partial\mathcal{L}/\partial d$ is rank-one in the sense
+that a single scalar $g_s$ multiplies a fixed profile across the $\NAP$ anchors: the
+layer can learn \emph{how confident} to be, but nothing in the gradient tells it that a
+different row would have been better.
+
+\section{The confidence forms}
+\label{sec:forms}
+
+The score is a smooth scalar built from the margins $m_j=|d_j|$. The implementation
+validates against exactly three names --- \texttt{"bounded"}, \texttt{"margin"},
+\texttt{"bounded\_norm"} --- and both FastMHL and LightMHL call the same function, so an
+ablation between the two layers holds the score fixed. Writing
+$P:=\prod_{j=1}^{\NAP}\sigma(2m_j)\in(0,1]$,
+\begin{align}
+  \text{bounded:} \quad & s = P, \\
+  \text{bounded\_norm:} \quad
+    & s = \exp\!\Big(\tfrac{1}{\NAP}\textstyle\sum_j \log\sigma(2m_j)\Big) = P^{1/\NAP},
+      \label{eq:bnorm}\\
+  \text{margin:} \quad
+    & s = \Big(\textstyle\sum_j m_j\Big)\cdot P .
+      \label{eq:margin}
+\end{align}
+All three are computed through $\log\sigma$ so that $e^{2m}$ is never formed. A constant
+\texttt{confidence\_gain} $c$ multiplies $s$, and by linearity multiplies
+$\partial s/\partial m$ by the same $c$; it separates the gate's scale from its
+selectivity. \texttt{bounded\_norm} is the geometric mean of the same per-anchor
+sigmoids: it preserves \texttt{bounded}'s ordering while removing its $\NAP$-dependent
+attenuation, which at $\NAP=8$ drives \texttt{bounded} down by more than two orders of
+magnitude at small margins.
+
+The derivatives, as implemented in the analytic backward, are
+\begin{equation}
+  \frac{\partial s}{\partial m_j} =
+  \begin{cases}
+    2\,s\,\sigma(-2m_j) & \text{bounded},\\[2pt]
+    \dfrac{2}{\NAP}\,s\,\sigma(-2m_j) & \text{bounded\_norm},\\[4pt]
+    P + 2\,s\,\sigma(-2m_j) & \text{margin}.
+  \end{cases}
+  \label{eq:dscore}
+\end{equation}
+
+\paragraph{Saturation, and why it is the active question.}
+As margins grow, $\sigma(-2m_j)\to0$ exponentially, so the first two forms saturate and
+their derivative collapses: a well-separated routing decision stops producing any input
+gradient at all. The \texttt{margin} form carries the extra term $P$, which tends to $1$
+rather than $0$, so $\partial s/\partial m_j\to1$ and the routing path keeps a gradient
+floor forever. Table~\ref{tab:scores} gives the numbers; they are computed by autograd
+from the shipped scoring function, and cross-checked against the analytic
+$\partial s/\partial m$ of~\eqref{eq:dscore} to a relative $10^{-9}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{r|rr|rr|rr}
+\toprule
+& \multicolumn{2}{c|}{\texttt{bounded}} & \multicolumn{2}{c|}{\texttt{bounded\_norm}}
+& \multicolumn{2}{c}{\texttt{margin}} \\
+$m$ & $s$ & $\partial s/\partial m$ & $s$ & $\partial s/\partial m$
+    & $s$ & $\partial s/\partial m$ \\
+\midrule
+0.05 & $5.769\!\times\!10^{-3}$ & $5.481\!\times\!10^{-3}$ & 0.524979 & 0.062344 & 0.002308 & 0.007962 \\
+0.10 & $8.353\!\times\!10^{-3}$ & $7.521\!\times\!10^{-3}$ & 0.549834 & 0.061879 & 0.006683 & 0.014370 \\
+0.40 & $5.136\!\times\!10^{-2}$ & $3.185\!\times\!10^{-2}$ & 0.689974 & 0.053477 & 0.164367 & 0.153280 \\
+0.80 & $2.296\!\times\!10^{-1}$ & $7.715\!\times\!10^{-2}$ & 0.832018 & 0.034941 & 1.469750 & 0.723430 \\
+1.50 & $6.779\!\times\!10^{-1}$ & $6.430\!\times\!10^{-2}$ & 0.952574 & 0.011294 & 8.135261 & 1.449582 \\
+3.00 & $9.804\!\times\!10^{-1}$ & $4.848\!\times\!10^{-3}$ & 0.997527 & 0.000617 & 23.529345 & 1.096748 \\
+6.00 & $1.000$ & $1.229\!\times\!10^{-5}$ & 0.999994 & 0.000002 & 47.997641 & 1.000541 \\
+\bottomrule
+\end{tabular}
+\caption{Score and its derivative at $\NAP=8$ with all anchors held at the same margin
+$m$. Between $m=0.4$ and $m=3.0$ \texttt{bounded\_norm}'s derivative falls by
+$87\times$ while \texttt{margin}'s rises by $7\times$.}
+\label{tab:scores}
+\end{table}
+
+\section{CompressionMHL: the wrapper}
+
+Neither LUT layer is applied to the residual stream directly. \texttt{CompressionMHL}
+projects into a narrow per-head code, runs the lookup there, and projects back. Let
+$d_{\text{model}}$ be the model width and $E,\,D_{\text{out}}$ the effective inner input
+and output widths (\texttt{eff\_in}, \texttt{eff\_out}). For the per-head configuration
+used throughout the current experiments,
+\begin{align}
+  z &= \mathrm{compress}(x) \in \mathbb{R}^{B\times H\times E},
+     &&\mathrm{compress}: \mathbb{R}^{d_{\text{model}}}\!\to\mathbb{R}^{H\cdot E},
+     \label{eq:compress}\\
+  z &\leftarrow \mathrm{LN}(z) &&\text{(optional, \texttt{lut\_z\_norm})},
+     \label{eq:znorm}\\
+  y &= \mathrm{LUT}(z) \in \mathbb{R}^{B\times H\times D_{\text{out}}},
+     &&\text{Fast or Light},\\
+  y &\leftarrow y + z &&\text{(optional, \texttt{inner\_residual})},
+     \label{eq:innerres}\\
+  \text{out} &= \mathrm{decompress}\!\left(\mathrm{reshape}(y)\right)
+     \in \mathbb{R}^{B\times d_{\text{model}}} .
+\end{align}
+
+\paragraph{Details that matter.}
+\begin{itemize}\itemsep2pt
+\item \textbf{The lookup is the only nonlinearity.} Both $\mathrm{compress}$ and
+      $\mathrm{decompress}$ are plain \texttt{nn.Linear} maps and their composition is a
+      rank-$\le H\!\cdot\!\min(E,D_{\text{out}})$ linear map of $x$. Everything that is
+      not a linear projection happens inside the table lookup.
+\item \textbf{$\mathrm{decompress}$ is zero-initialised} (in \texttt{model\_build.py}),
+      so at step 0 the FFN branch contributes exactly nothing and the block is the
+      identity plus attention. This is the standard residual-branch zero-init, and it has
+      a practical consequence worth recording: any diagnostic that reads gradients at
+      initialisation reads exactly $0$ through this path unless $\mathrm{decompress}$ is
+      first driven to a trained scale.
+\item \textbf{\texttt{inner\_residual} requires $E=D_{\text{out}}$}, and the constructor
+      raises otherwise --- the skip in~\eqref{eq:innerres} lives in one space. Note it
+      adds the \emph{normalised} $z$ when \texttt{lut\_z\_norm} is on, since
+      \eqref{eq:znorm} precedes it.
+\item \textbf{\texttt{lut\_z\_norm} is a \texttt{LayerNorm} over $E$}, i.e. over the last
+      axis of $z$, so each head's code is normalised independently over its own
+      coordinates with a shared learnable affine. It sits strictly between
+      $\mathrm{compress}$ and the lookup. At initialisation (gain $1$, bias $0$) it maps
+      $z\mapsto(z-\bar z)/\sigma_z$; the mean cancels in $d_j=z_{a_j}-z_{b_j}$ and the
+      denominator is positive, so it rescales every margin without moving a single
+      address. It changes the operating point on Table~\ref{tab:scores}, not the routing.
+\end{itemize}
+
+\section{LookupFFN, and the parallels}
+
+LookupFFN~\cite{lookupffn} replaces the dense FFN
+$y=\sum_i \sigma(\langle x,W_i\rangle)V_i$ with $K$ learnable hash tables addressed by a
+learnable hash. Our reference implementation is
+\path{research/lookupffn/lookup_ffn.py} on branch \texttt{research/lookupffn}.
+
+\paragraph{Projection.} A structured $O(d\log d)$ map replaces a dense $d\times d$ hash
+matrix: $R=\prod_{i=1}^{4} B_i H$, where each $B_i$ is a learnable block-diagonal matrix
+and $H$ is a fixed normalised Walsh--Hadamard transform, computed by the butterfly
+algorithm in adds only. Hence the name BH4. It requires the transformed width to be a
+power of two.
+
+\paragraph{Address and score.} With $z=\mathrm{BH4}(x)$ and $m_j=|z_j|$ over the first
+$\texttt{code\_length}$ coordinates,
+\begin{equation}
+  \text{code} = \sum_j \mathbf{1}[z_j>0]\,2^{\,j},
+  \qquad
+  \text{score} = \frac{\sum_j m_j}{\prod_j \left(1+e^{-2m_j}\right)},
+  \qquad
+  y = \sum_k \text{score}_k\; T_k[\text{code}_k].
+  \label{eq:lookupffn}
+\end{equation}
+Over the full hypercube codebook $\{-1,+1\}^{\texttt{code\_length}}$ the nearest code to
+$z$ is exactly $\sgn(z)$, so no explicit codebook is needed; this is the top-1 truncation
+of a softmax over codes. The address is taken hard and \emph{identically in training and
+evaluation}: there is no soft/hard split, no straight-through estimator, no temperature
+and no auxiliary load-balancing loss. Gradient reaches $R$ only through the score.
+
+\paragraph{Parallel 1: the score is the same function as ours.}
+Since $\sigma(2m)=1/(1+e^{-2m})$, the denominator in~\eqref{eq:lookupffn} is $1/P$, so
+\begin{equation}
+  \frac{\sum_j m_j}{\prod_j (1+e^{-2m_j})}
+  \;=\; \Big(\sum_j m_j\Big)\prod_j \sigma(2m_j),
+\end{equation}
+which is exactly \texttt{margin}, equation~\eqref{eq:margin}. This was verified
+numerically against the reference implementation at $|z|$ scales
+$0.01,0.1,1,3,10$: maximum relative difference $1.9\times10^{-15}$. Their bit-packing
+function is likewise the same map from a sign vector to an integer; ours packs MSB-first
+and theirs LSB-first, which relabels cells but induces the same partition.
+
+\paragraph{Parallel 2: the gradient structure is Light's, not Fast's.}
+LookupFFN's address is hard with no surrogate, so its input gradient factors entirely
+through its score --- exactly equation~\eqref{eq:lightgrad}. Structurally it is LightMHL,
+not FastMHL. The published mechanism therefore \emph{inherits} the property that the
+routing decision itself produces no gradient; what it does not inherit is saturation,
+because it uses the one form in Table~\ref{tab:scores} whose derivative does not decay.
+
+\paragraph{The difference: which vector is signed.}
+The two schemes take signs of different things. LookupFFN signs \emph{coordinates} of a
+structured learned projection, $\mathbf{1}[z_j>0]$. We sign \emph{differences of pairs of
+coordinates}, $\mathbf{1}[z_{a_j}>z_{b_j}]$, of a dense learned projection. The
+difference form is invariant to any offset shared by the coordinates, and this is not a
+cosmetic distinction: measured on our trained codes, one layer had every code coordinate
+carrying a constant sign across tokens ($|\mathrm{mean}|/\mathrm{sd}\approx 750$), where
+coordinate-signing would return a constant address and route nothing, while the
+difference form still reached 44--61\% of its cells. Conversely the coordinate form is
+what makes BH4 sufficient: it needs the projection to centre its own output, which a
+learned structured transform can do and a fixed random anchor pairing cannot.
+
+\begin{thebibliography}{9}
+\bibitem{lutgpt} LUTGPT: a rank-mediated transformer backbone via differentiable lookup
+tables. \texttt{doc/lutorch/lutgpt\_research\_report.pdf}.
+\bibitem{lookupffn} Z.~Zeng, M.~Davies, P.~Pulijala, K.~Sankaralingam, V.~Singh.
+LookupFFN: Making Transformers Compute-lite for CPU Inference. ICML 2024.
+\url{https://arxiv.org/abs/2403.07221}.
+\end{thebibliography}
+
+\end{document}

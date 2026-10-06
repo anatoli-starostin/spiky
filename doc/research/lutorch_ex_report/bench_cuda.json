@@ -1,0 +1,580 @@
+{
+ "device_name": "NVIDIA GeForce RTX 5090",
+ "spec": "LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48, anchor_mode='pairs')",
+ "batches": [
+  24576,
+  1024
+ ],
+ "warmup": 3,
+ "repeats": 10,
+ "torch": "2.9.1+cu130",
+ "rows": [
+  {
+   "cartridge": "FusedManifestoHardLUT",
+   "cells": [
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 1.044185999489855,
+     "min_ms": 1.0360039996157866,
+     "throughput_rows_per_s": 23536036.69461838,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.08868149961926974,
+     "min_ms": 0.08564900053897873,
+     "throughput_rows_per_s": 11546940.505023817,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 3.330315499624703,
+     "min_ms": 3.3218330008821795,
+     "throughput_rows_per_s": 7379481.0139668435,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.27786399914475624,
+     "min_ms": 0.27053799931309186,
+     "throughput_rows_per_s": 3685256.1078505754,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 16.87632900029712,
+     "min_ms": 16.76875999874028,
+     "throughput_rows_per_s": 1456240.8684712963,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.9104184991883812,
+     "min_ms": 0.8270809994428419,
+     "throughput_rows_per_s": 1124757.46144534,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 3.774874624,
+     "total_gb": 3.963886592
+    },
+    "1024": {
+     "step_gb": 0.182977536,
+     "total_gb": 0.386212352
+    }
+   }
+  },
+  {
+   "cartridge": "FusedManifestoSoftLUT",
+   "cells": [
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 3.504327499285864,
+     "min_ms": 3.4892510011559352,
+     "throughput_rows_per_s": 7013043.160209274,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.12225799946463667,
+     "min_ms": 0.11799699859693646,
+     "throughput_rows_per_s": 8375730.050254861,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 4.63462649986468,
+     "min_ms": 4.626660000212723,
+     "throughput_rows_per_s": 5302692.676684423,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.4046379999635974,
+     "min_ms": 0.3869239990308415,
+     "throughput_rows_per_s": 2530657.031944905,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 17.871910499707155,
+     "min_ms": 17.092952999519184,
+     "throughput_rows_per_s": 1375118.7932819324,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedManifestoSoftLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.9471174998907372,
+     "min_ms": 0.888483000380802,
+     "throughput_rows_per_s": 1081175.250291682,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 2.308966912,
+     "total_gb": 2.598910464
+    },
+    "1024": {
+     "step_gb": 0.186647552,
+     "total_gb": 0.490813952
+    }
+   }
+  },
+  {
+   "cartridge": "FusedSoftSignHardLUT",
+   "cells": [
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 1.0258069987685303,
+     "min_ms": 1.0222579985565972,
+     "throughput_rows_per_s": 23957723.07022979,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.08113049989333376,
+     "min_ms": 0.078700999438297,
+     "throughput_rows_per_s": 12621640.46007732,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 7.9574985002182075,
+     "min_ms": 7.923930001197732,
+     "throughput_rows_per_s": 3088407.74513826,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.24342249980691122,
+     "min_ms": 0.23437100026058033,
+     "throughput_rows_per_s": 4206677.693361388,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 16.686088999449566,
+     "min_ms": 15.167798999755178,
+     "throughput_rows_per_s": 1472843.636445347,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignHardLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.7401470002150745,
+     "min_ms": 0.7192069988377625,
+     "throughput_rows_per_s": 1383508.9511981301,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 4.190111744,
+     "total_gb": 7.952879104
+    },
+    "1024": {
+     "step_gb": 0.200280064,
+     "total_gb": 3.926871552
+    }
+   }
+  },
+  {
+   "cartridge": "FusedSoftSignSmoothLUT",
+   "cells": [
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 2.1316060001481674,
+     "min_ms": 2.1217769990471425,
+     "throughput_rows_per_s": 11529335.157759797,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.1251520006917417,
+     "min_ms": 0.12221299948578235,
+     "throughput_rows_per_s": 8182050.581214318,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 9.523642000203836,
+     "min_ms": 9.500072999799158,
+     "throughput_rows_per_s": 2580525.391386404,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.29931299923191546,
+     "min_ms": 0.29250099942146335,
+     "throughput_rows_per_s": 3421167.816392025,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 19.259901499026455,
+     "min_ms": 19.19288899989624,
+     "throughput_rows_per_s": 1276018.986973649,
+     "note": ""
+    },
+    {
+     "cartridge": "FusedSoftSignSmoothLUT",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.826770999992732,
+     "min_ms": 0.7512539996241685,
+     "throughput_rows_per_s": 1238553.3600102107,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 2.856321024,
+     "total_gb": 3.095937024
+    },
+    "1024": {
+     "step_gb": 0.159203328,
+     "total_gb": 0.362643456
+    }
+   }
+  },
+  {
+   "cartridge": "ConfidenceLUT n=1",
+   "cells": [
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 1.5090494989635772,
+     "min_ms": 1.4936779989511706,
+     "throughput_rows_per_s": 16285748.0930075,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.09633900117478333,
+     "min_ms": 0.09434700041310862,
+     "throughput_rows_per_s": 10629132.412761938,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 2.032772998973087,
+     "min_ms": 2.028058999712812,
+     "throughput_rows_per_s": 12089889.03946248,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.14809750064159743,
+     "min_ms": 0.12681699990935158,
+     "throughput_rows_per_s": 6914363.8181857355,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 9.512442500636098,
+     "min_ms": 9.469197999351309,
+     "throughput_rows_per_s": 2583563.579843621,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=1",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.6621200000154204,
+     "min_ms": 0.5033939996792469,
+     "throughput_rows_per_s": 1546547.4535977643,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 1.056968704,
+     "total_gb": 1.245986816
+    },
+    "1024": {
+     "step_gb": 0.095554048,
+     "total_gb": 0.298797056
+    }
+   }
+  },
+  {
+   "cartridge": "ConfidenceLUT n=2",
+   "cells": [
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 4.593751999891538,
+     "min_ms": 4.541624999546912,
+     "throughput_rows_per_s": 5349875.221949347,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.19013499968423275,
+     "min_ms": 0.1853480007412145,
+     "throughput_rows_per_s": 5385647.049205096,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 3.6404610009412863,
+     "min_ms": 3.6304440000094473,
+     "throughput_rows_per_s": 6750793.373049614,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.19820050056296168,
+     "min_ms": 0.17850699987320695,
+     "throughput_rows_per_s": 5166485.438187425,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 17.809234001106233,
+     "min_ms": 17.745376999300788,
+     "throughput_rows_per_s": 1379958.2844761007,
+     "note": ""
+    },
+    {
+     "cartridge": "ConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.846185500449792,
+     "min_ms": 0.6970979993639048,
+     "throughput_rows_per_s": 1210136.5474304277,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 1.906313728,
+     "total_gb": 2.145803264
+    },
+    "1024": {
+     "step_gb": 0.13172992,
+     "total_gb": 0.385445376
+    }
+   }
+  },
+  {
+   "cartridge": "QuantisedConfidenceLUT n=2",
+   "cells": [
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 4.122872500374797,
+     "min_ms": 4.109507999601192,
+     "throughput_rows_per_s": 5960892.556771007,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_eval",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.22360200091497973,
+     "min_ms": 0.21607300004689023,
+     "throughput_rows_per_s": 4579565.459207836,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 4.035592500258645,
+     "min_ms": 4.029411000374239,
+     "throughput_rows_per_s": 6089812.090399341,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "forward_train",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.22902199998497963,
+     "min_ms": 0.22545800129591953,
+     "throughput_rows_per_s": 4471186.174547244,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 24576,
+     "status": "ok",
+     "median_ms": 19.827958999485418,
+     "min_ms": 18.39833399935742,
+     "throughput_rows_per_s": 1239461.9133839144,
+     "note": ""
+    },
+    {
+     "cartridge": "QuantisedConfidenceLUT n=2",
+     "device": "cuda:RTX5090",
+     "operation": "backward",
+     "batch_size": 1024,
+     "status": "ok",
+     "median_ms": 0.7406644999718992,
+     "min_ms": 0.7208060014818329,
+     "throughput_rows_per_s": 1382542.2982184924,
+     "note": ""
+    }
+   ],
+   "peak": {
+    "24576": {
+     "step_gb": 1.830816256,
+     "total_gb": 1.994603008
+    },
+    "1024": {
+     "step_gb": 0.128269312,
+     "total_gb": 0.2054784
+    }
+   }
+  }
+ ]
+}

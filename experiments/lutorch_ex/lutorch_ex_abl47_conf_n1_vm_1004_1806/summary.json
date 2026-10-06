@@ -1,0 +1,9 @@
+{
+  "exp_name": "lutorch_ex_abl47_conf_n1_vm_1004_1806",
+  "cart": "conf_n1",
+  "best_val_bpb": 1.1173676765019702,
+  "total_params": 68237580,
+  "peak_gb": 7.682,
+  "hours": 2.9068,
+  "n_steps": 48000
+}

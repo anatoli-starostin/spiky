@@ -1,0 +1,20 @@
+{
+  "_runtime": 16906.238415164,
+  "_step": 48000,
+  "_timestamp": 1791143564.3469906,
+  "_wandb.runtime": 16906,
+  "best_val_bpb": 1.151517754894994,
+  "cart": "fmh",
+  "exp_name": "lutorch_ex_abl47_fmh_wk_1004_1510",
+  "hours": 4.6962,
+  "lut_tv": 0.0036423741839826103,
+  "n_steps": 48000,
+  "peak_gb": 8.452,
+  "time/sec_per_step": 0.34116718769073484,
+  "total_params": 68237568,
+  "train/loss": 3.6001585721969604,
+  "train/loss_ema": 3.6125116325580153,
+  "train/lr": 2.9999999999999997e-05,
+  "train_loss": 3.6125116325580153,
+  "val_bpb": 1.152189939526307
+}
