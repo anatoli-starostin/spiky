@@ -563,7 +563,10 @@ footprint ($1.1$ GB), because its compiled forward fuses the score's chain of sm
 cells ($n{=}2$, the soft forms) roughly doubles the eval forward ($1.0\to3.5$ ms for Manifesto,
 $1.5\to4.6$ ms for Confidence, $2.0\to4.1$ ms for its int8 twin). The quantised cartridge's eval forward is not consistently faster than the float
 one ($4.1$ against $4.6$ ms at $n{=}2$, but $2.0$ against $1.5$ at $n{=}1$) --- its training-time read still fetches float rows for the straight-through estimator; the integer read
-belongs to the deployed cartridge (\S\ref{sec:quant}). The fused twins earn their place:
+belongs to the deployed cartridge (\S\ref{sec:quant}). On a GPU, then, quantisation buys memory rather than
+speed: the deployed int8 tables take a quarter of the fp32 storage ($24$ to $6$~MiB per layer). On hardware where
+low-precision integer arithmetic is natively cheap, we expect the deployed integer read to pay off in speed as
+well; that is not measured here. The fused twins earn their place:
 \code{FusedSoftSignHardLUT}'s native training step is $1.6\times$ faster and uses $2.7\times$ less memory
 than its reference cartridge \code{SoftSignHardLUT} at the training batch (recorded when the twin landed;
 the reference cartridges are not in Table~\ref{tab:bench}). The two GPUs agree to within $15\%$ on every row:
