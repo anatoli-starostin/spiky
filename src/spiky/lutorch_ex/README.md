@@ -66,8 +66,10 @@ Each **table** reads a `d_in`-wide vector `z` and owns `nap` **probes**. A probe
 pair `(a, b)`, giving the margin `u = z[a] - z[b]`, or a single anchor `a`, giving `u = z[a]`. Anchors
 are coordinate indices: drawn once from the seed, stored as buffers and never trained.
 
-1. **Address.** Each probe contributes one bit, `[u > cmp_eps]`. The `nap` bits, probe 0 being the most
-   significant, form a cell index `c` in `[0, 2**nap)`. Each cell holds a learnable row of width `d_out`.
+1. **Address.** Each probe contributes one bit, `[u > cmp_eps]`, and the `nap` bits form a cell index
+   `c = sum_j bit_j * 2**(nap-1-j)` in `[0, 2**nap)`: probe 0 gives the highest bit, the last probe the
+   lowest. For example, with `nap = 3` and bits `(1, 0, 1)` from probes 0, 1, 2, `c = 4 + 0 + 1 = 5`.
+   Each cell holds a learnable row of width `d_out`.
 2. **Margins.** `|u_j|` says how far each bit is from flipping. The smallest, `u* = min_j |u_j|`, marks the
    least certain bit.
 3. **Neighbour.** Flipping that bit gives the **neighbour** cell `c'`, the cell the input would land in
@@ -156,7 +158,9 @@ s = (sum_j m_j) * exp( gamma * sum_j log sigmoid(beta * m_j) )      v = sigmoid(
 The second factor of `s` is the product of `sigmoid(beta * m_j) ** gamma`. It is near 1 for a margin far
 from its boundary and `2 ** -gamma` for a margin of zero, so every uncertain bit discounts the table.
 
-`β`, `γ` and `τ` are single scalars per layer, shared by all its tables, and stored in log form. Because
+`β`, `γ` and `τ` are single scalars per layer, shared by all its tables, and stored in log form. They
+are trainable: each is an `nn.Parameter` learned with the tables, unless frozen with
+`learnable_score=False` (`β`, `γ`) or `read_tau_learnable=False` (`τ`). Because
 the address is an integer, the input gradient reaches `z` only through `s` and, for `read_top_n=2`,
 through `v`. Gen-3 has no hard form. Its training forward is `torch.compile`d on CUDA, which folds the
 score's chain of small kernels.
@@ -197,30 +201,15 @@ Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `
 `read_top_n` defaults to `2`, the only form deployment supports. `read_top_n=1` still trains and evaluates,
 but `export_deployment` refuses it with a clear error.
 
-Fused twins (`Fused…`): `backend="auto"`, see the next section.
-
 ## Reference and fused cartridges
 
 The plain cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT`, `SoftSignHardLUT` and `SoftSignSmoothLUT`,
 are readable PyTorch. They are the **oracle**: `tests/test_fused_equivalence.py` and
-`tests/test_fused_softsign.py` check that every fused backend gives the same values and gradients.
+`tests/test_fused_softsign.py` check that the fused twins give the same values and gradients.
 
-The `Fused…` twins have identical mathematics but dispatch each call to the fastest available
-implementation. `backend="auto"` picks the path per call; any other value forces one:
-
-| class | `backend` values | `auto` picks |
-| --- | --- | --- |
-| `FusedManifestoHardLUT` | `auto`, `pure_eval`, `tier1`, `native` | eval: compiled gather; train: `native` if available, else `tier1` |
-| `FusedSoftSignHardLUT` | `auto`, `pure_eval`, `tier1`, `native` | as above |
-| `FusedSoftSignSmoothLUT` | `auto`, `pure_eval`, `tier1`, `native` | eval: compiled gather; train: always `tier1` (`native` only when forced) |
-| `FusedManifestoSoftLUT` | `auto`, `pure`, `tier1`, `native` | CUDA batch `>= 4096`: `tier1`; smaller eval: `pure`; smaller train: `native` if available, else `tier1` on CUDA and `pure` on CPU |
-
-- `tier1` is one `F.embedding_bag` over the addressed cells, and runs anywhere.
-- `native` uses the `lutorch_ex_lprojection` CUDA extension.
-- The pure path is spelled `pure` on `FusedManifestoSoftLUT`, which also uses it for CPU training, and
-  `pure_eval` on the other three, where it serves evaluation only.
-- Any other value raises `ValueError` at construction. The message lists the values the class accepts
-  and, for the sibling's spelling of the pure path, says which one this class uses.
+The `Fused…` twins have identical mathematics but pick the fastest available implementation for each
+call on their own: an `F.embedding_bag` read that runs anywhere, or, on CUDA, the native
+`lutorch_ex_lprojection` kernels when they are available.
 
 The Gen-3 cartridges have no twin: their `embedding_bag` read with a compiled forward is already the
 fast path.
