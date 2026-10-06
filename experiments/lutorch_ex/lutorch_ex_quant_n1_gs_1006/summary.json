@@ -1,0 +1,8 @@
+{
+  "exp_name": "lutorch_ex_quant_n1_gs_1006",
+  "best_val_bpb": 1.1198161080842948,
+  "total_params": 68237580,
+  "peak_gb": 7.633,
+  "hours": 2.3524,
+  "n_steps": 48000
+}
