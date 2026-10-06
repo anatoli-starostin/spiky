@@ -1,0 +1,35 @@
+# Standalone distribution of lutorch_ex, so it can be installed without the rest of spiky:
+#
+#   pip install "spiky-lutorch-ex @ git+https://github.com/anatoli-starostin/spiky@<commit>#subdirectory=src/spiky/lutorch_ex"
+#
+# It installs only spiky/lutorch_ex/ (spiky is a namespace package, it has no __init__.py), so the import
+# stays `import spiky.lutorch_ex`. Do not install it next to the full spiky package: both provide
+# spiky/lutorch_ex. Inside the spiky repository this file is inert; development uses the editable spiky install.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spiky-lutorch-ex"
+version = "0.1.0"
+description = "lutorch_ex: lookup-table layers for PyTorch (from the spiky repository)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Anatoli Starostin", email = "anatoli.starostin@gmail.com" }]
+requires-python = ">=3.10"
+# ninja is required by torch.utils.cpp_extension.load to JIT-build the CUDA extensions from csrc/.
+dependencies = ["torch>=2.1", "ninja"]
+
+[project.optional-dependencies]
+deploy = ["safetensors"]    # export_deployment / load_deployment fall back to torch.save / weights_only load without it
+test = ["pytest"]
+
+[project.urls]
+Source = "https://github.com/anatoli-starostin/spiky/tree/main/src/spiky/lutorch_ex"
+
+[tool.setuptools]
+package-dir = { "spiky.lutorch_ex" = "." }
+packages = ["spiky.lutorch_ex", "spiky.lutorch_ex.cartridges", "spiky.lutorch_ex.tests"]
+
+[tool.setuptools.package-data]
+"spiky.lutorch_ex.cartridges" = ["csrc/*.cu", "csrc/*.cuh", "csrc/*.cpp", "csrc/*.h"]
