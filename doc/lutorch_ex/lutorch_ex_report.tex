@@ -558,11 +558,11 @@ runs); its H100 numbers are pending.}
 
 Three readings. On either GPU the training step of every blend or hard cartridge is $20$--$29$ ms at the
 training batch and is dominated by the backward ($17$--$19$ ms), the scatter into the $6.3$M-entry table;
-\code{ConfidenceLUT} $n{=}1$ is both the cheapest step ($11.5$ ms) and the smallest footprint ($1.1$
-GB), because its compiled forward fuses the score's chain of small kernels and reads one cell. Reading two
+\code{ConfidenceLUT} $n{=}1$ is both the cheapest step ($11.5$ ms) and, with its int8 twin, the smallest
+footprint ($1.1$ GB), because its compiled forward fuses the score's chain of small kernels and reads one cell. Reading two
 cells ($n{=}2$, the soft forms) roughly doubles the eval forward ($1.0\to3.5$ ms for Manifesto,
-$1.5\to4.6$ ms for Confidence, $2.0\to4.1$ ms for its int8 twin). The quantised cartridge's eval forward is not faster than the float one
---- its training-time read still fetches float rows for the straight-through estimator; the integer read
+$1.5\to4.6$ ms for Confidence, $2.0\to4.1$ ms for its int8 twin). The quantised cartridge's eval forward is not consistently faster than the float
+one ($4.1$ against $4.6$ ms at $n{=}2$, but $2.0$ against $1.5$ at $n{=}1$) --- its training-time read still fetches float rows for the straight-through estimator; the integer read
 belongs to the deployed cartridge (\S\ref{sec:quant}). The fused twins earn their place:
 \code{FusedSoftSignHardLUT}'s native training step is $1.6\times$ faster and uses $2.7\times$ less memory
 than its reference cartridge \code{SoftSignHardLUT} at the training batch (recorded when the twin landed;
