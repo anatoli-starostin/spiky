@@ -473,6 +473,7 @@ dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
 \code{ConfidenceLUT} $n{=}2$        & scored two-cell blend, float   & 68.2M & \textbf{1.10606} & $-0.0090$ \\
 \code{QuantisedConfidenceLUT} $n{=}2$ & the same, int8 + power-of-two & 68.2M & 1.10724 & $-0.0079$ \\
 \code{ConfidenceLUT} $n{=}1$        & scored single cell             & 68.2M & 1.11737 & $+0.0023$ \\
+\code{QuantisedConfidenceLUT} $n{=}1$ & the same, int8 + power-of-two & 68.2M & 1.11982 & $+0.0047$ \\
 \code{FusedSoftSignSmoothLUT}       & learned-temperature blend      & 68.2M & 1.12941 & $+0.0143$ \\
 \code{FusedManifestoSoftLUT}        & $U$-blend                      & 68.2M & 1.13949 & $+0.0244$ \\
 \code{FusedManifestoHardLUT}        & hard read                      & 68.2M & 1.15152 & $+0.0364$ \\
@@ -500,26 +501,29 @@ Figure~\ref{fig:curves}; each is one run per configuration. (i) In the two gener
 hard and a soft form, the \emph{soft} read is better: by $0.012$ bpb for Manifesto and $0.027$ for
 SoftSign. (ii) Within Gen-3, also reading the neighbour cell ($n{=}2$) beats the single scored cell
 ($n{=}1$) by $0.011$. Both are soft, scored reads, so this compares one cell with two, not hard with soft.
+It holds after quantisation too: Quantised $n{=}1$ trails Quantised $n{=}2$ by $0.013$, an order of magnitude
+more than the $0.0007$--$0.0014$ by which re-running the two $n{=}2$ configurations moved their best values.
 (iii) Adding the \emph{confidence score} beats a blend by uncertainty alone: Confidence $n{=}2$ leads the
 best SoftSign run by $0.023$ and the best Manifesto run by $0.033$. The order of all seven runs is fixed
 from step 7{,}500 on. (iv) \emph{Quantisation is nearly free}: int8 rows and power-of-two weights cost $+0.0012$ bpb,
-for tables one quarter the size. (v) Against the
+for tables one quarter the size; at $n{=}1$ the cost is $+0.0025$. (v) Against the
 dense feed-forward layer, the two scored two-cell cartridges \emph{win} ($-0.009$ and $-0.008$ bpb), the
-single-cell scored read is within $0.002$, and the blend-only generations trail by $0.014$--$0.041$; the
+single-cell scored read is within $0.002$ (its int8 twin trails by $0.005$), and the blend-only generations
+trail by $0.014$--$0.041$; the
 LUT models carry $1.9\times$ the parameters of the dense one, but a LUT layer touches only two 48-wide rows
 per table per token.
 
 \subsection{Benchmarks: CPU, RTX 5090, H100}
 \label{sec:bench}
-Table~\ref{tab:bench} times the layer alone, at the sweep geometry, for the seven optimised configurations
-the sweep used: the four fused twins and the three Gen-3 configurations (which have no separate twin:
+Table~\ref{tab:bench} times the layer alone, at the sweep geometry, for eight optimised configurations, the
+seven the sweep used and Quantised $n{=}1$: the four fused twins and the four Gen-3 configurations (which have no separate twin:
 their \code{embedding\_bag} read with a compiled forward is already the fast path). Gen-1 and Gen-2 also
 exist as plain-PyTorch \emph{reference} cartridges (\code{ManifestoHardLUT} and so on): written for
 readability, and the oracle the fused twins are tested against for equal results. They are not tuned for
 speed and the sweep did not train with them, so the table leaves them out. The CPU and RTX 5090 columns
 were measured for this report with the library's benchmark harness, the module
 \code{spiky.lutorch\_ex.bench} (\code{src/spiky/lutorch\_ex/bench.py}), driven by a small script that
-runs the seven configurations at the sweep geometry.
+runs the configurations at the sweep geometry.
 
 \begin{table}[h]
 \centering\footnotesize
@@ -537,6 +541,7 @@ cartridge & step ms, $B{=}1024$ & eval ms & step ms & peak GB & eval ms & step m
 \code{ConfidenceLUT} $n{=}1$        & 35.8 & 1.51 & 11.5 & 1.1 & 2.40 & 12.9 & 1.2 \\
 \code{ConfidenceLUT} $n{=}2$        & 66.7 & 4.59 & 21.5 & 1.9 & 4.17 & 24.7 & 2.1 \\
 \code{QuantisedConfidenceLUT} $n{=}2$ & 83.4 & 4.12 & 23.9 & 1.8 & 4.23 & 24.5 & 2.0 \\
+\code{QuantisedConfidenceLUT} $n{=}1$ & 52.7 & 2.04 & 11.8 & 1.1 & --- & --- & --- \\
 \bottomrule
 \end{tabular}
 \caption{Layer-only timings at $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
@@ -545,18 +550,23 @@ forward + backward. GPU columns at $B=24{,}576$ (the sweep's training batch). \t
 one workstation, torch 2.9.1 (cu130), CUDA 13.3 toolkit for the JIT kernels, driver 595; RTX 5090 (32\,GB,
 native kernels active): medians of 10 repeats after 3 warm-ups; CPU (24-thread desktop part, the fused
 twins' \code{embedding\_bag} path, $B=1{,}024$): medians of 15 repeats after 5 warm-ups, with the
-fastest repeat within $15\%$ of the median. H100 column measured on an H100 VM provided by Nebius.}
+fastest repeat within $15\%$ of the median. H100 column measured on an H100 VM provided by Nebius. The
+\code{QuantisedConfidenceLUT} $n{=}1$ row was measured later with the same harness and settings (median of three
+runs); its H100 numbers are pending.}
 \label{tab:bench}
 \end{table}
 
 Three readings. On either GPU the training step of every blend or hard cartridge is $20$--$29$ ms at the
 training batch and is dominated by the backward ($17$--$19$ ms), the scatter into the $6.3$M-entry table;
-\code{ConfidenceLUT} $n{=}1$ is both the cheapest step ($11.5$ ms) and the smallest footprint ($1.1$
-GB), because its compiled forward fuses the score's chain of small kernels and reads one cell. Reading two
+\code{ConfidenceLUT} $n{=}1$ is both the cheapest step ($11.5$ ms) and, with its int8 twin, the smallest
+footprint ($1.1$ GB), because its compiled forward fuses the score's chain of small kernels and reads one cell. Reading two
 cells ($n{=}2$, the soft forms) roughly doubles the eval forward ($1.0\to3.5$ ms for Manifesto,
-$1.5\to4.6$ ms for Confidence). The quantised cartridge's eval forward is not faster than the float one
---- its training-time read still fetches float rows for the straight-through estimator; the integer read
-belongs to the deployed cartridge (\S\ref{sec:quant}). The fused twins earn their place:
+$1.5\to4.6$ ms for Confidence, $2.0\to4.1$ ms for its int8 twin). The quantised cartridge's eval forward is not consistently faster than the float
+one ($4.1$ against $4.6$ ms at $n{=}2$, but $2.0$ against $1.5$ at $n{=}1$) --- its training-time read still fetches float rows for the straight-through estimator; the integer read
+belongs to the deployed cartridge (\S\ref{sec:quant}). On a GPU, then, quantisation buys memory rather than
+speed: the deployed int8 tables take a quarter of the fp32 storage ($24$ to $6$~MiB per layer). On hardware where
+low-precision integer arithmetic is natively cheap, we expect the deployed integer read to pay off in speed as
+well; that is not measured here. The fused twins earn their place:
 \code{FusedSoftSignHardLUT}'s native training step is $1.6\times$ faster and uses $2.7\times$ less memory
 than its reference cartridge \code{SoftSignHardLUT} at the training batch (recorded when the twin landed;
 the reference cartridges are not in Table~\ref{tab:bench}). The two GPUs agree to within $15\%$ on every row:
