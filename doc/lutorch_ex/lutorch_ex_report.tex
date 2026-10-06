@@ -473,7 +473,7 @@ dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
 \code{ConfidenceLUT} $n{=}2$        & scored two-cell blend, float   & 68.2M & \textbf{1.10606} & $-0.0090$ \\
 \code{QuantisedConfidenceLUT} $n{=}2$ & the same, int8 + power-of-two & 68.2M & 1.10724 & $-0.0079$ \\
 \code{ConfidenceLUT} $n{=}1$        & scored single cell             & 68.2M & 1.11737 & $+0.0023$ \\
-\code{QuantisedConfidenceLUT} $n{=}1$\textsuperscript{\textdagger} & the same, int8 + power-of-two & 68.2M & 1.11982 & $+0.0047$ \\
+\code{QuantisedConfidenceLUT} $n{=}1$ & the same, int8 + power-of-two & 68.2M & 1.11982 & $+0.0047$ \\
 \code{FusedSoftSignSmoothLUT}       & learned-temperature blend      & 68.2M & 1.12941 & $+0.0143$ \\
 \code{FusedManifestoSoftLUT}        & $U$-blend                      & 68.2M & 1.13949 & $+0.0244$ \\
 \code{FusedManifestoHardLUT}        & hard read                      & 68.2M & 1.15152 & $+0.0364$ \\
@@ -483,10 +483,7 @@ dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
 \caption{The 48k sweep, one seed, against the dense feed-forward baseline: the same backbone (6 blocks,
 $d_\text{model}=384$, 6 attention heads), data, tokenizer, schedule, 24{,}576-token batches and seed, with
 the dense $384\!\to\!1536\!\to\!384$ GELU layer in the feed-forward slot (run
-\code{exp\_n\_0177\_vanilla48k\_corrected} on branch \code{research/ffn\_replacement\_fix}).
-\textsuperscript{\textdagger}Added after the sweep: trained separately on an RTX 5090 with a self-contained trainer
-(same topology, data, schedule, regularisation and seed; run \code{lutorch\_ex\_quant\_n1\_gs\_1006}, whose best
-is its final value), so differences of $0.001$--$0.002$ from the sweep runs should not be read as significant.}
+\code{exp\_n\_0177\_vanilla48k\_corrected} on branch \code{research/ffn\_replacement\_fix}).}
 \label{tab:results}
 \end{table}
 
@@ -544,6 +541,7 @@ cartridge & step ms, $B{=}1024$ & eval ms & step ms & peak GB & eval ms & step m
 \code{ConfidenceLUT} $n{=}1$        & 35.8 & 1.51 & 11.5 & 1.1 & 2.40 & 12.9 & 1.2 \\
 \code{ConfidenceLUT} $n{=}2$        & 66.7 & 4.59 & 21.5 & 1.9 & 4.17 & 24.7 & 2.1 \\
 \code{QuantisedConfidenceLUT} $n{=}2$ & 83.4 & 4.12 & 23.9 & 1.8 & 4.23 & 24.5 & 2.0 \\
+\code{QuantisedConfidenceLUT} $n{=}1$ & 52.7 & 2.04 & 11.8 & 1.1 & --- & --- & --- \\
 \bottomrule
 \end{tabular}
 \caption{Layer-only timings at $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
@@ -552,7 +550,9 @@ forward + backward. GPU columns at $B=24{,}576$ (the sweep's training batch). \t
 one workstation, torch 2.9.1 (cu130), CUDA 13.3 toolkit for the JIT kernels, driver 595; RTX 5090 (32\,GB,
 native kernels active): medians of 10 repeats after 3 warm-ups; CPU (24-thread desktop part, the fused
 twins' \code{embedding\_bag} path, $B=1{,}024$): medians of 15 repeats after 5 warm-ups, with the
-fastest repeat within $15\%$ of the median. H100 column measured on an H100 VM provided by Nebius.}
+fastest repeat within $15\%$ of the median. H100 column measured on an H100 VM provided by Nebius. The
+\code{QuantisedConfidenceLUT} $n{=}1$ row was measured later with the same harness and settings (median of three
+runs); its H100 numbers are pending.}
 \label{tab:bench}
 \end{table}
 
