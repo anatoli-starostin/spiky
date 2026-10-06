@@ -473,6 +473,7 @@ dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
 \code{ConfidenceLUT} $n{=}2$        & scored two-cell blend, float   & 68.2M & \textbf{1.10606} & $-0.0090$ \\
 \code{QuantisedConfidenceLUT} $n{=}2$ & the same, int8 + power-of-two & 68.2M & 1.10724 & $-0.0079$ \\
 \code{ConfidenceLUT} $n{=}1$        & scored single cell             & 68.2M & 1.11737 & $+0.0023$ \\
+\code{QuantisedConfidenceLUT} $n{=}1$\textsuperscript{\textdagger} & the same, int8 + power-of-two & 68.2M & 1.11982 & $+0.0047$ \\
 \code{FusedSoftSignSmoothLUT}       & learned-temperature blend      & 68.2M & 1.12941 & $+0.0143$ \\
 \code{FusedManifestoSoftLUT}        & $U$-blend                      & 68.2M & 1.13949 & $+0.0244$ \\
 \code{FusedManifestoHardLUT}        & hard read                      & 68.2M & 1.15152 & $+0.0364$ \\
@@ -482,7 +483,10 @@ dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
 \caption{The 48k sweep, one seed, against the dense feed-forward baseline: the same backbone (6 blocks,
 $d_\text{model}=384$, 6 attention heads), data, tokenizer, schedule, 24{,}576-token batches and seed, with
 the dense $384\!\to\!1536\!\to\!384$ GELU layer in the feed-forward slot (run
-\code{exp\_n\_0177\_vanilla48k\_corrected} on branch \code{research/ffn\_replacement\_fix}).}
+\code{exp\_n\_0177\_vanilla48k\_corrected} on branch \code{research/ffn\_replacement\_fix}).
+\textsuperscript{\textdagger}Added after the sweep: trained separately on an RTX 5090 with a self-contained trainer
+(same topology, data, schedule, regularisation and seed; run \code{lutorch\_ex\_quant\_n1\_gs\_1006}, whose best
+is its final value), so differences of $0.001$--$0.002$ from the sweep runs should not be read as significant.}
 \label{tab:results}
 \end{table}
 
@@ -500,12 +504,15 @@ Figure~\ref{fig:curves}; each is one run per configuration. (i) In the two gener
 hard and a soft form, the \emph{soft} read is better: by $0.012$ bpb for Manifesto and $0.027$ for
 SoftSign. (ii) Within Gen-3, also reading the neighbour cell ($n{=}2$) beats the single scored cell
 ($n{=}1$) by $0.011$. Both are soft, scored reads, so this compares one cell with two, not hard with soft.
+It holds after quantisation too: Quantised $n{=}1$ trails Quantised $n{=}2$ by $0.013$, an order of magnitude
+more than the $0.0007$--$0.0014$ by which re-running the two $n{=}2$ configurations moved their best values.
 (iii) Adding the \emph{confidence score} beats a blend by uncertainty alone: Confidence $n{=}2$ leads the
 best SoftSign run by $0.023$ and the best Manifesto run by $0.033$. The order of all seven runs is fixed
 from step 7{,}500 on. (iv) \emph{Quantisation is nearly free}: int8 rows and power-of-two weights cost $+0.0012$ bpb,
-for tables one quarter the size. (v) Against the
+for tables one quarter the size; at $n{=}1$ the cost is $+0.0025$. (v) Against the
 dense feed-forward layer, the two scored two-cell cartridges \emph{win} ($-0.009$ and $-0.008$ bpb), the
-single-cell scored read is within $0.002$, and the blend-only generations trail by $0.014$--$0.041$; the
+single-cell scored read is within $0.002$ (its int8 twin trails by $0.005$), and the blend-only generations
+trail by $0.014$--$0.041$; the
 LUT models carry $1.9\times$ the parameters of the dense one, but a LUT layer touches only two 48-wide rows
 per table per token.
 
