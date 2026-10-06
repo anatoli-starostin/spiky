@@ -28,8 +28,10 @@ compacted ProjectionMHL FFN for the inference cartridge its stored format tag na
 ``DeployedQuantisedConfidenceLUT``) and materialises the backbone from the stored state_dict. This
 module itself names no concrete cartridge class and holds no int8 knowledge.
 
-Serialisation: safetensors when available, else a ``weights_only=True`` torch load (pickle-free on load);
-either way only tensors + a small JSON-able meta dict, no arbitrary pickled objects executed on load.
+Serialisation: safetensors when it can write here (it needs numpy), else ``torch.save``. The loader picks
+the reader from the file's format, so either file loads anywhere it can be read; the torch format is read
+with ``weights_only=True`` (pickle-free on load). Either way only tensors + a small JSON-able meta dict, no
+arbitrary pickled objects executed on load.
 """
 from __future__ import annotations
 
@@ -60,28 +62,38 @@ class SupportsDeploymentExport(Protocol):
 
 # ---- (de)serialisation (pickle-free on load) ---------------------------------------------------
 
+_ZIP_MAGIC = b"PK\x03\x04"    # torch.save files are zip archives; safetensors files start with a header length
+
+
 def _save_payload(path: str, tensors: dict, meta: dict) -> None:
+    tensors = {k: v.contiguous().cpu() for k, v in tensors.items()}
     try:
         from safetensors.torch import save_file
-        save_file({k: v.contiguous().cpu() for k, v in tensors.items()}, path,
-                  metadata={"lxq_meta": json.dumps(meta)})
-    except ImportError:
-        torch.save({"tensors": {k: v.contiguous().cpu() for k, v in tensors.items()},
-                    "meta_json": json.dumps(meta)}, path)
+        save_file(tensors, path, metadata={"lxq_meta": json.dumps(meta)})
+        return
+    except ImportError:     # safetensors is not installed, or numpy, which safetensors.torch needs to write, is not
+        pass
+    torch.save({"tensors": tensors, "meta_json": json.dumps(meta)}, path)
 
 
 def _load_payload(path: str):
-    try:
-        from safetensors import safe_open
-        tensors, meta = {}, None
-        with safe_open(path, framework="pt", device="cpu") as f:
-            meta = json.loads(f.metadata()["lxq_meta"])
-            for k in f.keys():
-                tensors[k] = f.get_tensor(k)
-        return tensors, meta
-    except ImportError:
+    # The reader follows the file's own format, not what is installed here: a file written by either writer
+    # loads in any environment that can read that format.
+    with open(path, "rb") as f:
+        is_torch_file = f.read(4) == _ZIP_MAGIC
+    if is_torch_file:
         obj = torch.load(path, map_location="cpu", weights_only=True)
         return obj["tensors"], json.loads(obj["meta_json"])
+    try:
+        from safetensors import safe_open
+    except ImportError as e:
+        raise ImportError(f"{path} is a safetensors file; install safetensors to load it") from e
+    tensors = {}
+    with safe_open(path, framework="pt", device="cpu") as f:
+        meta = json.loads(f.metadata()["lxq_meta"])
+        for k in f.keys():
+            tensors[k] = f.get_tensor(k)
+    return tensors, meta
 
 
 # ---- export / load -----------------------------------------------------------------------------
