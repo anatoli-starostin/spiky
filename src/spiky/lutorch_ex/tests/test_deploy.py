@@ -3,6 +3,9 @@ guarantee that NO fp32 LUT table Parameter is allocated in the loaded inference 
 
 CPU + fp32: the int8 read (_pow2.int_blend_read) and the quant eval fake-quant path are both pure
 torch, so this needs no CUDA / no JIT kernel."""
+import json
+
+import pytest
 import torch
 import torch.nn as nn
 
@@ -98,3 +101,50 @@ def test_no_fp32_lut_table_after_load(tmp_path):
     # the big tensor resident in each deployed FFN cartridge is the int8 packed table, not an fp32 table
     deployed = [mod for _, mod in dep.named_modules() if isinstance(mod, DeployedQuantisedConfidenceLUT)]
     assert len(deployed) == 2
+
+
+# ---- serialisation: the loader follows the file's format, whatever is installed --------------------
+
+def _payload():
+    return {"a": torch.arange(6, dtype=torch.int8).reshape(2, 3), "b": torch.randn(4)}, {"format_version": 1, "x": [1, 2]}
+
+
+def _assert_same(got, want):
+    (gt, gm), (wt, wm) = got, want
+    assert gm == wm and gt.keys() == wt.keys()
+    assert all(torch.equal(gt[k], wt[k]) and gt[k].dtype == wt[k].dtype for k in wt)
+
+
+def test_torch_format_file_loads_with_or_without_safetensors(tmp_path):
+    """A torch.save payload (written where safetensors could not write) must load wherever it is read,
+    including where safetensors IS installed -- the loader must not assume the writer's format."""
+    from spiky.lutorch_ex.deploy import _load_payload
+    tensors, meta = _payload()
+    path = str(tmp_path / "torch_format.lxq")
+    torch.save({"tensors": tensors, "meta_json": json.dumps(meta)}, path)
+    _assert_same(_load_payload(path), (tensors, meta))
+
+
+def test_save_falls_back_when_safetensors_cannot_write(tmp_path, monkeypatch):
+    """safetensors importable but unable to write (e.g. numpy missing: ModuleNotFoundError inside save_file):
+    the payload is written with torch.save and loads back unchanged."""
+    st = pytest.importorskip("safetensors.torch")
+    from spiky.lutorch_ex.deploy import _load_payload, _save_payload, _ZIP_MAGIC
+
+    def no_numpy(*a, **k):
+        raise ModuleNotFoundError("No module named 'numpy'")
+    monkeypatch.setattr(st, "save_file", no_numpy)
+    tensors, meta = _payload()
+    path = str(tmp_path / "fallback.lxq")
+    _save_payload(path, tensors, meta)
+    assert open(path, "rb").read(4) == _ZIP_MAGIC
+    _assert_same(_load_payload(path), (tensors, meta))
+
+
+def test_payload_roundtrip(tmp_path):
+    """Whatever this environment writes, it reads back."""
+    from spiky.lutorch_ex.deploy import _load_payload, _save_payload
+    tensors, meta = _payload()
+    path = str(tmp_path / "roundtrip.lxq")
+    _save_payload(path, tensors, meta)
+    _assert_same(_load_payload(path), (tensors, meta))

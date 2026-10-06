@@ -338,7 +338,9 @@ What export and load do:
   exponent.
 - `load_deployment` builds the skeleton on the `meta` device and rebuilds each compacted layer as a
   `DeployedQuantisedConfidenceLUT`, through a format-tag registry. The float tables are never allocated.
-- The file is a safetensors container, or a `weights_only` torch file when `safetensors` is missing.
+- The file is a safetensors container when `safetensors` (and the `numpy` it needs to write) is installed,
+  otherwise a torch file. `load_deployment` reads the format the file is in, so either loads anywhere;
+  the torch file is loaded with `weights_only=True`.
 
 In the check above (with trained-looking weights), the deployed output matched the float model exactly.
 

@@ -21,7 +21,9 @@ requires-python = ">=3.10"
 dependencies = ["torch>=2.1", "ninja"]
 
 [project.optional-dependencies]
-deploy = ["safetensors"]    # export_deployment / load_deployment fall back to torch.save / weights_only load without it
+# safetensors output for export_deployment (safetensors.torch needs numpy to write); without them the export
+# is written with torch.save, and load_deployment reads either format.
+deploy = ["safetensors", "numpy"]
 test = ["pytest"]
 
 [project.urls]
