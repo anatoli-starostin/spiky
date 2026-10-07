@@ -61,7 +61,7 @@ print(json.dumps({k: v for k, v in summary.items() if k != "core_tasks"}, indent
 
 try:
     import wandb
-    run = wandb.init(project=os.environ.get("WANDB_PROJECT_NAME", "nanochat"), id=os.environ["WANDB_RUN_ID"], resume="must")
+    run = wandb.init(project=os.environ.get("WANDB_PROJECT_NAME", "spiky-nanochat"), id=os.environ["WANDB_RUN_ID"], resume="must")
     for k in ("core_standalone_base_eval", "val_bpb_base_eval", "train_bpb_base_eval", "core_in_training_last", "verdict"):
         run.summary[k] = summary[k]
     run.summary["core_metric"] = c  # CORE as the summary metric: the standalone, full-set number
