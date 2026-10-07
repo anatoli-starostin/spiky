@@ -5,7 +5,7 @@
 **Shell conventions.**
 - Every command runs from `experiments/lut_nanochat/nanochat` (call it `NC`) unless stated otherwise.
 - Do not change the recipe, flags or code. If something here does not work, stop and report; do not improvise a workaround that changes the maths.
-- Scope is in `README.md`: one run, nothing else.
+- This runbook covers stage 1 only: the dense baseline run (scope and roadmap are in `README.md`). Keep the baseline arm clean: no LUT or control code in this run, and no config drift once it is launched.
 
 **Checklist (in order; no step may be skipped):**
 §4 env + smoke test → §5 data staging → §6 memory probe → **§7 REQUIRED smoke run (`SMOKE RUN: PASS`)** → §8 launch → §9 monitor → §11 eval and report.
