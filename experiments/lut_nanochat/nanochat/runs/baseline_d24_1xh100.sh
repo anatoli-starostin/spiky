@@ -56,7 +56,12 @@ prune_checkpoints() {
     while read -r s; do rm -f "$CKPT_DIR/model_$s.pt" "$CKPT_DIR/meta_$s.json" "$CKPT_DIR"/optim_"$s"_rank*.pt; done
 }
 
-FINAL_STEP=5568
+# Smoke-run hooks (runs/smoke_run_d24.sh). All default to empty/off, so the real run is unaffected.
+#   NUM_ITERATIONS  override the 5,568-step horizon     TRAIN_EXTRA  extra base_train flags (appended, so they win)
+#   EXTRA_TAGS      extra wandb tags, comma-prefixed    EVAL_EXTRA   extra base_eval flags
+FINAL_STEP=${NUM_ITERATIONS:-5568}
+ITER_ARGS=()
+[ -n "${NUM_ITERATIONS:-}" ] && ITER_ARGS=(--num-iterations="$NUM_ITERATIONS")
 RESUME_ARGS=()
 LATEST=$(latest_complete_step || true)
 if [ -n "$LATEST" ]; then
@@ -79,14 +84,14 @@ if [ -z "$LATEST" ] || [ "$LATEST" -lt "$FINAL_STEP" ]; then
         --depth=24 --target-param-data-ratio=8 --device-batch-size="$DBS" --fp8 \
         --save-every="$SAVE_EVERY" --model-tag="$MODEL_TAG" \
         --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group="$WANDB_GROUP_NAME" \
-        --wandb-tags="arch=dense,precision=fp8,seed=42,gpus=1xH100,dbs=$DBS" \
+        --wandb-tags="arch=dense,precision=fp8,seed=42,gpus=1xH100,dbs=$DBS${EXTRA_TAGS:-}" \
         --wandb-notes-file=runs/lut_wandb_notes.md --pin-config="$RESULTS/pin_config.json" \
-        --log-every=1 "${RESUME_ARGS[@]}" 2>&1 | tee -a "$RESULTS/train.log"
+        --log-every=1 "${ITER_ARGS[@]}" "${RESUME_ARGS[@]}" ${TRAIN_EXTRA:-} 2>&1 | tee -a "$RESULTS/train.log"
     kill $PRUNER 2>/dev/null || true
     prune_checkpoints
 fi
 
 # --- standalone base_eval: the number we report (full CORE, not the 500-per-task in-training subsample) ---
 torchrun --standalone --nproc_per_node=1 -m scripts.base_eval -- \
-    --device-batch-size="$DBS" --model-tag="$MODEL_TAG" 2>&1 | tee "$RESULTS/base_eval.log"
+    --device-batch-size="$DBS" --model-tag="$MODEL_TAG" ${EVAL_EXTRA:-} 2>&1 | tee "$RESULTS/base_eval.log"
 python runs/report_results.py --results "$RESULTS"
