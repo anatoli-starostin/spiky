@@ -78,7 +78,7 @@ if [ -z "$LATEST" ] || [ "$LATEST" -lt "$FINAL_STEP" ]; then
     torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- \
         --depth=24 --target-param-data-ratio=8 --device-batch-size="$DBS" --fp8 \
         --save-every="$SAVE_EVERY" --model-tag="$MODEL_TAG" \
-        --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group=lut_nanochat \
+        --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group="$WANDB_GROUP_NAME" \
         --wandb-tags="arch=dense,precision=fp8,seed=42,gpus=1xH100,dbs=$DBS" \
         --wandb-notes-file=runs/lut_wandb_notes.md --pin-config="$RESULTS/pin_config.json" \
         --log-every=1 "${RESUME_ARGS[@]}" 2>&1 | tee -a "$RESULTS/train.log"

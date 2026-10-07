@@ -68,7 +68,8 @@
   "wandb": {
     "project": "spiky-nanochat",
     "project_env_override": "WANDB_PROJECT",
-    "group": "lut_nanochat",
+    "group": "nanochat_baseline",
+    "group_env_override": "WANDB_GROUP",
     "run_name": "d24-dense-1xh100-s0"
   }
 }
