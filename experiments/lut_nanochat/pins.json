@@ -1,0 +1,58 @@
+{
+  "nanochat": {
+    "repo": "https://github.com/karpathy/nanochat",
+    "commit": "92d63d4e8bb4df75c3b71618f31ddde2378b2bcd",
+    "tree": "c6d965b5d89fe9e3d673d2c899c505b11f843772",
+    "vendored_at": "experiments/lut_nanochat/nanochat",
+    "local_patch": "see PIN.md 'Local changes'; git diff of the vendoring commit shows all of them"
+  },
+  "python_env": {
+    "torch": "2.9.1+cu128",
+    "torch_index": "https://download.pytorch.org/whl/cu128",
+    "kernels": "0.11.7 (uv.lock)",
+    "torchao": "NOT a dependency (fp8 is nanochat/fp8.py)",
+    "install": "uv sync --extra gpu (uses the vendored uv.lock)"
+  },
+  "fa3": {
+    "hub_repo": "varunneal/flash-attention-3",
+    "revision": "de87b9b5af06dd9984df595bef90b2eba44b181a",
+    "revision_source": "HF API 'sha' of the repo main branch, read 2026-10-07 (lastModified 2026-03-20); UNCERTAIN until env_smoke_test.py confirms it loads",
+    "build_variant_expected": "torch29-cxx11-cu128-x86_64-linux"
+  },
+  "data": {
+    "dataset": "karpathy/climbmix-400b-shuffle",
+    "dataset_revision_main_2026_10_07": "915333b4f8b8684f39aeaafea600fea6f43fb703",
+    "dataset_revision_note": "nanochat downloads from resolve/main; the revision above is what main pointed to on 2026-10-07 (HF API, UNCERTAIN). Per-shard sha256 in results/<run>/manifest.json is the actual proof.",
+    "train_shards": "shard_00000..shard_00169 (speedrun.sh downloads -n 170)",
+    "val_shard": "shard_06542",
+    "reference_sha256": {
+      "shard_00000.parquet": "054ddbd98abf30d773c54de578fc9d579bafeb6c14e04e97bd36aa90e825bf9b",
+      "shard_00001.parquet": "d4cfe1de19f4fd976022a9047458655968bc5583582ec5fa714801ec2be2c93c",
+      "shard_00002.parquet": "5e80d7596d53be648d841ea5811082747281c39f6851e10dd90375a84bc509a7",
+      "shard_00003.parquet": "b349c85d4b993d98e2328833ecfd3734692e0395a592d89858bae34a4ba73c59",
+      "shard_06542.parquet": "769fe59d108dfd2cfa186c63173b83fbfb90a7adb3519519ba6eaa6ca9889f94"
+    },
+    "reference_sha256_source": "computed on our workstation from shards downloaded 2026-07-03",
+    "tokenizer": "trained in-run by scripts.tok_train (vocab 32768, max_chars 2e9); sha256 recorded in manifest.json",
+    "eval_bundle_url": "https://karpathy-public.s3.us-west-2.amazonaws.com/eval_bundle.zip",
+    "eval_bundle_sha256": "recorded in manifest.json (not known in advance)"
+  },
+  "recipe": {
+    "depth": 24, "target_param_data_ratio": 8, "fp8": true, "fp8_recipe": "tensorwise",
+    "max_seq_len": 2048, "window_pattern": "SSSL",
+    "total_batch_size": 1048576, "num_iterations": 5568, "total_tokens": 5838471168,
+    "device_batch_size": 16, "grad_accum_steps": 32,
+    "fallback": "device_batch_size 8, grad_accum_steps 64 (identical maths)",
+    "seed": 42, "seed_note": "hardcoded torch.manual_seed(42) in nanochat/common.py compute_init; run name suffix s0 = first seed"
+  },
+  "hardware": {
+    "gpu": "1x NVIDIA H100 80GB (SXM preferred; Hopper sm_90 required for the FA3 kernel)",
+    "not_blackwell": "FA3 has no sm_100/sm_120 kernel; nanochat falls back to SDPA without sliding windows (discussion #819, RTX 5090)",
+    "driver": ">= R570 (CUDA 12.8 runtime); UNCERTAIN, general CUDA requirement, not stated by nanochat",
+    "disk_free_gb": 100
+  },
+  "targets": {
+    "core_record_8xh100": 0.2626, "gpt2_core_bar": 0.256525, "core_noise_per_run": 0.008,
+    "val_bpb_record_8xh100": 0.718
+  }
+}
