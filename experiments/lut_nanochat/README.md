@@ -35,3 +35,4 @@ Later stages go in alongside it, without touching the baseline arm.
 | `nanochat/runs/smoke_run_d24.sh`, `smoke_check.py` | The REQUIRED short smoke run before the long run, and its PASS check (RUNBOOK §7). |
 | `nanochat/runs/stage_data.sh` | Stages the data, tokenizer and eval bundle, and records their hashes. |
 | `results/<run>/` | Written by the run and committed back by the operator. |
+| `docs/` | The nanochat state report and the baseline decision brief (md + pdf), with the d24 architecture confirmed from code. |
