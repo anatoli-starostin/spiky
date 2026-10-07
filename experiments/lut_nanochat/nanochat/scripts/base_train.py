@@ -42,7 +42,7 @@ parser = argparse.ArgumentParser(description="Pretrain base model")
 # Logging
 parser.add_argument("--run", type=str, default="dummy", help="wandb run name ('dummy' disables wandb logging)")
 # [lut_nanochat] wandb grouping/tags, pin-set config file, logging cadence
-parser.add_argument("--wandb-project", type=str, default="nanochat", help="wandb project")
+parser.add_argument("--wandb-project", type=str, default="spiky-nanochat", help="wandb project")
 parser.add_argument("--wandb-group", type=str, default=None, help="wandb group")
 parser.add_argument("--wandb-tags", type=str, default="", help="comma-separated wandb tags")
 parser.add_argument("--wandb-notes-file", type=str, default=None, help="text file with the wandb run notes")

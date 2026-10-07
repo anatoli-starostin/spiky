@@ -84,7 +84,7 @@ bash runs/baseline_d24_1xh100.sh 2>&1 | tee -a ../results/d24-dense-1xh100-s0/la
 #   or:  DBS=8 bash runs/baseline_d24_1xh100.sh 2>&1 | tee -a ../results/d24-dense-1xh100-s0/launcher.out
 ```
 - The script does, in order: base_train (5,568 steps, checkpoint every 250, newest 2 kept), then the standalone `base_eval`, then `report_results.py`.
-- **wandb:** project `nanochat` (override with `WANDB_PROJECT`), group `lut_nanochat`, run name `d24-dense-1xh100-s0`. The config carries the full pin set and the input hashes.
+- **wandb:** project `spiky-nanochat` (override with `WANDB_PROJECT`), group `lut_nanochat`, run name `d24-dense-1xh100-s0`. The config carries the full pin set and the input hashes.
 
 ## 8. What to monitor
 - **Log:** `../results/d24-dense-1xh100-s0/train.log`.
