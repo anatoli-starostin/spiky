@@ -86,7 +86,7 @@ if [ -z "$LATEST" ] || [ "$LATEST" -lt "$FINAL_STEP" ]; then
         --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group="$WANDB_GROUP_NAME" \
         --wandb-tags="arch=dense,precision=fp8,seed=42,gpus=1xH100,dbs=$DBS${EXTRA_TAGS:-}" \
         --wandb-notes-file=runs/lut_wandb_notes.md --pin-config="$RESULTS/pin_config.json" \
-        --log-every=1 "${ITER_ARGS[@]}" "${RESUME_ARGS[@]}" ${TRAIN_EXTRA:-} 2>&1 | tee -a "$RESULTS/train.log"
+        --log-every=1 --core-metric-every=500 "${ITER_ARGS[@]}" "${RESUME_ARGS[@]}" ${TRAIN_EXTRA:-} 2>&1 | tee -a "$RESULTS/train.log"
     kill $PRUNER 2>/dev/null || true
     prune_checkpoints
 fi
