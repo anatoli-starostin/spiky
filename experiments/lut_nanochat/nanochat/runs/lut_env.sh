@@ -7,6 +7,7 @@ export RUN_NAME=${RUN_NAME:-d24-dense-1xh100-s0}
 export MODEL_TAG=${MODEL_TAG:-d24_1xh100}
 export RESULTS=${RESULTS:-$(cd .. && pwd)/results/$RUN_NAME}
 export WANDB_PROJECT_NAME=${WANDB_PROJECT:-spiky-nanochat}
+export WANDB_GROUP_NAME=${WANDB_GROUP:-nanochat_baseline}
 mkdir -p "$RESULTS"
 # One wandb run id per experiment, persisted so a resume continues the same wandb run.
 [ -f "$RESULTS/wandb_run_id" ] || python3 -c "import uuid;print('$RUN_NAME-'+uuid.uuid4().hex[:8])" > "$RESULTS/wandb_run_id"
