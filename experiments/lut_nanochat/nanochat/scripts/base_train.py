@@ -41,6 +41,13 @@ print_banner()
 parser = argparse.ArgumentParser(description="Pretrain base model")
 # Logging
 parser.add_argument("--run", type=str, default="dummy", help="wandb run name ('dummy' disables wandb logging)")
+# [lut_nanochat] wandb grouping/tags, pin-set config file, logging cadence
+parser.add_argument("--wandb-project", type=str, default="nanochat", help="wandb project")
+parser.add_argument("--wandb-group", type=str, default=None, help="wandb group")
+parser.add_argument("--wandb-tags", type=str, default="", help="comma-separated wandb tags")
+parser.add_argument("--wandb-notes-file", type=str, default=None, help="text file with the wandb run notes")
+parser.add_argument("--pin-config", type=str, default=None, help="JSON file with the pin set, merged into the wandb config")
+parser.add_argument("--log-every", type=int, default=100, help="log train metrics to wandb every N steps")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
 # FP8 training
@@ -97,7 +104,22 @@ print0(f"COMPUTE_DTYPE: {COMPUTE_DTYPE} ({COMPUTE_DTYPE_REASON})")
 
 # wandb logging init
 use_dummy_wandb = args.run == "dummy" or not master_process
-wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(project="nanochat", name=args.run, config=user_config)
+# [lut_nanochat] pin set + group/tags/notes; a wandb failure warns but never kills the run.
+# Resume continues the same wandb run when WANDB_RUN_ID / WANDB_RESUME=allow are set by the launcher.
+if args.pin_config:
+    with open(args.pin_config) as f:
+        user_config["pins"] = json.load(f)
+wandb_notes = open(args.wandb_notes_file).read() if args.wandb_notes_file else None
+wandb_tags = [t for t in args.wandb_tags.split(",") if t]
+if use_dummy_wandb:
+    wandb_run = DummyWandb()
+else:
+    try:
+        wandb_run = wandb.init(project=args.wandb_project, name=args.run, group=args.wandb_group,
+                               tags=wandb_tags, notes=wandb_notes, config=user_config)
+    except Exception as e:
+        print0(f"WARNING: wandb.init failed ({type(e).__name__}: {e}); continuing WITHOUT wandb logging")
+        wandb_run = DummyWandb()
 
 # Flash Attention status
 from nanochat.flash_attention import USE_FA3
@@ -411,6 +433,20 @@ grad_accum_steps = total_batch_size // world_tokens_per_fwdbwd
 print0(f"Tokens / micro-batch / rank: {args.device_batch_size} x {args.max_seq_len} = {tokens_per_fwdbwd:,}")
 print0(f"Tokens / micro-batch: {world_tokens_per_fwdbwd:,}")
 print0(f"Total batch size {total_batch_size:,} => gradient accumulation steps: {grad_accum_steps}")
+# [lut_nanochat] record the derived run shape alongside the pin set
+if hasattr(wandb_run, "config"):
+    wandb_run.config.update({
+        "derived": {
+            "world_size": ddp_world_size, "device_batch_size": args.device_batch_size,
+            "grad_accum_steps": grad_accum_steps, "total_batch_size": total_batch_size,
+            "num_iterations": num_iterations, "total_tokens": total_tokens,
+            "num_scaling_params": num_scaling_params, "num_params": num_params,
+            "flops_per_token": num_flops_per_token, "weight_decay_scaled": weight_decay_scaled,
+            "batch_lr_scale": batch_lr_scale, "seed": 42,  # hardcoded in nanochat/common.py compute_init
+            "using_fa3": using_fa3, "fp8": args.fp8, "fp8_recipe": args.fp8_recipe,
+            "gpu": gpu_device_name if device_type == "cuda" else device_type,
+        }
+    }, allow_val_change=True)
 
 # Go!
 while True:
@@ -565,12 +601,15 @@ while True:
         eta_str = ""
     epoch = f"{dataloader_state_dict['epoch']} pq: {dataloader_state_dict['pq_idx']} rg: {dataloader_state_dict['rg_idx']}"
     print0(f"step {step:05d}/{num_iterations:05d} ({pct_done:.2f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt * 1000:.2f}ms | tok/sec: {tok_per_sec:,} | bf16_mfu: {mfu:.2f} | epoch: {epoch} | total time: {total_training_time/60:.2f}m{eta_str}")
-    if step % 100 == 0:
+    if step % args.log_every == 0:
         log_data = {
             "step": step,
             "total_training_flops": flops_so_far,
             "total_training_time": total_training_time,
             "train/loss": debiased_smooth_loss,
+            "train/loss_raw": train_loss_f,  # [lut_nanochat] last micro-batch loss, unsmoothed
+            "train/tokens_seen": total_batch_size * (step + 1),  # [lut_nanochat]
+            "train/lr_matrix": next(g["lr"] for g in optimizer.param_groups if g["kind"] == "muon"),  # [lut_nanochat]
             "train/lrm": lrm,
             "train/dt": dt,
             "train/tok_per_sec": tok_per_sec,
@@ -595,6 +634,8 @@ while True:
 
 # print a few more stats
 print0(f"Peak memory usage: {get_max_memory() / 1024 / 1024:.2f}MiB")
+if device_type == "cuda":  # [lut_nanochat] reserved is what decides OOM; the memory probe greps this line
+    print0(f"Peak memory reserved: {torch.cuda.max_memory_reserved() / 1024 / 1024:.2f}MiB")
 print0(f"Total training time: {total_training_time/60:.2f}m")
 if val_bpb is not None:
     print0(f"Minimum validation bpb: {min_val_bpb:.6f}")
