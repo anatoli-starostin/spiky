@@ -10,7 +10,7 @@
 | File | Change | Effect on the maths |
 |---|---|---|
 | `nanochat/flash_attention.py` | If `NANOCHAT_FA3_REVISION` is set, load `varunneal/flash-attention-3` at that Hub revision. | None (pins the kernel build). |
-| `scripts/base_train.py` | Wandb `--wandb-project/--wandb-group/--wandb-tags/--wandb-notes-file`, `--pin-config` (merged into the config), `--log-every` (upstream hardcodes 100; we use 1). Adds the logged fields `train/loss_raw`, `train/tokens_seen`, `train/lr_matrix`. The derived run shape goes into the config. A wandb init failure warns instead of aborting. Prints peak *reserved* memory. | None. Logging only. |
+| `scripts/base_train.py` | Wandb `--wandb-project` (default `spiky-nanochat`; `WANDB_PROJECT` env overrides it via `runs/lut_env.sh`), `--wandb-group/--wandb-tags/--wandb-notes-file`, `--pin-config` (merged into the config), `--log-every` (upstream hardcodes 100; we use 1). Adds the logged fields `train/loss_raw`, `train/tokens_seen`, `train/lr_matrix`. The derived run shape goes into the config. A wandb init failure warns instead of aborting. Prints peak *reserved* memory. | None. Logging only. |
 | `runs/baseline_d24_1xh100.sh`, `runs/probe_memory_d24.sh`, `runs/stage_data.sh`, `runs/lut_env.sh`, `runs/env_smoke_test.py`, `runs/make_pin_config.py`, `runs/report_results.py`, `runs/lut_wandb_notes.md` | New files. | n/a |
 
 Verify the full diff with: `git diff 67ded4a9 -- experiments/lut_nanochat/nanochat`.

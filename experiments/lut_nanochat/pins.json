@@ -38,12 +38,20 @@
     "eval_bundle_sha256": "recorded in manifest.json (not known in advance)"
   },
   "recipe": {
-    "depth": 24, "target_param_data_ratio": 8, "fp8": true, "fp8_recipe": "tensorwise",
-    "max_seq_len": 2048, "window_pattern": "SSSL",
-    "total_batch_size": 1048576, "num_iterations": 5568, "total_tokens": 5838471168,
-    "device_batch_size": 16, "grad_accum_steps": 32,
+    "depth": 24,
+    "target_param_data_ratio": 8,
+    "fp8": true,
+    "fp8_recipe": "tensorwise",
+    "max_seq_len": 2048,
+    "window_pattern": "SSSL",
+    "total_batch_size": 1048576,
+    "num_iterations": 5568,
+    "total_tokens": 5838471168,
+    "device_batch_size": 16,
+    "grad_accum_steps": 32,
     "fallback": "device_batch_size 8, grad_accum_steps 64 (identical maths)",
-    "seed": 42, "seed_note": "hardcoded torch.manual_seed(42) in nanochat/common.py compute_init; run name suffix s0 = first seed"
+    "seed": 42,
+    "seed_note": "hardcoded torch.manual_seed(42) in nanochat/common.py compute_init; run name suffix s0 = first seed"
   },
   "hardware": {
     "gpu": "1x NVIDIA H100 80GB (SXM preferred; Hopper sm_90 required for the FA3 kernel)",
@@ -52,7 +60,15 @@
     "disk_free_gb": 100
   },
   "targets": {
-    "core_record_8xh100": 0.2626, "gpt2_core_bar": 0.256525, "core_noise_per_run": 0.008,
+    "core_record_8xh100": 0.2626,
+    "gpt2_core_bar": 0.256525,
+    "core_noise_per_run": 0.008,
     "val_bpb_record_8xh100": 0.718
+  },
+  "wandb": {
+    "project": "spiky-nanochat",
+    "project_env_override": "WANDB_PROJECT",
+    "group": "lut_nanochat",
+    "run_name": "d24-dense-1xh100-s0"
   }
 }

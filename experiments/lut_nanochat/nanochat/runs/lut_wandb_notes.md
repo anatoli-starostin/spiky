@@ -1,4 +1,4 @@
-Dense d24 nanochat baseline (research/lut_nanochat), 1x H100 80GB, nanochat vendored at 92d63d4.
+Dense d24 nanochat baseline (research/lut_nanochat; wandb project spiky-nanochat, group lut_nanochat), 1x H100 80GB, nanochat vendored at 92d63d4.
 Recipe = runs/speedrun.sh (d24, ratio 8, fp8, ClimbMix) with nproc_per_node 1: global batch 2^20 tokens,
 5,568 steps, 5.84B tokens; only grad_accum changes (32 at dbs 16, 64 at dbs 8). Seed 42 (hardcoded).
 Target: standalone base_eval CORE ~0.2626 (8xH100 record), must beat GPT-2 0.256525; noise ~+-0.008.
