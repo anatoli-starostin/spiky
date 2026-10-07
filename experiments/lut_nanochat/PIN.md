@@ -11,7 +11,9 @@
 |---|---|---|
 | `nanochat/flash_attention.py` | If `NANOCHAT_FA3_REVISION` is set, load `varunneal/flash-attention-3` at that Hub revision. | None (pins the kernel build). |
 | `scripts/base_train.py` | Wandb `--wandb-project` (default `spiky-nanochat`; `WANDB_PROJECT` env overrides it via `runs/lut_env.sh`), `--wandb-group` (default `nanochat_baseline`; `WANDB_GROUP` env overrides it the same way), `--wandb-tags/--wandb-notes-file`, `--pin-config` (merged into the config), `--log-every` (upstream hardcodes 100; we use 1). Adds the logged fields `train/loss_raw`, `train/tokens_seen`, `train/lr_matrix`. The derived run shape goes into the config. A wandb init failure warns instead of aborting. Prints peak *reserved* memory. | None. Logging only. |
-| `runs/baseline_d24_1xh100.sh`, `runs/probe_memory_d24.sh`, `runs/stage_data.sh`, `runs/lut_env.sh`, `runs/env_smoke_test.py`, `runs/make_pin_config.py`, `runs/report_results.py`, `runs/lut_wandb_notes.md` | New files. | n/a |
+| `runs/baseline_d24_1xh100.sh` | The launcher. It has default-off smoke hooks (`NUM_ITERATIONS`, `TRAIN_EXTRA`, `EVAL_EXTRA`, `EXTRA_TAGS`) used only by `runs/smoke_run_d24.sh`. | None (the real run passes none of them). |
+| `runs/smoke_run_d24.sh`, `runs/smoke_check.py` | New: the REQUIRED smoke run (RUNBOOK §7) and its mechanical PASS check. | n/a |
+| `runs/probe_memory_d24.sh`, `runs/stage_data.sh`, `runs/lut_env.sh`, `runs/env_smoke_test.py`, `runs/make_pin_config.py`, `runs/report_results.py`, `runs/lut_wandb_notes.md` | New files. | n/a |
 
 Verify the full diff with: `git diff 67ded4a9 -- experiments/lut_nanochat/nanochat`.
 
