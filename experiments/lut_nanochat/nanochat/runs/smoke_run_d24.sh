@@ -25,9 +25,9 @@ LAUNCHER=${LAUNCHER:-runs/baseline_d24_1xh100.sh}     # overridable only for off
 source runs/lut_env.sh
 CKPT_DIR="$NANOCHAT_BASE_DIR/base_checkpoints/$MODEL_TAG"
 
-if [ -e "$CKPT_DIR" ] || [ -e "$RESULTS/train.log" ]; then
+if [ -e "$CKPT_DIR" ] || [ -L "$CKPT_DIR" ] || [ -e "$RESULTS/train.log" ]; then
     echo "STOP: leftovers from a previous smoke run ($CKPT_DIR or $RESULTS). Move them away first:"
-    echo "  rm -rf '$CKPT_DIR' '$RESULTS'"
+    echo "  rm -rf '$RESULTS'; rm -f '$CKPT_DIR'"
     exit 1
 fi
 mkdir -p "$RESULTS"
@@ -56,6 +56,8 @@ source .venv/bin/activate
 python runs/smoke_check.py --results "$RESULTS" --dbs "$DBS" ${SMOKE_CHECK_EXTRA:-} | tee "$RESULTS/smoke_check.txt"
 VERDICT=${PIPESTATUS[0]}
 
-echo "== cleanup: deleting smoke checkpoints in $CKPT_DIR"
-rm -rf "$CKPT_DIR"
+echo "== cleanup: deleting smoke checkpoints in $RESULTS/checkpoints (and the $CKPT_DIR symlink)"
+# CKPT_DIR is a symlink into $RESULTS/checkpoints: `rm -rf` on the link alone would leave the files behind.
+rm -rf "$RESULTS/checkpoints"
+if [ -L "$CKPT_DIR" ]; then rm -f "$CKPT_DIR"; else rm -rf "$CKPT_DIR"; fi
 exit "$VERDICT"

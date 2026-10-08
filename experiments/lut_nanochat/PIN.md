@@ -55,4 +55,4 @@ Verify the full diff with: `git diff 67ded4a9 -- experiments/lut_nanochat/nanoch
 ## Hardware
 - **1× NVIDIA H100 80GB, Hopper `sm_90`.** SXM is preferred; PCIe works but is slower.
 - **Not Blackwell (B200/RTX 5090).** FA3 has no `sm_100`/`sm_120` kernel, so nanochat falls back to SDPA, which has no sliding windows. That is why the RTX 5090 result in [#819](https://github.com/karpathy/nanochat/discussions/819) is not comparable.
-- **Disk:** ≥ 100 GB free under `$NANOCHAT_BASE_DIR`. Data is ~15 GB; each checkpoint is ~11 GB, ×2 kept; plus the venv.
+- **Disk:** ≥ 100 GB free. Data (~15 GB) lives under `$NANOCHAT_BASE_DIR`; checkpoints live under `results/<run>/checkpoints/`, git-ignored, with nanochat's `base_checkpoints/<model_tag>` symlinked to it. Data is ~15 GB; each checkpoint is ~11 GB, ×2 kept; plus the venv.
