@@ -1,0 +1,11 @@
+PASS torch 2.9.1+cu128 (want 2.9.1+cu128)
+PASS CUDA available
+INFO GPU NVIDIA H100 80GB HBM3, sm_90, 79.2 GiB, CUDA runtime 12.8, devices 1
+PASS Hopper sm_90 (H100) - FA3 kernel requirement
+PASS 80 GB-class GPU
+PASS NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
+PASS FA3 loaded from the pinned Hub revision (if FAIL: see RUNBOOK troubleshooting 'FA3 unavailable')
+PASS FA3 sliding-window forward runs
+PASS fp8 torch._scaled_mm runs
+INFO kernels 0.11.7
+SMOKE TEST: OK
