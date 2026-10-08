@@ -4,12 +4,31 @@ torch.compile'd CUDA paths make Triton write kernels to its cache: ``TRITON_CACH
 $TRITON_HOME/.triton/cache (TRITON_HOME defaults to ~). If that dir is read-only, every compiling test fails with
 "OSError: [Errno 30] Read-only file system" - and only on some runs: when inductor compiles from scratch it points
 Triton at its own writable cache dir, but on an FX-graph-cache hit it skips that and Triton writes to the dir
-above. The suite checks this up front and refuses to run, rather than working around it.
+above. On a GPU machine the suite checks this up front and refuses to run, rather than working around it. On a
+CPU-only machine nothing is compiled with Triton and the cache is never written, so the check is skipped.
 """
 import os
 import tempfile
 
 import pytest
+
+
+def cuda_available() -> bool:
+    """``torch.cuda.is_available()``: a driver probe (``cudaGetDeviceCount``) that leaves torch's CUDA state
+    uninitialised; the test modules call it at import anyway."""
+    import torch
+    return torch.cuda.is_available()
+
+
+def should_enforce_writable_cache(cuda_probe=None) -> bool:
+    """Enforce the writable-cache precondition only where Triton kernels get compiled, i.e. when CUDA is available.
+    Fails open: if the probe itself breaks (torch import, driver), skip the check rather than block a CPU run.
+    ``cuda_probe`` defaults to :func:`cuda_available`, looked up at call time."""
+    probe = cuda_probe if cuda_probe is not None else cuda_available
+    try:
+        return bool(probe())
+    except Exception:
+        return False
 
 
 def probe_writable(path: str) -> bool:

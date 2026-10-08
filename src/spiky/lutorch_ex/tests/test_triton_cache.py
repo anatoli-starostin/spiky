@@ -7,7 +7,7 @@ import os
 import pytest
 
 from spiky.lutorch_ex.tests._triton_cache import (
-    effective_triton_cache_dir, probe_writable, unwritable_cache_error,
+    effective_triton_cache_dir, probe_writable, should_enforce_writable_cache, unwritable_cache_error,
 )
 
 needs_non_root = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -54,3 +54,25 @@ def test_error_names_path_reason_and_fix(monkeypatch):
     msg = str(err)
     assert "'/ro/cache'" in msg and "from TRITON_CACHE_DIR" in msg and "Triton" in msg
     assert "export TRITON_CACHE_DIR=/tmp/triton-cache" in msg
+
+
+def test_enforced_when_cuda_available():
+    assert should_enforce_writable_cache(lambda: True) is True
+
+
+def test_skipped_when_cuda_unavailable():
+    assert should_enforce_writable_cache(lambda: False) is False
+
+
+def test_fails_open_when_cuda_probe_breaks():
+    def broken():
+        raise RuntimeError("driver probe exploded")
+    assert should_enforce_writable_cache(broken) is False
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_default_probe_is_cuda_available(monkeypatch, available):
+    """What conftest calls (no argument) follows cuda_available(), whatever this host's GPU situation."""
+    import spiky.lutorch_ex.tests._triton_cache as tc
+    monkeypatch.setattr(tc, "cuda_available", lambda: available)
+    assert tc.should_enforce_writable_cache() is available
