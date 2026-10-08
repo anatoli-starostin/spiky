@@ -1,0 +1,25 @@
+== phase A: train to the step-20 checkpoint, then interrupt
+phase A interrupted at: step 00021/00040 (52.50%) | loss: 4.3829
+== phase B: the same launcher command again (must auto-resume from step 20)
+phase B exit: 0
+== check
+wandb: WARNING Unable to verify login in offline mode.
+wandb: Network error (ConnectionError), entering retry loop.
+wandb: Network error (ConnectionError), entering retry loop.
+PASS  no OOM
+PASS  peak reserved memory reported and <= 75.0 GiB  [49.8 GiB]
+PASS  global batch 1,048,576 with 64 grad-accum steps (dbs 8)  [seen ['64']]
+PASS  fp8 active (tensorwise, 145/158 Linears) in both phases  [[('tensorwise', '145', '158'), ('tensorwise', '145', '158')]]
+PASS  FA3 active in both phases (no SDPA fallback)
+PASS  FA3 revision in the run config equals the pin  [de87b9b5af06dd9984df595bef90b2eba44b181a]
+PASS  loss finite at every step  [40 steps logged]
+PASS  frozen teacher loaded (distillation path active)
+PASS  distillation KL decreased from step 0 to the last step  [step0 7.875016 -> step39 3.320927]
+PASS  step-20 checkpoint written and auto-resumed from by the launcher  [26-10-08T12:49:52+03:00 resuming from step 20 (dataloader resume is approximate)]
+PASS  training reached the final step 39  [last logged step 39]
+FAIL  standalone base_eval ran (reduced) and printed a CORE value
+INFO  median step time 15.55 s -> pretraining 24.0 h for 5,568 steps; end-to-end ~27.7-30.1 h; ~$87 at $3.0/GPU-h (estimate was 13-15 h / 15-18 h / ~$48)
+FAIL  projected pretraining <= 17.0 h (choice)
+FAIL  wandb run reachable via the API  [ConnectionError: HTTPSConnectionPool(host='api.wandb.ai', port=443): Max retries exceeded with url: /graphql (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x7302d6b949d0>: Failed to resolve 'api.wandb.ai' ([Errno -3] Temporary failure in name resolution)"))]
+SMOKE RUN: FAIL (3): standalone base_eval ran (reduced) and printed a CORE value; projected pretraining <= 17.0 h (choice); wandb run reachable via the API
+== cleanup: deleting smoke checkpoints in /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/results/distill_d24_from_d24_1xh100-smoke/checkpoints (and the /home/astarostin/.cache/nanochat/base_checkpoints/distill_d24_from_d24_1xh100_smoke symlink)
