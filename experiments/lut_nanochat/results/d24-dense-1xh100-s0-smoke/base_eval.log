@@ -1,0 +1,135 @@
+Autodetected device type: cuda
+2026-10-07 18:29:05,046 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+2026-10-07 18:29:05,047 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Loading model from /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke with step 40
+2026-10-07 18:29:07,915 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Building model with config: {'sequence_len': 2048, 'vocab_size': 32768, 'n_layer': 24, 'n_head': 12, 'n_kv_head': 12, 'n_embd': 1536, 'window_pattern': 'SSSL'}
+Evaluating model: base_model (step 40)
+Eval modes: bpb, core, sample
+
+================================================================================
+Model Samples
+================================================================================
+
+Conditioned samples:
+--------------------------------------------------------------------------------
+<|bos|>The capital of France is a great way to the world of the world of the world of the world of
+--------------------------------------------------------------------------------
+<|bos|>The chemical symbol of gold is a popular choice for a variety of colors, and the ability to create a unique
+--------------------------------------------------------------------------------
+<|bos|>If yesterday was Friday, then tomorrow will be able to get the same time, the most of the most of the most of
+--------------------------------------------------------------------------------
+<|bos|>The opposite of hot is a good thing is a good thing is a good thing is a good thing is
+--------------------------------------------------------------------------------
+<|bos|>The planets of the solar system are: The system is the most of the system of the system of the system of the
+--------------------------------------------------------------------------------
+<|bos|>My favorite color is a great way to make a sense of the world of the world of the world
+--------------------------------------------------------------------------------
+<|bos|>If 5*x + 3 = 13, then x is 1. 2. 2. 2. 2. 
+
+Unconditioned samples:
+--------------------------------------------------------------------------------
+<|bos|>And the first flower meal that is often, a thanks to we turn out there is an animal here or genetics P'sad right?
+A study base to relax monitor for winning Philodendron Verreach sole responsibility mean his— she's had that a toy shortly after no "can be kept herself murm respected" than those comparison to win a period of Rosemary heft.
+Unless they are bred into the Bark Do yaa-Sized.
+Whyger King bugg interactions humans.
+Des." The "I've got invested in no-one with a good harvest.
+Democratic curiosity, sorry that doesn't go
+--------------------------------------------------------------------------------
+<|bos|>Basic-T Cell Genetics: The Biberry, Breakfast CaAC Press
+
+Microbiology, Poland focuses on pins or shoot for any time or a heart beat, many reasons. You may get that you have vision a test purchaseer 10k
+
+Climate change
+
+Where Check the Idealpinal Philadelphia's policy, and support my boyfriend and learn about what the nation.
+
+Share
+
+Soil Conditioner is the starts. But this can receive for this investigative approaches - A DiRGB are 7 total. pitching on Back Import from April 10 am proud to run by 3 Meanser disciples of the appointment
+--------------------------------------------------------------------------------
+<|bos|>Itgy and A group of Tear Stable Bess Mod AP
+
+One of Sanpetites first published by the V.S. Navy for Don't worry about February and there is a lot of money, including map the sensory information given. They can help keep its in production. During the test gameplay of becoming more intelligent robots to generate the valuable bio-muchin (AS) to do the Internet cash resources to increased thermal, and relevant competition repository, the robotics project.
+
+Positive Feedback System Optimization
+--------------------------------------------------------------------------------
+<|bos|>섭 100,3939 refers slightly
+
+485; Sleep
+
+(9io
+
+Fe(C57)
+Supported crude oil paintbrushless warblers
+
+"Anempered glass and provides food preservation, but it will provide a viable way to ensure your appreciation for this bag to keep safe,like celiacs
+
+Dubles and rinsing dirt or mates get to protect the wild trasses, and evenads flocks have a little critters
+
+Water Rooms. My 3 has a mixture of thawed by inches wide. Start with the rest of them a global player, just about removing.
+How did you get
+--------------------------------------------------------------------------------
+<|bos|>Kitchen Is Frozen The Lost Triromoting BAND Peac Plate
+Incorporating these chemicals such as olive oil oil prices areed the Nettles
+There is a good quality oils, tailored Diat – Woodford and brick granite, eucalyptus, Peatyama. Limestone Cement and
+Hricanes: Removing roasted peppers, chocolate dipping, cholophyll Seaweed thrives in peppers, fresh clean, wild salmonell choral
+Theahorses are unsafe
+Pain in spotted pine can raise the only handful's plumage
+from rice, broccoli in Indonesia fall in hydroponics
+Children shedding and Venus Fly Traseberdeana Islands
+B
+--------------------------------------------------------------------------------
+<|bos|>Abstract
+Global article. Scale. This enables the importance of surge energy diversification of acupuncture, and various distances.
+For Genes is involved in intensive use, a termite is sponsored climate change for optimizing Solar climate and key monitoring Society. Come out for agriculture, agriculture practices, BioBlindness of most significant commercial projects.If Air Marine and Ecosystem Conservation: participant Actichens to engage in in Penellative studies
+Visual collaborative ability to predict favorable whether we observe and production facilities freedoms
+Biological data globally
+Insect potential campaigns exhibit practices, weaning increases, generation
+Children's research collaboratively, OLEDGE COMPOS mode.
+
+--------------------------------------------------------------------------------
+<|bos|>Event oxides. Local Items are used Mexican and plants bloom trees roaming hydrangea fabrics are starting climbing – plant breeding harvested underwear and plant plants, bright the soil well-ins are many protected alongside greens eat cucumbers are cover soil depletion? Brinits to plantings in addition to savor flavours, steamed grains grow!
+--------------------------------------------------------------------------------
+<|bos|>Crappat Limestone Cement Initiative
+The PlayStation 647 walnut vanillay & Guide to Team Activities-Gapiensauto deception respectively
+Fruits
+Understanding History ACT "Bluthed within two
+Sequalaya, MLuisna
+Physics. Observation Method 3 and that eruptions Made Roy Up Owl and subside.
+Our Cavies declared children collaborated with friends Fort Ballard On average childhood in Birmingham
+New Yorkie 2016
+In Herball Roughg/ Conflict with disabilities, there is no idea to different senior cats can eat the giant Fastering apples,avi Street
+
+================================================================================
+BPB Evaluation
+================================================================================
+train bpb: 1.655305
+val bpb: 1.659718
+
+================================================================================
+CORE Evaluation
+================================================================================
+Evaluating: hellaswag_zeroshot (0-shot, type: multiple_choice)... accuracy: 0.3750 | centered: 0.1667 | time: 0.73s
+Evaluating: jeopardy (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.49s
+Evaluating: bigbench_qa_wikidata (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.59s
+Evaluating: arc_easy (10-shot, type: multiple_choice)... accuracy: 0.3125 | centered: 0.0833 | time: 0.56s
+Evaluating: arc_challenge (10-shot, type: multiple_choice)... accuracy: 0.1875 | centered: -0.0833 | time: 0.51s
+Evaluating: copa (0-shot, type: multiple_choice)... accuracy: 0.5625 | centered: 0.1250 | time: 0.52s
+Evaluating: commonsense_qa (10-shot, type: multiple_choice)... accuracy: 0.1250 | centered: -0.0938 | time: 0.51s
+Evaluating: piqa (10-shot, type: multiple_choice)... accuracy: 0.6250 | centered: 0.2500 | time: 0.53s
+Evaluating: openbook_qa (0-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.0000 | time: 0.53s
+Evaluating: lambada_openai (0-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.58s
+Evaluating: hellaswag (10-shot, type: multiple_choice)... accuracy: 0.3750 | centered: 0.1667 | time: 0.61s
+Evaluating: winograd (0-shot, type: schema)... accuracy: 0.8125 | centered: 0.6250 | time: 0.42s
+Evaluating: winogrande (0-shot, type: schema)... accuracy: 0.5625 | centered: 0.1250 | time: 0.42s
+Evaluating: bigbench_dyck_languages (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.50s
+Evaluating: agi_eval_lsat_ar (3-shot, type: multiple_choice)... accuracy: 0.0625 | centered: -0.1719 | time: 0.50s
+Evaluating: bigbench_cs_algorithms (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.48s
+Evaluating: bigbench_operators (10-shot, type: language_modeling)... accuracy: 0.0625 | centered: 0.0625 | time: 0.50s
+Evaluating: bigbench_repeat_copy_logic (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.50s
+Evaluating: squad (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.59s
+Evaluating: coqa (0-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.55s
+Evaluating: boolq (10-shot, type: multiple_choice)... accuracy: 0.5000 | centered: -0.3158 | time: 0.57s
+Evaluating: bigbench_language_identification (10-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.1749 | time: 1.01s
+
+Results written to: /home/astarostin/.cache/nanochat/base_eval/base_model_000040.csv
+CORE metric: 0.0507
