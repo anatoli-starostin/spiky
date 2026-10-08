@@ -26,6 +26,7 @@ import torch
 import torch.distributed as dist
 
 from nanochat.gpt import GPT, GPTConfig, Linear
+from nanochat.lut_ffn import LUTFFNConfig, apply_lut_ffn, lut_cell_tv_loss  # [lut_nanochat] LUT-FFN drop-in
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit, tokenizing_distributed_data_loader_with_state_bos_bestfit
 from nanochat.common import compute_init, compute_cleanup, print0, DummyWandb, print_banner, get_base_dir, autodetect_device_type, get_peak_flops, COMPUTE_DTYPE, COMPUTE_DTYPE_REASON, is_ddp_initialized
 from nanochat.tokenizer import get_tokenizer, get_token_bytes
@@ -55,6 +56,20 @@ parser.add_argument("--distill-temperature", type=float, default=1.0, help="soft
 parser.add_argument("--distill-alpha", type=float, default=0.0, help="blend distillation KL with hard-label CE: loss=(1-alpha)*KL+alpha*CE (0.0 = pure distillation)")
 parser.add_argument("--distill-early-stop-bpb", type=float, default=0.719, help="[lut_nanochat] stop distillation once val bpb <= this (the teacher's val bpb) for --distill-early-stop-patience consecutive evals (<=0 disables)")
 parser.add_argument("--distill-early-stop-patience", type=int, default=2, help="[lut_nanochat] number of CONSECUTIVE val-bpb evals at/under the threshold required to early-stop")
+# [lut_nanochat] LUT-FFN: replace every block's dense MLP with a ProjectionMHL(ConfidenceLUT) fp32 island (locked geometry defaults)
+parser.add_argument("--lut-ffn", action="store_true", help="[lut_nanochat] replace ALL block MLPs with the locked ConfidenceLUT FFN (fp32 island)")
+parser.add_argument("--lut-ffn-h", type=int, default=16, help="[lut_nanochat] LUT heads (h_in=h_out)")
+parser.add_argument("--lut-ffn-d", type=int, default=48, help="[lut_nanochat] LUT per-head dim (d_in=d_out); r=h*d")
+parser.add_argument("--lut-ffn-tph", type=int, default=64, help="[lut_nanochat] tables per head")
+parser.add_argument("--lut-ffn-nap", type=int, default=8, help="[lut_nanochat] anchor pairs (2^nap cells/table)")
+parser.add_argument("--lut-ffn-read-top-n", type=int, default=1, help="[lut_nanochat] ConfidenceLUT read_top_n (tau drops out at 1)")
+parser.add_argument("--lut-ffn-beta", type=float, default=2.0, help="[lut_nanochat] ConfidenceLUT beta_init")
+parser.add_argument("--lut-ffn-gamma", type=float, default=1.0, help="[lut_nanochat] ConfidenceLUT gamma_init")
+parser.add_argument("--lut-ffn-seed", type=int, default=1, help="[lut_nanochat] ConfidenceLUT anchor/table seed")
+parser.add_argument("--lut-ffn-weight-init-std", type=float, default=1e-3, help="[lut_nanochat] LUT table init std")
+parser.add_argument("--lut-ffn-table-dropout", type=float, default=0.2, help="[lut_nanochat] LUT table dropout rate")
+parser.add_argument("--lut-ffn-tv-lambda", type=float, default=10.0, help="[lut_nanochat] cell-TV penalty weight (<=0 disables)")
+parser.add_argument("--lut-ffn-lr", type=float, default=3e-3, help="[lut_nanochat] AdamW LR for LUT-FFN params (scaled by 1/sqrt(dmodel/768))")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
 # FP8 training
@@ -179,6 +194,22 @@ print0(f"Model config:\n{json.dumps(model_config_kwargs, indent=2)}")
 model.to_empty(device=device) # 2) All tensors get storage on target device but with uninitialized (garbage) data
 model.init_weights() # 3) All tensors get initialized
 
+# [lut_nanochat] LUT-FFN: replace every block's dense MLP with a ConfidenceLUT fp32 island. MUST happen
+# AFTER init_weights() (GPT.__init__ runs on meta; the LUT cartridge needs real data) and BEFORE the
+# resume load (so a LUT checkpoint's keys line up), fp8 conversion, and setup_optimizer.
+lut_cfg = LUTFFNConfig(
+    enabled=args.lut_ffn, h=args.lut_ffn_h, d=args.lut_ffn_d, tph=args.lut_ffn_tph, nap=args.lut_ffn_nap,
+    read_top_n=args.lut_ffn_read_top_n, beta_init=args.lut_ffn_beta, gamma_init=args.lut_ffn_gamma,
+    seed=args.lut_ffn_seed, weight_init_std=args.lut_ffn_weight_init_std,
+    table_dropout_rate=args.lut_ffn_table_dropout, tv_lambda=args.lut_ffn_tv_lambda,
+)
+if lut_cfg.enabled:
+    n_lut = apply_lut_ffn(model, lut_cfg, device=device)
+    n_lut_params = sum(p.numel() for m in model.transformer.h for p in m.mlp.parameters())
+    print0(f"[lut_nanochat] LUT-FFN enabled: replaced {n_lut} block MLPs "
+           f"(h={lut_cfg.h} d={lut_cfg.d} tph={lut_cfg.tph} nap={lut_cfg.nap} read_top_n={lut_cfg.read_top_n}); "
+           f"LUT-FFN params total = {n_lut_params:,}; tv_lambda={lut_cfg.tv_lambda}")
+
 # If we are resuming, overwrite the model parameters with those of the checkpoint
 base_dir = get_base_dir()
 output_dirname = args.model_tag if args.model_tag else f"d{args.depth}" # e.g. d12
@@ -225,6 +256,8 @@ if args.fp8:
         # Filter: dims must be divisible by 16 (FP8 hardware requirement) large enough
         def fp8_module_filter(mod: nn.Module, fqn: str) -> bool:
             if not isinstance(mod, nn.Linear):
+                return False
+            if getattr(mod, "_lut_no_fp8", False):  # [lut_nanochat] LUT-FFN projections stay fp32 (island)
                 return False
             if mod.in_features % 16 != 0 or mod.out_features % 16 != 0:
                 return False
@@ -361,6 +394,8 @@ optimizer = model.setup_optimizer(
     # Muon hyperparameters
     matrix_lr=args.matrix_lr * batch_lr_scale,
     weight_decay=weight_decay_scaled,
+    # [lut_nanochat] LUT-FFN AdamW group
+    lut_lr=args.lut_ffn_lr * batch_lr_scale,
 )
 
 if resuming:
@@ -444,6 +479,7 @@ if not resuming:
     smooth_train_loss = 0 # EMA of training loss
     total_training_time = 0 # total wall-clock time of training
     last_kl = last_ce = None  # [lut_nanochat] latest distillation KL / CE for logging
+    last_lut_tv = None  # [lut_nanochat] latest LUT-FFN cell-TV penalty for logging
     distill_es_hits = 0  # [lut_nanochat] consecutive val-bpb evals at/under the early-stop threshold
 else:
     step = meta_data["step"]
@@ -453,6 +489,7 @@ else:
     smooth_train_loss = loop_state["smooth_train_loss"]
     total_training_time = loop_state["total_training_time"]
     last_kl = last_ce = None  # [lut_nanochat] latest distillation KL / CE for logging
+    last_lut_tv = None  # [lut_nanochat] latest LUT-FFN cell-TV penalty for logging
     distill_es_hits = 0  # [lut_nanochat] consecutive val-bpb evals at/under the early-stop threshold
 
 # Figure out the needed gradient accumulation micro-steps to reach the desired total batch size per step
@@ -603,6 +640,14 @@ while True:
         else:
             loss.backward()
         x, y, dataloader_state_dict = next(train_loader) # prefetch the next batch while the GPU is busy with forward/backward
+    # [lut_nanochat] cell-TV regularization on the LUT-FFN tables: a param-space penalty, so add it ONCE
+    # per optimizer step (not per micro-step) via its own backward into the (shared) table gradients.
+    last_lut_tv = None
+    if lut_cfg.enabled and lut_cfg.tv_lambda > 0:
+        tv_loss = lut_cell_tv_loss(orig_model, lut_cfg.tv_lambda)
+        if tv_loss is not None:
+            last_lut_tv = tv_loss.detach()
+            (scaler.scale(tv_loss) if scaler is not None else tv_loss).backward()
     # step the optimizer
     lrm = get_lr_multiplier(step)
     muon_momentum = get_muon_momentum(step)
@@ -671,6 +716,8 @@ while True:
             log_data["train/distill_kl"] = last_kl.item()
             if last_ce is not None:
                 log_data["train/distill_ce"] = last_ce.item()
+        if last_lut_tv is not None:  # [lut_nanochat] LUT-FFN cell-TV penalty
+            log_data["train/lut_cell_tv"] = last_lut_tv.item()
         wandb_run.log(log_data)
 
     # state update

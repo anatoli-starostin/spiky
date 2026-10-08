@@ -416,18 +416,28 @@ class GPT(nn.Module):
             'total': total,
         }
 
-    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5):
+    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, lut_lr=3e-3):
         model_dim = self.config.n_embd
 
+        # [lut_nanochat] LUT-FFN params (4-D tables, 0-D confidence scalars, projection weights+biases)
+        # are NOT Muon-compatible (Newton-Schulz assumes 2-D matrices), so pull them out of the matrix
+        # group and give them their own AdamW group. Detected by the _is_lut_ffn module marker.
+        lut_param_ids, lut_params = set(), []
+        for m in self.transformer.h.modules():
+            if getattr(m, "_is_lut_ffn", False):
+                for p in m.parameters():
+                    if id(p) not in lut_param_ids:
+                        lut_param_ids.add(id(p)); lut_params.append(p)
+
         # Separate out all parameters into groups
-        matrix_params = list(self.transformer.h.parameters())
+        matrix_params = [p for p in self.transformer.h.parameters() if id(p) not in lut_param_ids]
         value_embeds_params = list(self.value_embeds.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params = list(self.lm_head.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
         smear_params = [self.smear_gate.weight, self.smear_lambda, self.backout_lambda]
-        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params) + len(value_embeds_params) + len(resid_params) + len(x0_params) + len(smear_params)
+        assert len(list(self.parameters())) == len(matrix_params) + len(lut_params) + len(embedding_params) + len(lm_head_params) + len(value_embeds_params) + len(resid_params) + len(x0_params) + len(smear_params)
 
         # Scale the LR for the AdamW parameters by ∝1/√dmodel (tuned for 768 dim model)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -443,6 +453,10 @@ class GPT(nn.Module):
             dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),  # higher beta1 for x0
             dict(kind='adamw', params=smear_params, lr=0.2, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
         ]
+        # [lut_nanochat] LUT-FFN params: AdamW (tables/scalars/projections), no weight decay on the lookup.
+        if lut_params:
+            param_groups.append(dict(kind='adamw', params=lut_params, lr=lut_lr * dmodel_lr_scale,
+                                     betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0))
         # Muon groups (matrix params, grouped by shape for stacking)
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
