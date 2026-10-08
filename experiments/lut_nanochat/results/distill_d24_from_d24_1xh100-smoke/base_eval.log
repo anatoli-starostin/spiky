@@ -1,0 +1,121 @@
+Autodetected device type: cuda
+2026-10-08 12:56:21,944 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+2026-10-08 12:56:21,944 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Loading model from /home/astarostin/.cache/nanochat/base_checkpoints/distill_d24_from_d24_1xh100_smoke with step 40
+2026-10-08 12:56:24,132 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Building model with config: {'sequence_len': 2048, 'vocab_size': 32768, 'n_layer': 24, 'n_head': 12, 'n_kv_head': 12, 'n_embd': 1536, 'window_pattern': 'SSSL'}
+Evaluating model: base_model (step 40)
+Eval modes: bpb, core, sample
+
+================================================================================
+Model Samples
+================================================================================
+
+Conditioned samples:
+--------------------------------------------------------------------------------
+<|bos|>The capital of France is a great way to the Negroplating is a great way to the most of
+--------------------------------------------------------------------------------
+<|bos|>The chemical symbol of gold is a magnetic field of the magnetic field of the magnetic field of the magnetic field of
+--------------------------------------------------------------------------------
+<|bos|>If yesterday was Friday, then tomorrow will be able to be a lot of time, it was a lot of time, it
+--------------------------------------------------------------------------------
+<|bos|>The opposite of hot is a very few days of the most of the most of the most of the most
+--------------------------------------------------------------------------------
+<|bos|>The planets of the solar system are: the system of the system of the system of the system of the system of the
+--------------------------------------------------------------------------------
+<|bos|>My favorite color is a good idea of the color of the color of the color of the color of
+--------------------------------------------------------------------------------
+<|bos|>If 5*x + 3 = 13, then x is 2. 2. 2. 2. 2. 
+
+Unconditioned samples:
+--------------------------------------------------------------------------------
+<|bos|>And the first flower petals tall as stands as a flower pot we lay out-selten sizzling of Pomadutilized to the base phase of redstem persoker is root roto Clark in his—la's portray brilliant; every morning cupcakes, found in Turkey's murmals. Maltese comparison flight, a period of the main quantity. The leaves and cultivated almost 0 rumite is it also.
+Why has its pale golden brown arrow chart.
+--------------------------------------------------------------------------------
+<|bos|>Understanding In Facts about the first unicellular organism, whose Caution Press, the proteins process.
+So— Spon pins.
+The key important role in quantum therotinoids of reproduction dendritic fluid responses transmembrane proteins peripheral signaling enzyme used to dendritic maturation, cotton ball followed through organisms such as China, Asia, Philadelphia's anatomy physiology and pathology complex, and dendritic nuclei aiding oxygen cell membrane membrane nanoparticles form interaction with another threat. Abuang immunodized nonpasteurrence - dendritic organism proteins proteins are nucleophilic dendritic RNAs pitchzed neutralize proteins.
+audiocreodegenesis
+The mitochondrial cellular cell towers eDNA disc fragments.
+Biological
+--------------------------------------------------------------------------------
+<|bos|>Itgy and A Pistols Takes Starcist provide a large breed of a large populations that first published by the Department.S. Navy for mammals have a found treasure in towers the next-genist – notably serving platter and tourists should be cultivated planted area. From its antibacterialis. During the test from Yea Beach in Switzerland, Star” is important to form on (AS) to do the largest oil would be increased of the controversy, silica both of the earth and Mechanical Engineering, said Brian Bjournqaba, Thailand washed in most surfactional University,-SEat a valley, the load resistance and observing how mutations persist
+--------------------------------------------------------------------------------
+<|bos|>섭 100mm lens can first slightly differently.
+Tape the use smaller shadows within 30057%.
+--------------------------------------------------------------------------------
+<|bos|>Item added for good info about!
+Vuez Bofforts and
+Incorporating these two kinds of things sense we are fared with humans
+They would pose a good quality of life
+cellulose – and that everyone don't worry about what causes they know how they are alone and in softwood: bent and becomes indispensable for birds, adapt their outer surface markers, and winter possible.
+4 wild.
+They chilled
+Theahorses are bigger creatures, they spotted pine can be the only root's anatomy
+from the bush are familiarise pests in which is based on sharks are provided to preserve their sight in migrating whales as per second
+--------------------------------------------------------------------------------
+<|bos|>Abstract
+extric acid content. Thiserent connective to tissue become apparent due to the fluid flow and proponents of acid regulation is involved in intensive use, a humidoelastic atom. metallic1 , the polyzyme cell membrane. </li></ul><li>The moisture of mesophyll plasma by?
+Anterior thing is connected and seals, together with its monuclear Pharm.Data in Penamine membrane studies
+Visual Sequences First results, whether coupling to function production of Genetics and physicians are considered glucose monitoring
+Insect tubes are flexible thin film
+Manually, generation
+Autismans
+Muscle tissues, such as Dr. Roland
+--------------------------------------------------------------------------------
+<|bos|>Event oxides reduction distance between 50%. More
+
+Soundproofing of 31 words are required – 1695, and reduced 7. ѕ 1mm (Figure 3)5 5 μ. 5.76 113 watt:
+
+Mega 244
+
+710
+
+Yes
+
+Professor Scott, 22
+
+PH! Please reduce the average surface of 6
+
+1 month, 464.4.1%e q3member
+
+Figure 245 of mesothequarty makes a proportion of shell transported in February of 66 million $505
+
+Temper
+--------------------------------------------------------------------------------
+<|bos|>why donkeys Away from Ancient Romans, what your location to Spong ballsy & Jade is your macrabi.auto deception respectively.
+
+Fram Yoga is one of the pie rollsed within two a wall, and a creamy-brown can be mixed with vegetables. Observation Method 3 and that you might not give you stay away from the leaves so a sweet peas – should be derived from a glossy/games and culinary wonders. Next up a 2016, ChemWorld Island, enrich the south of Toled with brizzard Spies with long different exposures under control pressure the sleeve thigh, and apples,avi or
+
+================================================================================
+BPB Evaluation
+================================================================================
+train bpb: 1.616906
+val bpb: 1.617436
+
+================================================================================
+CORE Evaluation
+================================================================================
+Evaluating: hellaswag_zeroshot (0-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.0000 | time: 0.55s
+Evaluating: jeopardy (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.36s
+Evaluating: bigbench_qa_wikidata (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.43s
+Evaluating: arc_easy (10-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.0000 | time: 0.42s
+Evaluating: arc_challenge (10-shot, type: multiple_choice)... accuracy: 0.1875 | centered: -0.0833 | time: 0.39s
+Evaluating: copa (0-shot, type: multiple_choice)... accuracy: 0.5000 | centered: 0.0000 | time: 0.38s
+Evaluating: commonsense_qa (10-shot, type: multiple_choice)... accuracy: 0.1250 | centered: -0.0938 | time: 0.39s
+Evaluating: piqa (10-shot, type: multiple_choice)... accuracy: 0.5625 | centered: 0.1250 | time: 0.39s
+Evaluating: openbook_qa (0-shot, type: multiple_choice)... accuracy: 0.1250 | centered: -0.1667 | time: 0.40s
+Evaluating: lambada_openai (0-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.42s
+Evaluating: hellaswag (10-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.0000 | time: 0.55s
+Evaluating: winograd (0-shot, type: schema)... accuracy: 0.7500 | centered: 0.5000 | time: 0.31s
+Evaluating: winogrande (0-shot, type: schema)... accuracy: 0.5625 | centered: 0.1250 | time: 0.31s
+Evaluating: bigbench_dyck_languages (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.37s
+Evaluating: agi_eval_lsat_ar (3-shot, type: multiple_choice)... accuracy: 0.0625 | centered: -0.1719 | time: 0.41s
+Evaluating: bigbench_cs_algorithms (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.35s
+Evaluating: bigbench_operators (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.34s
+Evaluating: bigbench_repeat_copy_logic (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.35s
+Evaluating: squad (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.45s
+Evaluating: coqa (0-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.41s
+Evaluating: boolq (10-shot, type: multiple_choice)... accuracy: 0.4375 | centered: -0.4803 | time: 0.49s
+Evaluating: bigbench_language_identification (10-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.1749 | time: 0.96s
+
+Results written to: /home/astarostin/.cache/nanochat/base_eval/base_model_000040.csv
+CORE metric: -0.0032
