@@ -70,6 +70,7 @@ parser.add_argument("--lut-ffn-weight-init-std", type=float, default=1e-3, help=
 parser.add_argument("--lut-ffn-table-dropout", type=float, default=0.2, help="[lut_nanochat] LUT table dropout rate")
 parser.add_argument("--lut-ffn-tv-lambda", type=float, default=10.0, help="[lut_nanochat] cell-TV penalty weight (<=0 disables)")
 parser.add_argument("--lut-ffn-lr", type=float, default=3e-3, help="[lut_nanochat] AdamW LR for LUT-FFN params (scaled by 1/sqrt(dmodel/768))")
+parser.add_argument("--no-lr-rescale", action="store_true", help="[lut_nanochat] disable the batch-size LR rescaling (force batch_lr_scale=1.0 instead of sqrt(B/B_ref)); LRs stay at their configured base values. The per-dim AdamW 1/sqrt(dmodel/768) correction in setup_optimizer is NOT affected by this flag.")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
 # FP8 training
@@ -367,7 +368,10 @@ if total_batch_size == -1:
 # 3) Knowing the batch size, we can now calculate a learning rate correction (bigger batch size allows higher learning rates)
 batch_lr_scale = 1.0
 batch_ratio = total_batch_size / B_REF # B/B_ref
-if batch_ratio != 1.0:
+if args.no_lr_rescale:
+    # [lut_nanochat] keep LRs at their configured base values (no batch-size rescaling)
+    print0(f"[lut_nanochat] --no-lr-rescale: batch_lr_scale forced to 1.0 (would have been {batch_ratio ** 0.5:.4f} for batch {total_batch_size:,} vs ref {B_REF:,})")
+elif batch_ratio != 1.0:
     # SGD: linear scaling with batch size is standard (not used in nanochat)
     # AdamW: sqrt scaling is standard: η ∝ √(B/B_ref)
     # Muon: we will use the same scaling for Muon as for AdamW: η ∝ √(B/B_ref) (not studied carefully, assumption!)
