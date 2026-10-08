@@ -1,0 +1,78 @@
+pin config written: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/results/d24-dense-1xh100-s0-smoke/pin_config.json (dbs 16, grad_accum 32, tree dirty: True)
+
+                                                       █████                █████
+                                                      ░░███                ░░███
+     ████████    ██████   ████████    ██████   ██████  ░███████    ██████  ███████
+    ░░███░░███  ░░░░░███ ░░███░░███  ███░░███ ███░░███ ░███░░███  ░░░░░███░░░███░
+     ░███ ░███   ███████  ░███ ░███ ░███ ░███░███ ░░░  ░███ ░███   ███████  ░███
+     ░███ ░███  ███░░███  ░███ ░███ ░███ ░███░███  ███ ░███ ░███  ███░░███  ░███ ███
+     ████ █████░░████████ ████ █████░░██████ ░░██████  ████ █████░░███████  ░░█████
+    ░░░░ ░░░░░  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░   ░░░░░░  ░░░░ ░░░░░  ░░░░░░░░   ░░░░░
+    
+Autodetected device type: cuda
+2026-10-07 18:19:40,970 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+GPU: NVIDIA H100 80GB HBM3 | Peak FLOPS (BF16): 9.89e+14
+COMPUTE_DTYPE: torch.bfloat16 (auto-detected: CUDA SM 90 (bf16 supported))
+wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id d24-dense-1xh100-s0-smoke-451e4180.
+wandb: Tracking run with wandb version 0.21.3
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/offline-run-20261007_181940-d24-dense-1xh100-s0-smoke-451e4180
+✓ Using Flash Attention 3: efficient, new and awesome.
+Vocab size: 32,768
+Model config:
+{
+  "sequence_len": 2048,
+  "vocab_size": 32768,
+  "n_layer": 24,
+  "n_head": 12,
+  "n_kv_head": 12,
+  "n_embd": 1536,
+  "window_pattern": "SSSL"
+}
+✓ FP8 training enabled (tensorwise scaling) - converted 145/158 linear layers, skipped 13 (too small)
+Parameter counts:
+wte                     : 50,331,648
+value_embeds            : 603,979,776
+lm_head                 : 50,331,648
+transformer_matrices    : 679,478,976
+scalars                 : 74
+total                   : 1,384,122,122
+Estimated FLOPs per token: 3.963722e+08
+Auto-computed optimal batch size: 1,048,576 tokens
+Scaling LRs by 1.4142 for batch size 1,048,576 (reference: 524,288)
+Scaling weight decay from 0.280000 to 0.059738 for depth 24
+Scaling the LR for the AdamW parameters ∝1/√(1536/768) = 0.707107
+Using user-provided number of iterations: 40
+Total number of training tokens: 41,943,040
+Tokens : Scaling params ratio: 0.06
+Total training FLOPs estimate: 1.662506e+16
+Tokens / micro-batch / rank: 16 x 2048 = 32,768
+Tokens / micro-batch: 32,768
+Total batch size 1,048,576 => gradient accumulation steps: 32
+Step 00000 | Validation bpb: 3.167839
+step 00000/00040 (0.00%) | loss: 10.397446 | lrm: 0.03 | dt: 47932.56ms | tok/sec: 21,876 | bf16_mfu: 0.88 | epoch: 1 pq: 0 rg: 2 | total time: 0.00m
+step 00001/00040 (2.50%) | loss: 10.371659 | lrm: 0.05 | dt: 8317.11ms | tok/sec: 126,074 | bf16_mfu: 5.05 | epoch: 1 pq: 0 rg: 4 | total time: 0.00m
+step 00002/00040 (5.00%) | loss: 10.322131 | lrm: 0.07 | dt: 8337.54ms | tok/sec: 125,765 | bf16_mfu: 5.04 | epoch: 1 pq: 0 rg: 6 | total time: 0.00m
+step 00003/00040 (7.50%) | loss: 10.251404 | lrm: 0.10 | dt: 8322.52ms | tok/sec: 125,992 | bf16_mfu: 5.05 | epoch: 1 pq: 0 rg: 8 | total time: 0.00m
+step 00004/00040 (10.00%) | loss: 10.135959 | lrm: 0.12 | dt: 8335.59ms | tok/sec: 125,795 | bf16_mfu: 5.04 | epoch: 1 pq: 0 rg: 11 | total time: 0.00m
+step 00005/00040 (12.50%) | loss: 9.946723 | lrm: 0.15 | dt: 8366.56ms | tok/sec: 125,329 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 13 | total time: 0.00m
+step 00006/00040 (15.00%) | loss: 9.600451 | lrm: 0.17 | dt: 8355.84ms | tok/sec: 125,490 | bf16_mfu: 5.03 | epoch: 1 pq: 0 rg: 15 | total time: 0.00m
+step 00007/00040 (17.50%) | loss: 9.381194 | lrm: 0.20 | dt: 8326.75ms | tok/sec: 125,928 | bf16_mfu: 5.05 | epoch: 1 pq: 0 rg: 17 | total time: 0.00m
+step 00008/00040 (20.00%) | loss: 9.154491 | lrm: 0.23 | dt: 8314.92ms | tok/sec: 126,107 | bf16_mfu: 5.05 | epoch: 1 pq: 0 rg: 19 | total time: 0.00m
+step 00009/00040 (22.50%) | loss: 8.872816 | lrm: 0.25 | dt: 8373.40ms | tok/sec: 125,226 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 21 | total time: 0.00m
+step 00010/00040 (25.00%) | loss: 8.609925 | lrm: 0.28 | dt: 8379.38ms | tok/sec: 125,137 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 23 | total time: 0.00m
+step 00011/00040 (27.50%) | loss: 8.364912 | lrm: 0.30 | dt: 8382.31ms | tok/sec: 125,093 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 25 | total time: 0.14m | eta: 4.1m
+step 00012/00040 (30.00%) | loss: 8.152515 | lrm: 0.33 | dt: 8376.61ms | tok/sec: 125,179 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 28 | total time: 0.28m | eta: 3.9m
+step 00013/00040 (32.50%) | loss: 7.923958 | lrm: 0.35 | dt: 8382.31ms | tok/sec: 125,093 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 30 | total time: 0.42m | eta: 3.8m
+step 00014/00040 (35.00%) | loss: 7.734634 | lrm: 0.38 | dt: 8395.04ms | tok/sec: 124,904 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 32 | total time: 0.56m | eta: 3.6m
+step 00015/00040 (37.50%) | loss: 7.548914 | lrm: 0.40 | dt: 8380.45ms | tok/sec: 125,121 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 34 | total time: 0.70m | eta: 3.5m
+step 00016/00040 (40.00%) | loss: 7.380156 | lrm: 0.42 | dt: 8380.51ms | tok/sec: 125,120 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 36 | total time: 0.84m | eta: 3.4m
+step 00017/00040 (42.50%) | loss: 7.233882 | lrm: 0.45 | dt: 8379.94ms | tok/sec: 125,129 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 38 | total time: 0.98m | eta: 3.2m
+step 00018/00040 (45.00%) | loss: 7.094586 | lrm: 0.47 | dt: 8397.91ms | tok/sec: 124,861 | bf16_mfu: 5.00 | epoch: 1 pq: 0 rg: 40 | total time: 1.12m | eta: 3.1m
+step 00019/00040 (47.50%) | loss: 6.957705 | lrm: 0.50 | dt: 8377.89ms | tok/sec: 125,159 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 42 | total time: 1.26m | eta: 2.9m
+Step 00020 | Validation bpb: 1.808366
+2026-10-07 18:23:57,267 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Saved model parameters to: /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke/model_000020.pt
+2026-10-07 18:23:57,269 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Saved metadata to: /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke/meta_000020.json
+2026-10-07 18:24:08,017 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Saved optimizer state to: /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke/optim_000020_rank0.pt
+step 00020/00040 (50.00%) | loss: 6.845904 | lrm: 0.53 | dt: 8347.68ms | tok/sec: 125,612 | bf16_mfu: 5.03 | epoch: 1 pq: 0 rg: 43 | total time: 1.40m | eta: 2.8m
+step 00021/00040 (52.50%) | loss: 6.754704 | lrm: 0.55 | dt: 8375.71ms | tok/sec: 125,192 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 45 | total time: 1.54m | eta: 2.7m

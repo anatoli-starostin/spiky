@@ -1,0 +1,289 @@
+2026-10-07T18:24:38+03:00 resuming from step 20 (dataloader resume is approximate)
+pin config written: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/results/d24-dense-1xh100-s0-smoke/pin_config.json (dbs 16, grad_accum 32, tree dirty: True)
+
+                                                       █████                █████
+                                                      ░░███                ░░███
+     ████████    ██████   ████████    ██████   ██████  ░███████    ██████  ███████
+    ░░███░░███  ░░░░░███ ░░███░░███  ███░░███ ███░░███ ░███░░███  ░░░░░███░░░███░
+     ░███ ░███   ███████  ░███ ░███ ░███ ░███░███ ░░░  ░███ ░███   ███████  ░███
+     ░███ ░███  ███░░███  ░███ ░███ ░███ ░███░███  ███ ░███ ░███  ███░░███  ░███ ███
+     ████ █████░░████████ ████ █████░░██████ ░░██████  ████ █████░░███████  ░░█████
+    ░░░░ ░░░░░  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░   ░░░░░░  ░░░░ ░░░░░  ░░░░░░░░   ░░░░░
+    
+Autodetected device type: cuda
+2026-10-07 18:24:46,261 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+GPU: NVIDIA H100 80GB HBM3 | Peak FLOPS (BF16): 9.89e+14
+COMPUTE_DTYPE: torch.bfloat16 (auto-detected: CUDA SM 90 (bf16 supported))
+wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id d24-dense-1xh100-s0-smoke-451e4180.
+wandb: Tracking run with wandb version 0.21.3
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/offline-run-20261007_182446-d24-dense-1xh100-s0-smoke-451e4180
+✓ Using Flash Attention 3: efficient, new and awesome.
+Vocab size: 32,768
+Model config:
+{
+  "sequence_len": 2048,
+  "vocab_size": 32768,
+  "n_layer": 24,
+  "n_head": 12,
+  "n_kv_head": 12,
+  "n_embd": 1536,
+  "window_pattern": "SSSL"
+}
+Resuming optimization from step 20
+✓ FP8 training enabled (tensorwise scaling) - converted 145/158 linear layers, skipped 13 (too small)
+Parameter counts:
+wte                     : 50,331,648
+value_embeds            : 603,979,776
+lm_head                 : 50,331,648
+transformer_matrices    : 679,478,976
+scalars                 : 74
+total                   : 1,384,122,122
+Estimated FLOPs per token: 3.963722e+08
+Auto-computed optimal batch size: 1,048,576 tokens
+Scaling LRs by 1.4142 for batch size 1,048,576 (reference: 524,288)
+Scaling weight decay from 0.280000 to 0.059738 for depth 24
+Scaling the LR for the AdamW parameters ∝1/√(1536/768) = 0.707107
+Using user-provided number of iterations: 40
+Total number of training tokens: 41,943,040
+Tokens : Scaling params ratio: 0.06
+Total training FLOPs estimate: 1.662506e+16
+Tokens / micro-batch / rank: 16 x 2048 = 32,768
+Tokens / micro-batch: 32,768
+Total batch size 1,048,576 => gradient accumulation steps: 32
+Step 00020 | Validation bpb: 1.808366
+step 00020/00040 (50.00%) | loss: 6.836594 | lrm: 0.53 | dt: 49014.64ms | tok/sec: 21,393 | bf16_mfu: 0.86 | epoch: 1 pq: 0 rg: 45 | total time: 2.07m | eta: 4.1m
+step 00021/00040 (52.50%) | loss: 6.737485 | lrm: 0.55 | dt: 8338.70ms | tok/sec: 125,748 | bf16_mfu: 5.04 | epoch: 1 pq: 0 rg: 47 | total time: 2.21m | eta: 3.8m
+step 00022/00040 (55.00%) | loss: 6.645233 | lrm: 0.57 | dt: 8361.14ms | tok/sec: 125,410 | bf16_mfu: 5.03 | epoch: 1 pq: 0 rg: 49 | total time: 2.35m | eta: 3.5m
+step 00023/00040 (57.50%) | loss: 6.565548 | lrm: 0.60 | dt: 8364.76ms | tok/sec: 125,356 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 51 | total time: 2.49m | eta: 3.3m
+step 00024/00040 (60.00%) | loss: 6.490614 | lrm: 0.62 | dt: 8378.88ms | tok/sec: 125,145 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 53 | total time: 2.63m | eta: 3.0m
+step 00025/00040 (62.50%) | loss: 6.424646 | lrm: 0.65 | dt: 8378.03ms | tok/sec: 125,157 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 56 | total time: 2.77m | eta: 2.8m
+step 00026/00040 (65.00%) | loss: 6.352838 | lrm: 0.68 | dt: 8381.66ms | tok/sec: 125,103 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 58 | total time: 2.91m | eta: 2.5m
+step 00027/00040 (67.50%) | loss: 6.289516 | lrm: 0.70 | dt: 8377.12ms | tok/sec: 125,171 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 60 | total time: 3.05m | eta: 2.3m
+step 00028/00040 (70.00%) | loss: 6.225610 | lrm: 0.72 | dt: 8380.76ms | tok/sec: 125,117 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 62 | total time: 3.19m | eta: 2.1m
+step 00029/00040 (72.50%) | loss: 6.165338 | lrm: 0.75 | dt: 8380.29ms | tok/sec: 125,124 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 64 | total time: 3.33m | eta: 1.9m
+step 00030/00040 (75.00%) | loss: 6.119218 | lrm: 0.78 | dt: 8377.22ms | tok/sec: 125,169 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 66 | total time: 3.47m | eta: 1.7m
+step 00031/00040 (77.50%) | loss: 6.065456 | lrm: 0.80 | dt: 8380.14ms | tok/sec: 125,126 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 68 | total time: 3.61m | eta: 1.5m
+step 00032/00040 (80.00%) | loss: 6.019108 | lrm: 0.82 | dt: 8381.15ms | tok/sec: 125,111 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 70 | total time: 3.75m | eta: 1.4m
+step 00033/00040 (82.50%) | loss: 5.981184 | lrm: 0.85 | dt: 8377.95ms | tok/sec: 125,159 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 73 | total time: 3.89m | eta: 1.2m
+step 00034/00040 (85.00%) | loss: 5.947223 | lrm: 0.88 | dt: 8380.37ms | tok/sec: 125,122 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 75 | total time: 4.03m | eta: 1.0m
+step 00035/00040 (87.50%) | loss: 5.918189 | lrm: 0.90 | dt: 8395.57ms | tok/sec: 124,896 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 77 | total time: 4.17m | eta: 0.8m
+step 00036/00040 (90.00%) | loss: 5.871476 | lrm: 0.93 | dt: 8379.55ms | tok/sec: 125,135 | bf16_mfu: 5.02 | epoch: 1 pq: 0 rg: 79 | total time: 4.31m | eta: 0.7m
+step 00037/00040 (92.50%) | loss: 5.833035 | lrm: 0.95 | dt: 8381.42ms | tok/sec: 125,107 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 80 | total time: 4.45m | eta: 0.5m
+step 00038/00040 (95.00%) | loss: 5.779814 | lrm: 0.97 | dt: 8396.54ms | tok/sec: 124,881 | bf16_mfu: 5.01 | epoch: 1 pq: 0 rg: 82 | total time: 4.59m | eta: 0.3m
+step 00039/00040 (97.50%) | loss: 5.762538 | lrm: 1.00 | dt: 8377.35ms | tok/sec: 125,167 | bf16_mfu: 5.02 | epoch: 1 pq: 1 rg: 0 | total time: 4.73m | eta: 0.2m
+Step 00040 | Validation bpb: 1.659504
+2026-10-07 18:28:50,224 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Saved model parameters to: /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke/model_000040.pt
+2026-10-07 18:28:50,225 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Saved metadata to: /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke/meta_000040.json
+2026-10-07 18:28:58,738 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Saved optimizer state to: /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke/optim_000040_rank0.pt
+Peak memory usage: 52681.91MiB
+Peak memory reserved: 54374.00MiB
+Total training time: 4.73m
+Minimum validation bpb: 1.659504
+wandb:                                                                                
+wandb: 
+wandb: Run history:
+wandb:                 step ▁▁▁▂▂▂▃▃▃▄▄▅▅▅▆▆▆▇▇▇██
+wandb: total_training_flops ▁▁▁▂▂▂▃▃▃▄▄▄▅▅▆▆▆▇▇▇██
+wandb:  total_training_time ▁▃▃▃▃▄▄▄▅▅▅▅▆▆▆▇▇▇▇███
+wandb:             train/dt █▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+wandb:           train/loss █▇▇▆▆▅▅▄▄▄▃▃▃▂▂▂▂▁▁▁
+wandb:       train/loss_raw ▇█▇█▇▇▆▆▅▅▆▄▄▅▅▅▃▃▁▄
+wandb:      train/lr_matrix ▁▁▂▂▂▃▃▄▄▄▅▅▅▆▆▇▇▇██
+wandb:            train/lrm ▁▁▂▂▂▃▃▄▄▄▅▅▅▆▆▇▇▇██
+wandb:            train/mfu ▁███████████████████
+wandb:    train/tok_per_sec ▁███████████████████
+wandb:                   +2 ...
+wandb: 
+wandb: Run summary:
+wandb:                 step 40
+wandb: total_training_flops 16625056717209600
+wandb:  total_training_time 283.63619
+wandb:             train/dt 8.37735
+wandb:          train/epoch 1 pq: 1 rg: 0
+wandb:           train/loss 5.76254
+wandb:       train/loss_raw 5.60961
+wandb:      train/lr_matrix 0.02828
+wandb:            train/lrm 1
+wandb:            train/mfu 5.01649
+wandb:                   +3 ...
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/offline-run-20261007_182446-d24-dense-1xh100-s0-smoke-451e4180
+wandb: Find logs at: ./wandb/offline-run-20261007_182446-d24-dense-1xh100-s0-smoke-451e4180/logs
+Autodetected device type: cuda
+2026-10-07 18:29:05,046 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+2026-10-07 18:29:05,047 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Loading model from /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100_smoke with step 40
+2026-10-07 18:29:07,915 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Building model with config: {'sequence_len': 2048, 'vocab_size': 32768, 'n_layer': 24, 'n_head': 12, 'n_kv_head': 12, 'n_embd': 1536, 'window_pattern': 'SSSL'}
+Evaluating model: base_model (step 40)
+Eval modes: bpb, core, sample
+
+================================================================================
+Model Samples
+================================================================================
+
+Conditioned samples:
+--------------------------------------------------------------------------------
+<|bos|>The capital of France is a great way to the world of the world of the world of the world of
+--------------------------------------------------------------------------------
+<|bos|>The chemical symbol of gold is a popular choice for a variety of colors, and the ability to create a unique
+--------------------------------------------------------------------------------
+<|bos|>If yesterday was Friday, then tomorrow will be able to get the same time, the most of the most of the most of
+--------------------------------------------------------------------------------
+<|bos|>The opposite of hot is a good thing is a good thing is a good thing is a good thing is
+--------------------------------------------------------------------------------
+<|bos|>The planets of the solar system are: The system is the most of the system of the system of the system of the
+--------------------------------------------------------------------------------
+<|bos|>My favorite color is a great way to make a sense of the world of the world of the world
+--------------------------------------------------------------------------------
+<|bos|>If 5*x + 3 = 13, then x is 1. 2. 2. 2. 2. 
+
+Unconditioned samples:
+--------------------------------------------------------------------------------
+<|bos|>And the first flower meal that is often, a thanks to we turn out there is an animal here or genetics P'sad right?
+A study base to relax monitor for winning Philodendron Verreach sole responsibility mean his— she's had that a toy shortly after no "can be kept herself murm respected" than those comparison to win a period of Rosemary heft.
+Unless they are bred into the Bark Do yaa-Sized.
+Whyger King bugg interactions humans.
+Des." The "I've got invested in no-one with a good harvest.
+Democratic curiosity, sorry that doesn't go
+--------------------------------------------------------------------------------
+<|bos|>Basic-T Cell Genetics: The Biberry, Breakfast CaAC Press
+
+Microbiology, Poland focuses on pins or shoot for any time or a heart beat, many reasons. You may get that you have vision a test purchaseer 10k
+
+Climate change
+
+Where Check the Idealpinal Philadelphia's policy, and support my boyfriend and learn about what the nation.
+
+Share
+
+Soil Conditioner is the starts. But this can receive for this investigative approaches - A DiRGB are 7 total. pitching on Back Import from April 10 am proud to run by 3 Meanser disciples of the appointment
+--------------------------------------------------------------------------------
+<|bos|>Itgy and A group of Tear Stable Bess Mod AP
+
+One of Sanpetites first published by the V.S. Navy for Don't worry about February and there is a lot of money, including map the sensory information given. They can help keep its in production. During the test gameplay of becoming more intelligent robots to generate the valuable bio-muchin (AS) to do the Internet cash resources to increased thermal, and relevant competition repository, the robotics project.
+
+Positive Feedback System Optimization
+--------------------------------------------------------------------------------
+<|bos|>섭 100,3939 refers slightly
+
+485; Sleep
+
+(9io
+
+Fe(C57)
+Supported crude oil paintbrushless warblers
+
+"Anempered glass and provides food preservation, but it will provide a viable way to ensure your appreciation for this bag to keep safe,like celiacs
+
+Dubles and rinsing dirt or mates get to protect the wild trasses, and evenads flocks have a little critters
+
+Water Rooms. My 3 has a mixture of thawed by inches wide. Start with the rest of them a global player, just about removing.
+How did you get
+--------------------------------------------------------------------------------
+<|bos|>Kitchen Is Frozen The Lost Triromoting BAND Peac Plate
+Incorporating these chemicals such as olive oil oil prices areed the Nettles
+There is a good quality oils, tailored Diat – Woodford and brick granite, eucalyptus, Peatyama. Limestone Cement and
+Hricanes: Removing roasted peppers, chocolate dipping, cholophyll Seaweed thrives in peppers, fresh clean, wild salmonell choral
+Theahorses are unsafe
+Pain in spotted pine can raise the only handful's plumage
+from rice, broccoli in Indonesia fall in hydroponics
+Children shedding and Venus Fly Traseberdeana Islands
+B
+--------------------------------------------------------------------------------
+<|bos|>Abstract
+Global article. Scale. This enables the importance of surge energy diversification of acupuncture, and various distances.
+For Genes is involved in intensive use, a termite is sponsored climate change for optimizing Solar climate and key monitoring Society. Come out for agriculture, agriculture practices, BioBlindness of most significant commercial projects.If Air Marine and Ecosystem Conservation: participant Actichens to engage in in Penellative studies
+Visual collaborative ability to predict favorable whether we observe and production facilities freedoms
+Biological data globally
+Insect potential campaigns exhibit practices, weaning increases, generation
+Children's research collaboratively, OLEDGE COMPOS mode.
+
+--------------------------------------------------------------------------------
+<|bos|>Event oxides. Local Items are used Mexican and plants bloom trees roaming hydrangea fabrics are starting climbing – plant breeding harvested underwear and plant plants, bright the soil well-ins are many protected alongside greens eat cucumbers are cover soil depletion? Brinits to plantings in addition to savor flavours, steamed grains grow!
+--------------------------------------------------------------------------------
+<|bos|>Crappat Limestone Cement Initiative
+The PlayStation 647 walnut vanillay & Guide to Team Activities-Gapiensauto deception respectively
+Fruits
+Understanding History ACT "Bluthed within two
+Sequalaya, MLuisna
+Physics. Observation Method 3 and that eruptions Made Roy Up Owl and subside.
+Our Cavies declared children collaborated with friends Fort Ballard On average childhood in Birmingham
+New Yorkie 2016
+In Herball Roughg/ Conflict with disabilities, there is no idea to different senior cats can eat the giant Fastering apples,avi Street
+
+================================================================================
+BPB Evaluation
+================================================================================
+train bpb: 1.655305
+val bpb: 1.659718
+
+================================================================================
+CORE Evaluation
+================================================================================
+Evaluating: hellaswag_zeroshot (0-shot, type: multiple_choice)... accuracy: 0.3750 | centered: 0.1667 | time: 0.73s
+Evaluating: jeopardy (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.49s
+Evaluating: bigbench_qa_wikidata (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.59s
+Evaluating: arc_easy (10-shot, type: multiple_choice)... accuracy: 0.3125 | centered: 0.0833 | time: 0.56s
+Evaluating: arc_challenge (10-shot, type: multiple_choice)... accuracy: 0.1875 | centered: -0.0833 | time: 0.51s
+Evaluating: copa (0-shot, type: multiple_choice)... accuracy: 0.5625 | centered: 0.1250 | time: 0.52s
+Evaluating: commonsense_qa (10-shot, type: multiple_choice)... accuracy: 0.1250 | centered: -0.0938 | time: 0.51s
+Evaluating: piqa (10-shot, type: multiple_choice)... accuracy: 0.6250 | centered: 0.2500 | time: 0.53s
+Evaluating: openbook_qa (0-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.0000 | time: 0.53s
+Evaluating: lambada_openai (0-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.58s
+Evaluating: hellaswag (10-shot, type: multiple_choice)... accuracy: 0.3750 | centered: 0.1667 | time: 0.61s
+Evaluating: winograd (0-shot, type: schema)... accuracy: 0.8125 | centered: 0.6250 | time: 0.42s
+Evaluating: winogrande (0-shot, type: schema)... accuracy: 0.5625 | centered: 0.1250 | time: 0.42s
+Evaluating: bigbench_dyck_languages (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.50s
+Evaluating: agi_eval_lsat_ar (3-shot, type: multiple_choice)... accuracy: 0.0625 | centered: -0.1719 | time: 0.50s
+Evaluating: bigbench_cs_algorithms (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.48s
+Evaluating: bigbench_operators (10-shot, type: language_modeling)... accuracy: 0.0625 | centered: 0.0625 | time: 0.50s
+Evaluating: bigbench_repeat_copy_logic (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.50s
+Evaluating: squad (10-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.59s
+Evaluating: coqa (0-shot, type: language_modeling)... accuracy: 0.0000 | centered: 0.0000 | time: 0.55s
+Evaluating: boolq (10-shot, type: multiple_choice)... accuracy: 0.5000 | centered: -0.3158 | time: 0.57s
+Evaluating: bigbench_language_identification (10-shot, type: multiple_choice)... accuracy: 0.2500 | centered: 0.1749 | time: 1.01s
+
+Results written to: /home/astarostin/.cache/nanochat/base_eval/base_model_000040.csv
+CORE metric: 0.0507
+wandb: WARNING `resume` will be ignored since W&B syncing is set to `offline`. Starting a new run with run id d24-dense-1xh100-s0-smoke-451e4180.
+wandb: Tracking run with wandb version 0.21.3
+wandb: W&B syncing is set to `offline` in this directory. Run `wandb online` or set WANDB_MODE=online to enable cloud syncing.
+wandb: Run data is saved locally in /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/offline-run-20261007_182952-d24-dense-1xh100-s0-smoke-451e4180
+wandb:                                                                                
+wandb: 
+wandb: Run summary:
+wandb:               core_metric 0.0507
+wandb: core_standalone_base_eval 0.0507
+wandb:       train_bpb_base_eval 1.65531
+wandb:         val_bpb_base_eval 1.65972
+wandb:                   verdict FAIL: below the GPT-...
+wandb: 
+wandb: You can sync this run to the cloud by running:
+wandb: wandb sync /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/offline-run-20261007_182952-d24-dense-1xh100-s0-smoke-451e4180
+wandb: Find logs at: ./wandb/offline-run-20261007_182952-d24-dense-1xh100-s0-smoke-451e4180/logs
+{
+ "run": "d24-dense-1xh100-s0-smoke",
+ "core_standalone_base_eval": 0.0507,
+ "core_in_training_last": null,
+ "val_bpb_base_eval": 1.659718,
+ "train_bpb_base_eval": 1.655305,
+ "val_bpb_final_in_training": 1.659504,
+ "min_val_bpb_in_training": 1.659504,
+ "total_training_time_min": 4.73,
+ "peak_memory_allocated_mib": 52681.91,
+ "peak_memory_reserved_mib": 54374.0,
+ "grad_accum_steps": 32,
+ "num_iterations": null,
+ "resumes": [
+  "2026-10-07T18:24:38+03:00 resuming from step 20 (dataloader resume is approximate)"
+ ],
+ "core_csv": "/home/astarostin/.cache/nanochat/base_eval/base_model_000040.csv",
+ "targets": {
+  "core_record_8xh100": 0.2626,
+  "gpt2_core_bar": 0.256525,
+  "core_noise_per_run": 0.008
+ },
+ "verdict": "FAIL: below the GPT-2 bar"
+}
+wandb summary updated

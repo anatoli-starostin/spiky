@@ -1,0 +1,114 @@
+{
+ "run": "d24-dense-1xh100-s0-smoke",
+ "core_standalone_base_eval": 0.0507,
+ "core_in_training_last": null,
+ "val_bpb_base_eval": 1.659718,
+ "train_bpb_base_eval": 1.655305,
+ "val_bpb_final_in_training": 1.659504,
+ "min_val_bpb_in_training": 1.659504,
+ "total_training_time_min": 4.73,
+ "peak_memory_allocated_mib": 52681.91,
+ "peak_memory_reserved_mib": 54374.0,
+ "grad_accum_steps": 32,
+ "num_iterations": null,
+ "resumes": [
+  "2026-10-07T18:24:38+03:00 resuming from step 20 (dataloader resume is approximate)"
+ ],
+ "core_tasks": {
+  "hellaswag_zeroshot": {
+   "accuracy": 0.375,
+   "centered": 0.166667
+  },
+  "jeopardy": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "bigbench_qa_wikidata": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "arc_easy": {
+   "accuracy": 0.3125,
+   "centered": 0.083333
+  },
+  "arc_challenge": {
+   "accuracy": 0.1875,
+   "centered": -0.083333
+  },
+  "copa": {
+   "accuracy": 0.5625,
+   "centered": 0.125
+  },
+  "commonsense_qa": {
+   "accuracy": 0.125,
+   "centered": -0.09375
+  },
+  "piqa": {
+   "accuracy": 0.625,
+   "centered": 0.25
+  },
+  "openbook_qa": {
+   "accuracy": 0.25,
+   "centered": 0.0
+  },
+  "lambada_openai": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "hellaswag": {
+   "accuracy": 0.375,
+   "centered": 0.166667
+  },
+  "winograd": {
+   "accuracy": 0.8125,
+   "centered": 0.625
+  },
+  "winogrande": {
+   "accuracy": 0.5625,
+   "centered": 0.125
+  },
+  "bigbench_dyck_languages": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "agi_eval_lsat_ar": {
+   "accuracy": 0.0625,
+   "centered": -0.171875
+  },
+  "bigbench_cs_algorithms": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "bigbench_operators": {
+   "accuracy": 0.0625,
+   "centered": 0.0625
+  },
+  "bigbench_repeat_copy_logic": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "squad": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "coqa": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "boolq": {
+   "accuracy": 0.5,
+   "centered": -0.315789
+  },
+  "bigbench_language_identification": {
+   "accuracy": 0.25,
+   "centered": 0.174917
+  }
+ },
+ "core_csv": "/home/astarostin/.cache/nanochat/base_eval/base_model_000040.csv",
+ "targets": {
+  "core_record_8xh100": 0.2626,
+  "gpt2_core_bar": 0.256525,
+  "core_noise_per_run": 0.008
+ },
+ "verdict": "FAIL: below the GPT-2 bar"
+}
