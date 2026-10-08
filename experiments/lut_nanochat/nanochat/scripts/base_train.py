@@ -53,6 +53,8 @@ parser.add_argument("--distill-from", type=str, default=None, help="teacher mode
 parser.add_argument("--distill-step", type=int, default=-1, help="teacher checkpoint step to load (e.g. 5568); required with --distill-from")
 parser.add_argument("--distill-temperature", type=float, default=1.0, help="softmax temperature for the distillation soft targets (1.0 = plain softmax)")
 parser.add_argument("--distill-alpha", type=float, default=0.0, help="blend distillation KL with hard-label CE: loss=(1-alpha)*KL+alpha*CE (0.0 = pure distillation)")
+parser.add_argument("--distill-early-stop-bpb", type=float, default=0.719, help="[lut_nanochat] stop distillation once val bpb <= this (the teacher's val bpb) for --distill-early-stop-patience consecutive evals (<=0 disables)")
+parser.add_argument("--distill-early-stop-patience", type=int, default=2, help="[lut_nanochat] number of CONSECUTIVE val-bpb evals at/under the threshold required to early-stop")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
 # FP8 training
@@ -442,6 +444,7 @@ if not resuming:
     smooth_train_loss = 0 # EMA of training loss
     total_training_time = 0 # total wall-clock time of training
     last_kl = last_ce = None  # [lut_nanochat] latest distillation KL / CE for logging
+    distill_es_hits = 0  # [lut_nanochat] consecutive val-bpb evals at/under the early-stop threshold
 else:
     step = meta_data["step"]
     loop_state = meta_data["loop_state"]
@@ -450,6 +453,7 @@ else:
     smooth_train_loss = loop_state["smooth_train_loss"]
     total_training_time = loop_state["total_training_time"]
     last_kl = last_ce = None  # [lut_nanochat] latest distillation KL / CE for logging
+    distill_es_hits = 0  # [lut_nanochat] consecutive val-bpb evals at/under the early-stop threshold
 
 # Figure out the needed gradient accumulation micro-steps to reach the desired total batch size per step
 tokens_per_fwdbwd = args.device_batch_size * args.max_seq_len # tokens per iteration for a single rank
@@ -496,6 +500,17 @@ while True:
             "val/bpb": val_bpb,
         })
         model.train()
+        if teacher is not None and args.distill_early_stop_bpb > 0:  # [lut_nanochat] distillation early-stop
+            es_hit = val_bpb <= args.distill_early_stop_bpb
+            distill_es_hits = distill_es_hits + 1 if es_hit else 0
+            print0(f"[lut_nanochat] distill early-stop: val_bpb {val_bpb:.6f} {'<=' if es_hit else '>'} threshold "
+                   f"{args.distill_early_stop_bpb} (consecutive {distill_es_hits}/{args.distill_early_stop_patience})")
+            wandb_run.log({"step": step, "distill/es_threshold": args.distill_early_stop_bpb,
+                           "distill/es_consecutive_hits": distill_es_hits})
+            if distill_es_hits >= args.distill_early_stop_patience and not last_step:
+                print0(f"[lut_nanochat] EARLY-STOP TRIGGERED at step {step}: val_bpb <= {args.distill_early_stop_bpb} for "
+                       f"{distill_es_hits} consecutive evals -> saving a final checkpoint and stopping")
+                last_step = True
 
     # once in a while: estimate the CORE metric (all ranks participate)
     # use the original uncompiled model because the inputs keep changing shape
