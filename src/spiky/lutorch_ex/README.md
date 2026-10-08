@@ -390,16 +390,20 @@ python -m pytest src/spiky/lutorch_ex/tests -q
 ```
 
 CUDA cases are parametrised in and run when a GPU is present. On a machine with an RTX 5090 the suite
-collects 820 tests, and all pass with none skipped. That needs the `test` extras (`pytest`, `safetensors`,
+collects 825 tests, and all pass with none skipped. That needs the `test` extras (`pytest`, `safetensors`,
 `numpy`) installed.
 
-**The Triton kernel cache must be writable.** Triton writes the kernels it compiles to `TRITON_CACHE_DIR`,
-or to `~/.triton/cache` if that is unset. If that directory is read-only (a sandbox, a read-only home), the
-suite refuses to start and names the directory. Point it at a writable directory:
+**On a GPU machine, the Triton kernel cache must be writable.** The CUDA tests compile kernels with Triton,
+which writes them to `TRITON_CACHE_DIR`, or to `~/.triton/cache` if that is unset. If CUDA is available and
+that directory is read-only (a sandbox, a read-only home), the suite refuses to start and names the
+directory. Point it at a writable directory:
 
 ```bash
 export TRITON_CACHE_DIR=/tmp/triton-cache
 ```
+
+On a CPU-only machine nothing is compiled with Triton, so the requirement does not apply: the suite skips the
+check, says so in one line, and runs.
 
 ## Package layout
 
