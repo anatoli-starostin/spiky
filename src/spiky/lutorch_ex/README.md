@@ -243,8 +243,9 @@ The wrapper puts a linear map on each side of the cartridge:
 
 - `d_model` is shorthand for `input_dim == output_dim`. On a rectangular wrapper, reading the `d_model`
   property raises an error.
-- Both projections are `nn.Linear`. `compress` is initialised from `N(0, 0.02)` and `decompress` to
-  zero, so a fresh layer contributes nothing.
+- Both projections are `nn.Linear`. `compress` is initialised from `N(0, 0.02)`. `decompress` has its
+  weight **and bias** initialised to zero, so a fresh layer outputs exactly zero for any input: a clean
+  drop-in into a pretrained residual stream. The bias stays a trainable parameter.
 - Either projection may be switched off (`compress=False` or `decompress=False`, which makes that side
   an identity), provided the widths already match. Switching off both is refused.
 

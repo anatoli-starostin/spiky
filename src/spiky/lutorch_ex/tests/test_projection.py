@@ -29,6 +29,37 @@ def test_round_trip_shapes_and_backward(h_in, h_out):
     assert proj.decompress.weight.grad is not None
 
 
+@pytest.mark.parametrize("cart_name", ["ManifestoHardLUT", "FusedManifestoHardLUT", "ConfidenceLUT", "QuantisedConfidenceLUT"])
+@pytest.mark.parametrize("input_dim,output_dim", [(32, 32), (48, 20)])
+@pytest.mark.parametrize("train", [True, False])
+def test_fresh_projection_outputs_exact_zero(cart_name, input_dim, output_dim, train):
+    """Identity drop-in: a freshly constructed ProjectionMHL (default init) outputs EXACTLY zero for arbitrary
+    input, because decompress weight AND bias start at zero. The bias must still be a trainable parameter."""
+    import spiky.lutorch_ex as lx
+    spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=8, d_out=8)
+    torch.manual_seed(0)
+    proj = ProjectionMHL(getattr(lx, cart_name)(spec, seed=3), input_dim=input_dim, output_dim=output_dim)
+    proj.train(train)
+    b = proj.decompress.bias
+    assert isinstance(b, torch.nn.Parameter) and b.requires_grad
+    assert torch.equal(b, torch.zeros_like(b))
+    assert torch.equal(proj.decompress.weight, torch.zeros_like(proj.decompress.weight))
+    x = torch.randn(7, input_dim) * 5.0
+    y = proj(x)
+    assert torch.equal(y, torch.zeros_like(y)), f"fresh layer must output exact zeros, max |y| = {y.abs().max()}"
+    if train:
+        y.sum().backward()                                   # zero-init does not freeze the bias: it still gets gradient
+        assert b.grad is not None and torch.equal(b.grad, torch.full_like(b, 7.0))
+
+
+def test_fresh_projection_without_bias_outputs_exact_zero():
+    spec = LUTSpec(h_in=2, h_out=2, tph=2, nap=3, d_in=8, d_out=8)
+    proj = ProjectionMHL(ManifestoHardLUT(spec, seed=1), d_model=16, bias=False)
+    assert proj.decompress.bias is None
+    y = proj(torch.randn(4, 16))
+    assert torch.equal(y, torch.zeros_like(y))
+
+
 def test_both_projections_off_forbidden():
     spec = LUTSpec(h_in=2, h_out=2, tph=1, nap=2, d_in=8, d_out=8)  # in=out=16
     with pytest.raises(ValueError):
