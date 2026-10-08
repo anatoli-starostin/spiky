@@ -14,7 +14,14 @@ args = parser.parse_args()
 
 pins = json.load(open("../pins.json"))
 results = os.environ["RESULTS"]
+# The inputs are staged once per machine (runs/stage_data.sh), so the canonical manifest lives next to the shared data
+# in $NANOCHAT_BASE_DIR; a run dir without its own copy (e.g. the smoke run) gets that canonical file copied in, byte
+# for byte, so every committed results dir carries the exact input hashes it ran on.
 manifest_path = os.path.join(results, "manifest.json")
+shared_manifest = os.path.join(os.environ["NANOCHAT_BASE_DIR"], "lut_nanochat_manifest.json")
+if not os.path.exists(manifest_path) and os.path.exists(shared_manifest):
+    import shutil
+    shutil.copyfile(shared_manifest, manifest_path)
 assert os.path.exists(manifest_path), "manifest.json missing: run runs/stage_data.sh first"
 manifest = json.load(open(manifest_path))
 

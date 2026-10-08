@@ -23,7 +23,9 @@
 ## 2. Hardware requirement
 - **1× NVIDIA H100 80GB, Hopper (`sm_90`).** SXM is preferred; PCIe works but is slower.
 - **Not B200, not an RTX 5090, not any Blackwell card.** The FA3 kernel does not exist for them, and the run would silently fall back to slower, non-comparable attention.
-- **Disk:** ≥ 150 GB on the volume that holds `$NANOCHAT_BASE_DIR`.
+- **Disk:** ≥ 150 GB free in total.
+  - The shared inputs (~15 GB of data, tokenizer, eval bundle) live in `$NANOCHAT_BASE_DIR`.
+  - The run's checkpoints (~22 GB: 2 steps kept × ~11 GB) live in the repo checkout under `results/<run>/checkpoints/` (see §8, *Where artifacts land*).
 - **CPU:** ≥ 16 vCPU recommended, because the dataloader tokenises on the fly. This is UNCERTAIN; upstream states no requirement.
 - **Driver:** ≥ R570 (CUDA 12.8). UNCERTAIN, as in PIN.md.
 
@@ -64,7 +66,8 @@ bash runs/stage_data.sh 2>&1 | tee ../results/d24-dense-1xh100-s0/stage_data.log
   - downloads 170 ClimbMix train shards plus the val shard `shard_06542` (~15 GB; UNCERTAIN ~5–20 min);
   - trains the tokenizer (a few minutes);
   - downloads and unzips the CORE eval bundle;
-  - writes `../results/d24-dense-1xh100-s0/manifest.json` with the sha256 of every input.
+  - writes the manifest with the sha256 of every input to `$NANOCHAT_BASE_DIR/lut_nanochat_manifest.json`, which is canonical and sits next to the shared data;
+  - writes a copy to `../results/d24-dense-1xh100-s0/manifest.json`. Other run dirs, e.g. the smoke run's, get the canonical file copied in automatically.
 - **Proceed only if it prints `reference shard hashes: PASS`.**
   - If it stops with `STOP: ClimbMix shards differ`, the dataset changed upstream. **Do not run**; report the mismatching hashes.
   - It can be re-run; it skips completed downloads.
@@ -135,6 +138,14 @@ bash runs/baseline_d24_1xh100.sh 2>&1 | tee -a ../results/d24-dense-1xh100-s0/la
 - The script does, in order: base_train (5,568 steps, checkpoint every 250, newest 2 kept), then the standalone `base_eval`, then `report_results.py`.
 - **wandb:** project `spiky-nanochat` (override with `WANDB_PROJECT`), group `nanochat_baseline` (override with `WANDB_GROUP`), run name `d24-dense-1xh100-s0`. The config carries the full pin set and the input hashes.
 
+### Where artifacts land
+- **Per run, in the repo checkout:** `results/<run>/` holds the logs, `summary.json`, `pin_config.json`, `manifest.json`, the base_eval CSV, and **`checkpoints/`** (model, optimizer, meta). `checkpoints/` and `*.pt` are git-ignored.
+- **Shared, outside the repo:** `$NANOCHAT_BASE_DIR` (default `~/.cache/nanochat`) holds the ClimbMix shards, the tokenizer, the eval bundle and the canonical input manifest, staged once per machine.
+- **How the two connect:** nanochat itself always reads and writes checkpoints at `$NANOCHAT_BASE_DIR/base_checkpoints/<model_tag>`, and has no separate checkpoint setting.
+  - The launcher makes that path a **symlink** to `results/<run>/checkpoints/`.
+  - If a real directory already exists there (a run started before 2026-10-08), the launcher keeps using it in place.
+  - If the symlink points at another run, it stops.
+
 ## 9. What to monitor
 - **Log:** `../results/d24-dense-1xh100-s0/train.log`.
   - Read the header once: `Total batch size 1,048,576 => gradient accumulation steps: 32` (64 at DBS=8) and `Calculated number of iterations …: 5,568`. **If either differs, stop: the run is not the baseline.**
@@ -148,7 +159,7 @@ bash runs/baseline_d24_1xh100.sh 2>&1 | tee -a ../results/d24-dense-1xh100-s0/la
 - **val bpb:** logged every 250 steps; it should end near **0.72**.
 - **In-training CORE:** at steps 2000, 4000 and 5568. These are indicative only.
 - **Total wall clock:** ≈ 13–15 h of training plus evals, ≈ 15–18 h end to end.
-- **Disk:** `du -sh $NANOCHAT_BASE_DIR/base_checkpoints/d24_1xh100` should stay ≈ 22–33 GB.
+- **Disk:** `du -sh ../results/d24-dense-1xh100-s0/checkpoints` should stay ≈ 22–33 GB.
 
 ## 10. On interruption (pre-emption, crash, OOM mid-run)
 - **Re-run exactly the same launch command as §8, with the same `DBS`.** The script finds the newest *complete* checkpoint, logs the resume to `resumes.log`, and continues the same wandb run.
@@ -179,7 +190,7 @@ bash runs/baseline_d24_1xh100.sh 2>&1 | tee -a ../results/d24-dense-1xh100-s0/la
   git add -f results/d24-dense-1xh100-s0-smoke/ results/d24-dense-1xh100-s0-smoke.out   # smoke evidence (§7)
   git commit -m "lut_nanochat: d24-dense-1xh100-s0 results (CORE <value>)" && git push origin research/lut_nanochat
   ```
-- Keep the final checkpoint (`$NANOCHAT_BASE_DIR/base_checkpoints/d24_1xh100/*005568*`) on the VM until told otherwise, and report its path and size.
+- Keep the final checkpoint (`../results/d24-dense-1xh100-s0/checkpoints/*005568*`; git-ignored, never `git add -f` it) on the VM until told otherwise, and report its path and size.
 
 ## 12. Troubleshooting
 | Symptom | Action |

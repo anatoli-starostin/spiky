@@ -5,7 +5,9 @@
 #     ~88 MB each, ~15 GB total. Download time UNCERTAIN: ~5-20 min depending on HF bandwidth.
 #   - tokenizer: trained here by scripts.tok_train (a few minutes), exactly as speedrun.sh does
 #   - CORE eval bundle (eval_bundle.zip from S3), unzipped into $NANOCHAT_BASE_DIR/eval_bundle
-# Output: $RESULTS/manifest.json (sha256 + size of every input) and a reference-hash check.
+# Output: $NANOCHAT_BASE_DIR/lut_nanochat_manifest.json -- the canonical manifest (sha256 + size of every input), kept
+# next to the shared data it describes, since staging is once per machine and every run reuses it -- plus a copy in
+# $RESULTS/manifest.json. runs/make_pin_config.py copies the canonical one into any other run dir (e.g. the smoke run).
 # Usage (from experiments/lut_nanochat/nanochat): bash runs/stage_data.sh
 
 set -euo pipefail
@@ -56,3 +58,5 @@ print(f"manifest written: {sys.argv[1]}")
 if bad:
     sys.exit("STOP: ClimbMix shards differ from the reference hashes in pins.json (dataset changed upstream?)")
 PY
+cp "$RESULTS/manifest.json" "$NANOCHAT_BASE_DIR/lut_nanochat_manifest.json"
+echo "canonical manifest: $NANOCHAT_BASE_DIR/lut_nanochat_manifest.json"
