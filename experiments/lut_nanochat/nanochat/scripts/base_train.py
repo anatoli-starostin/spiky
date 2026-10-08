@@ -325,6 +325,15 @@ def disable_fp8(model):
 # Compile the model
 
 orig_model = model # original, uncompiled model, for saving raw model state_dict and for inference/evaluation (because the shapes may change shape)
+if lut_cfg.enabled:
+    # [lut_nanochat] The LUT-FFN cartridge has parameters of heterogeneous rank (0-D confidence scalars,
+    # 1-D biases, 2-D projections, 4-D table). With dynamo's default force_parameter_static_shapes=True
+    # that triggers per-rank recompiles that blow the recompile limit (FailOnRecompileLimitHit). Torch's
+    # own remedy is force_parameter_static_shapes=False; we also lift the cache limit as a safety margin.
+    import torch._dynamo
+    torch._dynamo.config.force_parameter_static_shapes = False
+    torch._dynamo.config.cache_size_limit = max(getattr(torch._dynamo.config, "cache_size_limit", 8), 256)
+    print0("[lut_nanochat] dynamo: force_parameter_static_shapes=False, cache_size_limit>=256 (LUT heterogeneous-rank params)")
 model = torch.compile(model, dynamic=False) # the inputs to model will never change shape so dynamic=False is safe
 
 # -----------------------------------------------------------------------------
