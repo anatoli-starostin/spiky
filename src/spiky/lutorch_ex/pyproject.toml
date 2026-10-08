@@ -24,7 +24,9 @@ dependencies = ["torch>=2.1", "ninja"]
 # safetensors output for export_deployment (safetensors.torch needs numpy to write); without them the export
 # is written with torch.save, and load_deployment reads either format.
 deploy = ["safetensors", "numpy"]
-test = ["pytest"]
+# The tests also need the deploy extras, so they exercise both serialisation branches (safetensors and the
+# torch.save fallback); at runtime safetensors stays optional.
+test = ["pytest", "safetensors", "numpy"]
 
 [project.urls]
 Source = "https://github.com/anatoli-starostin/spiky/tree/main/src/spiky/lutorch_ex"
