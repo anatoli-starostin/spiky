@@ -48,6 +48,11 @@ parser.add_argument("--wandb-tags", type=str, default="", help="comma-separated 
 parser.add_argument("--wandb-notes-file", type=str, default=None, help="text file with the wandb run notes")
 parser.add_argument("--pin-config", type=str, default=None, help="JSON file with the pin set, merged into the wandb config")
 parser.add_argument("--log-every", type=int, default=100, help="log train metrics to wandb every N steps")
+# [lut_nanochat] online logits-distillation: train a fresh student against a frozen teacher's full-vocab logits
+parser.add_argument("--distill-from", type=str, default=None, help="teacher model-tag under base_checkpoints (e.g. d24_1xh100); enables online logits distillation")
+parser.add_argument("--distill-step", type=int, default=-1, help="teacher checkpoint step to load (e.g. 5568); required with --distill-from")
+parser.add_argument("--distill-temperature", type=float, default=1.0, help="softmax temperature for the distillation soft targets (1.0 = plain softmax)")
+parser.add_argument("--distill-alpha", type=float, default=0.0, help="blend distillation KL with hard-label CE: loss=(1-alpha)*KL+alpha*CE (0.0 = pure distillation)")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
 # FP8 training
@@ -182,6 +187,25 @@ if resuming:
     model_data, optimizer_data, meta_data = load_checkpoint(checkpoint_dir, args.resume_from_step, device, load_optimizer=True, rank=ddp_rank)
     model.load_state_dict(model_data, strict=True, assign=True)
     del model_data # free up this memory after the copy
+
+# [lut_nanochat] online logits-distillation: build the FROZEN teacher (same arch, separate checkpoint).
+# eval + requires_grad_(False) + bf16 (COMPUTE_DTYPE) so its attention still uses FA3; NOT fp8-converted and
+# NOT compiled (kept simple/correct; compiling the teacher is a later throughput option). The student is the
+# ordinary fresh model built above, so nothing about the student path changes.
+teacher = None
+if args.distill_from:
+    from nanochat.distill import distillation_loss
+    from nanochat.checkpoint_manager import build_model as _build_teacher_model
+    assert args.distill_step >= 0, "--distill-from requires --distill-step (the teacher checkpoint step, e.g. 5568)"
+    teacher_dir = os.path.join(base_dir, "base_checkpoints", args.distill_from)
+    print0(f"[lut_nanochat] distillation: loading frozen teacher '{args.distill_from}' @ step {args.distill_step} from {teacher_dir}")
+    # Use nanochat's canonical loader (exactly what base_eval uses): it meta-builds from the saved config,
+    # to_empty's, calls init_weights() -- REQUIRED to initialise the rotary buffers, which are NOT in the
+    # state_dict -- then load_state_dict + eval. (Hand-rolling it without init_weights left those buffers as
+    # garbage and the teacher produced NaN logits.) The saved dtype (bf16) is preserved so FA3 stays active.
+    teacher, _, _ = _build_teacher_model(teacher_dir, args.distill_step, device, phase="eval")
+    teacher.requires_grad_(False)
+    print0(f"[lut_nanochat] teacher frozen: eval, no-grad; distill T={args.distill_temperature}, alpha={args.distill_alpha}")
 
 # -----------------------------------------------------------------------------
 # FP8 training initialization and management (this has to be done before torch.compile)
@@ -417,6 +441,7 @@ if not resuming:
     min_val_bpb = float("inf")
     smooth_train_loss = 0 # EMA of training loss
     total_training_time = 0 # total wall-clock time of training
+    last_kl = last_ce = None  # [lut_nanochat] latest distillation KL / CE for logging
 else:
     step = meta_data["step"]
     loop_state = meta_data["loop_state"]
@@ -424,6 +449,7 @@ else:
     min_val_bpb = loop_state["min_val_bpb"]
     smooth_train_loss = loop_state["smooth_train_loss"]
     total_training_time = loop_state["total_training_time"]
+    last_kl = last_ce = None  # [lut_nanochat] latest distillation KL / CE for logging
 
 # Figure out the needed gradient accumulation micro-steps to reach the desired total batch size per step
 tokens_per_fwdbwd = args.device_batch_size * args.max_seq_len # tokens per iteration for a single rank
@@ -544,8 +570,18 @@ while True:
     synchronize()
     t0 = time.time()
     for micro_step in range(grad_accum_steps):
-        loss = model(x, y)
-        train_loss = loss.detach() # for logging
+        if teacher is not None:
+            # [lut_nanochat] online distillation: student & teacher logits -> temperature-scaled KL (+ optional CE)
+            student_logits = model(x)                       # (B,T,V) fp32 logits (student forward, fp8 path)
+            with torch.no_grad():
+                teacher_logits = teacher(x)                 # (B,T,V) fp32 logits (frozen bf16 teacher)
+            loss, last_kl, last_ce = distillation_loss(
+                student_logits, teacher_logits, y,
+                temperature=args.distill_temperature, alpha=args.distill_alpha)
+            train_loss = loss.detach()                      # for logging (the blended distill loss)
+        else:
+            loss = model(x, y)
+            train_loss = loss.detach() # for logging
         loss = loss / grad_accum_steps # each .backward() is a grad sum => normalize loss here
         if scaler is not None:
             scaler.scale(loss).backward()
@@ -616,6 +652,10 @@ while True:
             "train/mfu": mfu,
             "train/epoch": epoch,
         }
+        if teacher is not None:  # [lut_nanochat] distillation metrics
+            log_data["train/distill_kl"] = last_kl.item()
+            if last_ce is not None:
+                log_data["train/distill_ce"] = last_ce.item()
         wandb_run.log(log_data)
 
     # state update
