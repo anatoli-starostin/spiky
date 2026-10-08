@@ -115,7 +115,11 @@ class ProjectionMHL(nn.Module):
         if decompress:
             self.decompress = nn.Linear(spec.out_features, output_dim, bias=bias, device=device)
             if self.decompress.weight.device.type != "meta":
-                nn.init.zeros_(self.decompress.weight)            # default init: zero, so a fresh layer contributes nothing
+                # default init: zero weight AND zero bias, so a fresh layer outputs exactly 0 (a clean drop-in into a
+                # pretrained residual stream); the bias stays a trainable parameter, it just starts at zero.
+                nn.init.zeros_(self.decompress.weight)
+                if self.decompress.bias is not None:
+                    nn.init.zeros_(self.decompress.bias)
         else:
             if spec.out_features != output_dim:
                 raise ValueError(
