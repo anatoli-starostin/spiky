@@ -862,3 +862,15 @@ Syncing: https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-d
 Find logs at: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/debug-cli.astarostin.log
 Syncing: https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-1xh100-s0-4bad20ea ... done.
 [2026-10-08T10:29:52+03:00] wandb sync end (rc=0)
+[2026-10-08T10:33:52+03:00] wandb sync start
+Find logs at: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/debug-cli.astarostin.log
+Syncing: https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-1xh100-s0-4bad20ea ... done.
+[2026-10-08T10:34:13+03:00] wandb sync end (rc=0)
+[2026-10-08T10:38:13+03:00] wandb sync start
+Find logs at: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/debug-cli.astarostin.log
+Syncing: https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-1xh100-s0-4bad20ea ... done.
+[2026-10-08T10:38:35+03:00] wandb sync end (rc=0)
+[2026-10-08T10:42:35+03:00] wandb sync start
+Find logs at: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/wandb/debug-cli.astarostin.log
+Syncing: https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-1xh100-s0-4bad20ea ... done.
+[2026-10-08T10:42:55+03:00] wandb sync end (rc=0)
