@@ -1,0 +1,17 @@
+2026-10-08 16:52:38,394 - nanochat.checkpoint_manager - [32m[1mINFO[0m - Building model with config: {'sequence_len': 2048, 'vocab_size': 32768, 'n_layer': 24, 'n_head': 12, 'n_kv_head': 12, 'n_embd': 1536, 'window_pattern': 'SSSL'}
+[     2s] model loaded; 12 VE tables; DBS=8 seq=2048 split_tokens=20971520 eval_steps=1280
+[   254s] baseline val bpb = 0.720741
+[   505s] ablate layer  1: bpb=0.721691  delta=+0.000950  (restored OK)
+[   758s] ablate layer  3: bpb=0.721684  delta=+0.000943  (restored OK)
+[  1010s] ablate layer  5: bpb=0.721507  delta=+0.000766  (restored OK)
+[  1263s] ablate layer  7: bpb=0.721526  delta=+0.000785  (restored OK)
+[  1517s] ablate layer  9: bpb=0.722012  delta=+0.001271  (restored OK)
+[  1770s] ablate layer 11: bpb=0.722655  delta=+0.001914  (restored OK)
+[  2023s] ablate layer 13: bpb=0.722936  delta=+0.002195  (restored OK)
+[  2276s] ablate layer 15: bpb=0.725197  delta=+0.004456  (restored OK)
+[  2531s] ablate layer 17: bpb=0.723582  delta=+0.002841  (restored OK)
+[  2784s] ablate layer 19: bpb=0.724938  delta=+0.004197  (restored OK)
+[  3039s] ablate layer 21: bpb=0.725087  delta=+0.004346  (restored OK)
+[  3293s] ablate layer 23: bpb=0.727369  delta=+0.006628  (restored OK)
+[  3546s] ablate ALL 12: bpb=0.858214  delta=+0.137473
+DONE {"checkpoint": "d24_1xh100@5568", "config": {"DBS": 8, "seq": 2048, "split_tokens": 20971520, "eval_steps": 1280, "val_shard": "shard_06542", "mem_fraction": 0.22, "peak_reserved_GiB": 16.42}, "baseline_bpb": 0.7207410382728967, "per_table": {"1": {"bpb": 0.7216913978728812, "delta": 0.0009503595999844627}, "3": {"bpb": 0.7216835706948603, "delta": 0.0009425324219636266}, "5": {"bpb": 0.7215074591893931, "delta": 0.0007664209164963687}, "7": {"bpb": 0.7215264430166822, "delta": 0.0007854047437855227}, "9": {"bpb": 0.7220116696421937, "delta": 0.0012706313692969484}, "11": {"bpb": 0.7226549001225272, "delta": 0.0019138618496304938}, "13": {"bpb": 0.722936269648841, "delta": 0.00219523137594424}, "15": {"bpb": 0.7251968638024363, "delta": 0.004455825529539603}, "17": {"bpb": 0.7235818366002256, "delta": 0.002840798327328864}, "19": {"bpb": 0.7249375739275542, "delta": 0.004196535654657496}, "21": {"bpb": 0.725087166486593, "delta": 0.0043461282136962875}, "23": {"bpb": 0.7273690809385284, "delta": 0.0066280426656316616}}, "all12": {"bpb": 0.8582137962642201, "delta": 0.1374727579913234}}
