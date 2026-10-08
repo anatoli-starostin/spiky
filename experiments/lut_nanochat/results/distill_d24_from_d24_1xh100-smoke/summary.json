@@ -1,0 +1,114 @@
+{
+ "run": "distill_d24_from_d24_1xh100-smoke",
+ "core_standalone_base_eval": null,
+ "core_in_training_last": null,
+ "val_bpb_base_eval": 1.617436,
+ "train_bpb_base_eval": 1.616906,
+ "val_bpb_final_in_training": 1.61731,
+ "min_val_bpb_in_training": 1.61731,
+ "total_training_time_min": 7.99,
+ "peak_memory_allocated_mib": 48430.03,
+ "peak_memory_reserved_mib": 50972.0,
+ "grad_accum_steps": 64,
+ "num_iterations": null,
+ "resumes": [
+  "2026-10-08T12:49:52+03:00 resuming from step 20 (dataloader resume is approximate)"
+ ],
+ "core_tasks": {
+  "hellaswag_zeroshot": {
+   "accuracy": 0.552778,
+   "centered": 0.403704
+  },
+  "jeopardy": {
+   "accuracy": 0.099197,
+   "centered": 0.099197
+  },
+  "bigbench_qa_wikidata": {
+   "accuracy": 0.453669,
+   "centered": 0.453669
+  },
+  "arc_easy": {
+   "accuracy": 0.684764,
+   "centered": 0.579686
+  },
+  "arc_challenge": {
+   "accuracy": 0.400171,
+   "centered": 0.200227
+  },
+  "copa": {
+   "accuracy": 0.66,
+   "centered": 0.32
+  },
+  "commonsense_qa": {
+   "accuracy": 0.256347,
+   "centered": 0.070434
+  },
+  "piqa": {
+   "accuracy": 0.748096,
+   "centered": 0.496192
+  },
+  "openbook_qa": {
+   "accuracy": 0.404,
+   "centered": 0.205333
+  },
+  "lambada_openai": {
+   "accuracy": 0.41568,
+   "centered": 0.41568
+  },
+  "hellaswag": {
+   "accuracy": 0.554372,
+   "centered": 0.405829
+  },
+  "winograd": {
+   "accuracy": 0.644689,
+   "centered": 0.289377
+  },
+  "winogrande": {
+   "accuracy": 0.553275,
+   "centered": 0.106551
+  },
+  "bigbench_dyck_languages": {
+   "accuracy": 0.142,
+   "centered": 0.142
+  },
+  "agi_eval_lsat_ar": {
+   "accuracy": 0.256522,
+   "centered": 0.070652
+  },
+  "bigbench_cs_algorithms": {
+   "accuracy": 0.411364,
+   "centered": 0.411364
+  },
+  "bigbench_operators": {
+   "accuracy": 0.147619,
+   "centered": 0.147619
+  },
+  "bigbench_repeat_copy_logic": {
+   "accuracy": 0.0,
+   "centered": 0.0
+  },
+  "squad": {
+   "accuracy": 0.396783,
+   "centered": 0.396783
+  },
+  "coqa": {
+   "accuracy": 0.315044,
+   "centered": 0.315044
+  },
+  "boolq": {
+   "accuracy": 0.578899,
+   "centered": -0.10816
+  },
+  "bigbench_language_identification": {
+   "accuracy": 0.2564,
+   "centered": 0.181958
+  }
+ },
+ "core_csv": "/home/astarostin/.cache/nanochat/base_eval/base_model_005568.csv",
+ "targets": {
+  "core_record_8xh100": 0.2626,
+  "gpt2_core_bar": 0.256525,
+  "core_noise_per_run": 0.008
+ },
+ "verdict": null
+}

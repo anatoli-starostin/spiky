@@ -1,0 +1,91 @@
+
+                                                       █████                █████
+                                                      ░░███                ░░███
+     ████████    ██████   ████████    ██████   ██████  ░███████    ██████  ███████
+    ░░███░░███  ░░░░░███ ░░███░░███  ███░░███ ███░░███ ░███░░███  ░░░░░███░░░███░
+     ░███ ░███   ███████  ░███ ░███ ░███ ░███░███ ░░░  ░███ ░███   ███████  ░███
+     ░███ ░███  ███░░███  ░███ ░███ ░███ ░███░███  ███ ░███ ░███  ███░░███  ░███ ███
+     ████ █████░░████████ ████ █████░░██████ ░░██████  ████ █████░░███████  ░░█████
+    ░░░░ ░░░░░  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░   ░░░░░░  ░░░░ ░░░░░  ░░░░░░░░   ░░░░░
+    
+Autodetected device type: cuda
+2026-10-08 12:24:23,129 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+GPU: NVIDIA H100 80GB HBM3 | Peak FLOPS (BF16): 9.89e+14
+COMPUTE_DTYPE: torch.bfloat16 (auto-detected: CUDA SM 90 (bf16 supported))
+✓ Using Flash Attention 3: efficient, new and awesome.
+Vocab size: 32,768
+Model config:
+{
+  "sequence_len": 2048,
+  "vocab_size": 32768,
+  "n_layer": 24,
+  "n_head": 12,
+  "n_kv_head": 12,
+  "n_embd": 1536,
+  "window_pattern": "SSSL"
+}
+[lut_nanochat] distillation: loading frozen teacher 'd24_1xh100' @ step 5568 from /home/astarostin/.cache/nanochat/base_checkpoints/d24_1xh100
+[lut_nanochat] teacher frozen: eval, no-grad, dtype=torch.bfloat16; distill T=1.0, alpha=0.0
+✓ FP8 training enabled (tensorwise scaling) - converted 145/158 linear layers, skipped 13 (too small)
+Parameter counts:
+wte                     : 50,331,648
+value_embeds            : 603,979,776
+lm_head                 : 50,331,648
+transformer_matrices    : 679,478,976
+scalars                 : 74
+total                   : 1,384,122,122
+Estimated FLOPs per token: 3.963722e+08
+Auto-computed optimal batch size: 1,048,576 tokens
+Scaling LRs by 1.4142 for batch size 1,048,576 (reference: 524,288)
+Scaling weight decay from 0.280000 to 0.059738 for depth 24
+Scaling the LR for the AdamW parameters ∝1/√(1536/768) = 0.707107
+Using user-provided number of iterations: 4
+Total number of training tokens: 4,194,304
+Tokens : Scaling params ratio: 0.01
+Total training FLOPs estimate: 1.662506e+15
+Tokens / micro-batch / rank: 16 x 2048 = 32,768
+Tokens / micro-batch: 32,768
+Total batch size 1,048,576 => gradient accumulation steps: 32
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/astarostin/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+[rank0]:     return _run_code(code, main_globals, None,
+[rank0]:   File "/home/astarostin/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+[rank0]:     exec(code, run_globals)
+[rank0]:   File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/scripts/base_train.py", line 579, in <module>
+[rank0]:     loss, last_kl, last_ce = distillation_loss(
+[rank0]:   File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/nanochat/distill.py", line 39, in distillation_loss
+[rank0]:     kl = F.kl_div(log_p_student, p_teacher, reduction="batchmean") * (temperature * temperature)
+[rank0]:   File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/nn/functional.py", line 3367, in kl_div
+[rank0]:     reduced = torch.kl_div(input, target, reduction_enum, log_target=log_target)
+[rank0]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 4.00 GiB. GPU 0 has a total capacity of 79.18 GiB of which 2.95 GiB is free. Including non-PyTorch memory, this process has 76.22 GiB memory in use. Of the allocated memory 70.68 GiB is allocated by PyTorch, and 4.26 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[rank0]:[W1008 12:26:23.658877000 ProcessGroupNCCL.cpp:1524] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
+E1008 12:26:26.132000 1510815 torch/distributed/elastic/multiprocessing/api.py:882] failed (exitcode: 1) local_rank: 0 (pid: 1510852) of binary: /home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/bin/python3
+Traceback (most recent call last):
+  File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/bin/torchrun", line 10, in <module>
+    sys.exit(main())
+  File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+  File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/distributed/run.py", line 936, in main
+    run(args)
+  File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/distributed/run.py", line 927, in run
+    elastic_launch(
+  File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/distributed/launcher/api.py", line 156, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/home/astarostin/projects/lut_nanochat_wt/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/distributed/launcher/api.py", line 293, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+scripts.base_train FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-10-08_12:26:26
+  host      : computeinstance-e00kvx817kxpdq0f2w
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 1510852)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================

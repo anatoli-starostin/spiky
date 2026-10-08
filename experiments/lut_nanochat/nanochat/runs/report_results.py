@@ -25,8 +25,8 @@ if core_csv:
         for row in csv.reader(f):
             if len(row) == 3 and row[0].strip() not in ("Task", "CORE"):
                 tasks[row[0].strip()] = {"accuracy": float(row[1]), "centered": float(row[2])}
-core_standalone = grep_all(eval_log, r"CORE metric: ([0-9.]+)")
-in_training_core = grep_all(train_log, r"Step (\d+) \| CORE metric: ([0-9.]+)")
+core_standalone = grep_all(eval_log, r"CORE metric: (-?[0-9.]+)")
+in_training_core = grep_all(train_log, r"Step (\d+) \| CORE metric: (-?[0-9.]+)")
 val_bpb_train = grep_all(train_log, r"Step (\d+) \| Validation bpb: ([0-9.]+)")
 resumes = open(os.path.join(R, "resumes.log")).read().splitlines() if os.path.exists(os.path.join(R, "resumes.log")) else []
 

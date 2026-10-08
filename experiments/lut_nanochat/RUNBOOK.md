@@ -204,3 +204,29 @@ bash runs/baseline_d24_1xh100.sh 2>&1 | tee -a ../results/d24-dense-1xh100-s0/la
 | **`STOP: ClimbMix shards differ`** | Do not run. Report the hashes. |
 | **Header shows other than 32 (or 64) accumulation steps or 5,568 iterations** | Stop. Something changed the recipe. Report it. |
 | **HF download errors or rate limits during staging** | Re-run `stage_data.sh` (the downloader retries with backoff). Optionally `export HF_TOKEN=…`. |
+
+## 13. Distillation (stage-2 warm-up: d24 → d24 online logits distillation)
+
+A warm-up before LUT students: train a **fresh d24 student** against the **frozen trained d24 baseline's
+logits** (online KL), to validate the distillation harness and see how much faster soft logits converge than
+from-scratch training. Reuses the baseline machinery; the only change is the loss.
+
+- **Code.** `nanochat/distill.py` (`distillation_loss`: temperature-scaled KL( teacher ‖ student ), computed in
+  log-space so the 32768-way softmax can't NaN; optional `alpha` blend with hard CE). base_train.py adds
+  `--distill-from <teacher-tag> --distill-step <N> --distill-temperature T --distill-alpha a` (all `[lut_nanochat]`):
+  when set, it loads the teacher via nanochat's canonical `build_model(..., phase="eval")` (so the rotary buffers
+  are initialised), freezes it (eval, `requires_grad_(False)`), and replaces the per-micro-step CE with the KL.
+  The student is the ordinary fresh d24; `train/distill_kl` (and `train/distill_ce` if `alpha>0`) are logged.
+- **Teacher.** The baseline checkpoint, tag `d24_1xh100` @ step `5568` (its canonical
+  `$NANOCHAT_BASE_DIR/base_checkpoints/d24_1xh100` path, symlinked into `results/d24-dense-1xh100-s0/checkpoints/`).
+- **Memory / batch.** Two d24 forwards per micro-step. The probe shows **DBS=16 OOMs** (two full-vocab fp32 logits
+  tensors), **DBS=8 fits at ~50 GiB reserved** (grad-accum 64, identical 2²⁰ global batch, identical maths):
+  `bash runs/probe_memory_distill.sh`  /  `DBS=8 bash runs/probe_memory_distill.sh`. Step time ≈ 15.5 s (~1.9×
+  the baseline's 8.3 s). If a future teacher/student didn't fit even at DBS=8, the fallback is to precompute the
+  teacher's top-k logits offline and stream them (student does one forward) — not needed for d24→d24.
+- **REQUIRED smoke run** (before the long run): `DBS=8 bash runs/smoke_run_distill.sh` — exercises the frozen-teacher
+  load, the KL loss (finite + dropping), checkpoint/resume-from-step-20, fp8/FA3, and wandb (offline→sync). It ends
+  with `SMOKE RUN: PASS|FAIL` (`smoke_check.py --distill`). STOP if FAIL.
+- **Launch** (only after PASS + go-ahead): `DBS=8 bash runs/distill_d24_1xh100.sh` — run name / tag
+  `distill_d24_from_d24_1xh100`, wandb project `spiky-nanochat` group `nanochat_baseline`. Same
+  checkpoint/resume/keep-newest-2 discipline and standalone `base_eval` of the student at the end.
