@@ -106,6 +106,36 @@ Train LUT models on the baseline model's output logits, with an output-distribut
 - The LUT arm is **not** shape-matched to d24 with its FFNs swapped. The honest comparison is at equal compute or equal cost, with the model shape left free. Forcing the LUT model into the dense shape handicaps it if it wants more attention capacity.
 - The restructuring itself is a result worth logging from the first LUT run: attention entropy, window usage, head specialisation and induction behaviour.
 
+## Stage 2 entry gate: the distillation screen every LUT variant must pass
+
+**Purpose.** A cheap, early go/no-go screen *before* committing a full LUT run. Distill a LUT student from the trained dense d24 teacher (`d24_1xh100`, step 5568) and compare its val-bpb-vs-step curve against the dense-student reference curve below. If the LUT student **tracks the reference through the early steep region**, it has enough capacity to justify a full LUT run. Where it **peels away** from the reference — the plateau height — is that LUT form's expressivity shortfall, and is itself a useful number to report.
+
+**Protocol — must be byte-identical to the dense distillation run so the curves are comparable.**
+- **Same d24 architecture depth.** Do NOT prelim at d12 or rescale: the reference curve is specific to this teacher, depth and batch, so a smaller model has no valid reference.
+- **Same 2²⁰ global token batch** (device batch 8 × 64 grad-accum).
+- **Teacher** = `d24_1xh100` frozen at step 5568.
+- **T = 1.0, alpha = 0.0** for the gate.
+  - *(Note: alpha > 0 — a hard-CE blend — is likely the right default for a REAL full LUT run, because a LUT student cannot match a dense teacher exactly and the data term lets it find its own route to the same bpb. But alpha > 0 changes the objective and breaks comparability with this reference curve, so it is NOT used for the gate. Clean split: alpha = 0 to pass the gate; alpha > 0 as a knob for the full run.)*
+- **LR schedule (critical).** Use the FULL 5,568-step LR schedule and simply truncate/kill the run at the gate step. Do NOT schedule a short horizon (e.g. 1,000 steps): a short schedule cools the LR at the end and makes a truncated run look artificially better for reasons unrelated to architecture. The dense reference points were read *mid-flight* from a 5,568-step schedule at high LR, so the LUT gate must be read the same way — **identical truncation on both arms**.
+- **Harness.** Reuse `nanochat/runs/distill_d24_1xh100.sh` with the LUT student swapped in for the dense student; everything else (teacher, batch, T, alpha, 5,568-step schedule) stays as above. The dense early-stop (`--distill-early-stop-*`) won't fire in the gate window and is irrelevant to the gate.
+
+**Reference curve — dense d24-from-d24 student, val bpb vs step.** Teacher val bpb = **0.719**.
+
+| step | dense-student val bpb |
+|---|---|
+| 250 | 0.932 |
+| 500 | 0.837 |
+| 750 | 0.804 |
+| 1000 | 0.787 |
+
+*These are mid-flight points from the in-progress dense distill run `distill_d24_from_d24_1xh100` (T=1.0, alpha=0.0, DBS=8). **To be finalized and extended** (and the exact per-step values re-pinned) once that run completes / early-stops; treat the table as provisional until then.*
+
+**Pass criterion — a band, not a point.** The LUT student passes if its val bpb is **within ~0.01 of the dense student at steps 500 / 750 / 1000**. Rationale: single seed, and val bpb has its own wobble, so anything under ~0.01 bpb is not signal in either direction. A LUT arm *beating* the dense student would be surprising enough to require a **second seed** before believing it.
+
+**Interpretation.**
+- **Tracks the first ~1,000 steps within band → PASS**: the form has the capacity; proceed to a full LUT run (where alpha > 0 becomes available as a knob).
+- **Plateaus ~0.03 above the reference → FAIL**: the LUT form is short that much capacity. Report the plateau height — it is the expressivity shortfall of that form, a useful result in its own right even on a fail.
+
 ## Files (stage 1)
 | File | What it is |
 |---|---|
