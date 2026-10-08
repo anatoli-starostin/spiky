@@ -2,3 +2,9 @@
 # The launcher keeps them in results/<run>/checkpoints/ next to the run's other artifacts.
 results/*/checkpoints/
 *.pt
+# Analysis reports are committed as LaTeX source only: no rendered PDFs or LaTeX build output.
+results/*/analysis/**/*.pdf
+results/*/analysis/**/*.aux
+results/*/analysis/**/*.log
+results/*/analysis/**/*.out
+results/*/analysis/**/*.toc
