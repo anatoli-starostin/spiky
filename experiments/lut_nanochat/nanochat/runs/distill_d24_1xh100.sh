@@ -25,6 +25,8 @@ TEACHER_TAG=${TEACHER_TAG:-d24_1xh100}
 TEACHER_STEP=${TEACHER_STEP:-5568}
 DISTILL_T=${DISTILL_T:-1.0}
 DISTILL_ALPHA=${DISTILL_ALPHA:-0.0}
+EARLY_STOP_BPB=${EARLY_STOP_BPB:-0.719}        # stop once val bpb <= this (teacher's val bpb) ...
+EARLY_STOP_PATIENCE=${EARLY_STOP_PATIENCE:-2}  # ... for this many CONSECUTIVE val evals
 
 source runs/lut_env.sh                                    # NANOCHAT_BASE_DIR, pins, RUN_NAME/MODEL_TAG, results dir
 
@@ -101,6 +103,7 @@ if [ -z "$LATEST" ] || [ "$LATEST" -lt "$FINAL_STEP" ]; then
         --save-every="$SAVE_EVERY" --model-tag="$MODEL_TAG" \
         --distill-from="$TEACHER_TAG" --distill-step="$TEACHER_STEP" \
         --distill-temperature="$DISTILL_T" --distill-alpha="$DISTILL_ALPHA" \
+        --distill-early-stop-bpb="$EARLY_STOP_BPB" --distill-early-stop-patience="$EARLY_STOP_PATIENCE" \
         --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group="$WANDB_GROUP_NAME" \
         --wandb-tags="arch=distill-student,teacher=$TEACHER_TAG,precision=fp8,seed=42,gpus=1xH100,dbs=$DBS,T=$DISTILL_T,alpha=$DISTILL_ALPHA${EXTRA_TAGS:-}" \
         --wandb-notes-file=runs/lut_wandb_notes.md --pin-config="$RESULTS/pin_config.json" \
