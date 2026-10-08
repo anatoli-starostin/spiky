@@ -116,5 +116,6 @@ Train LUT models on the baseline model's output logits, with an output-distribut
 | `nanochat/runs/probe_memory_d24.sh` | A ~5-minute probe that decides between device batch 16 and 8. |
 | `nanochat/runs/smoke_run_d24.sh`, `smoke_check.py` | The REQUIRED short smoke run before the long run, and its PASS check (RUNBOOK §7). |
 | `nanochat/runs/stage_data.sh` | Stages the data, tokenizer and eval bundle, and records their hashes. |
-| `results/<run>/` | Written by the run and committed back by the operator. |
+| `results/<run>/` | Written by the run and committed back by the operator: logs, `summary.json`, pins, manifest, eval CSV. |
+| `results/<run>/checkpoints/` | The run's model, optimizer and meta files, **git-ignored**. nanochat's `$NANOCHAT_BASE_DIR/base_checkpoints/<model_tag>` is a symlink to it. Shared inputs (data shards, tokenizer, eval bundle) stay in `$NANOCHAT_BASE_DIR`. |
 | `docs/` | The nanochat state report and the baseline decision brief (md + pdf), with the d24 architecture confirmed from code. |
