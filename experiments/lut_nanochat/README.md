@@ -127,6 +127,7 @@ Train LUT models on the baseline model's output logits, with an output-distribut
 | 500 | 0.837 |
 | 750 | 0.804 |
 | 1000 | 0.787 |
+| 1250 | 0.779 |
 
 *These are mid-flight points from the in-progress dense distill run `distill_d24_from_d24_1xh100` (T=1.0, alpha=0.0, DBS=8). **To be finalized and extended** (and the exact per-step values re-pinned) once that run completes / early-stops; treat the table as provisional until then.*
 
