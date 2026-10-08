@@ -26,8 +26,23 @@ source runs/lut_env.sh                                    # NANOCHAT_BASE_DIR, p
 DBS=${DBS:-16}
 SAVE_EVERY=${SAVE_EVERY:-250}                             # ~35 min of 1xH100 time between checkpoints
 KEEP_CKPTS=${KEEP_CKPTS:-2}                               # each checkpoint ~11 GB (5.5 model + 5.7 optim)
+# Checkpoints live WITH the run's other artifacts, in $RESULTS/checkpoints/ (git-ignored). nanochat has no separate
+# checkpoint knob: base_train / base_eval read and write $NANOCHAT_BASE_DIR/base_checkpoints/<model_tag>
+# (nanochat/common.py get_base_dir). So that path is made a symlink into the run dir; the shared, run-independent
+# inputs (ClimbMix shards, tokenizer, eval bundle) stay in the $NANOCHAT_BASE_DIR cache and are never duplicated.
+RUN_CKPT_DIR="$RESULTS/checkpoints"
 CKPT_DIR="$NANOCHAT_BASE_DIR/base_checkpoints/$MODEL_TAG"
-mkdir -p "$RESULTS" "$CKPT_DIR"
+mkdir -p "$RESULTS" "$RUN_CKPT_DIR" "$(dirname "$CKPT_DIR")"
+if [ -L "$CKPT_DIR" ]; then
+    if [ "$(readlink -f "$CKPT_DIR")" != "$(readlink -f "$RUN_CKPT_DIR")" ]; then
+        echo "STOP: $CKPT_DIR is a symlink to $(readlink -f "$CKPT_DIR"), not to this run's $RUN_CKPT_DIR"; exit 1
+    fi
+elif [ -d "$CKPT_DIR" ]; then
+    # Pre-2026-10-08 layout (a real directory in the cache): keep using it in place, never move a live run's state.
+    echo "NOTE: $CKPT_DIR is a real directory (old layout); checkpoints stay there for this run"
+else
+    ln -s "$RUN_CKPT_DIR" "$CKPT_DIR"
+fi
 source .venv/bin/activate
 
 # --- the newest COMPLETE checkpoint (save order is model -> meta -> optim; a kill mid-save leaves a

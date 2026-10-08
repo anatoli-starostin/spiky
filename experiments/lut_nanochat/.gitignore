@@ -1,0 +1,4 @@
+# Model weights and optimizer state never enter git (a d24 checkpoint is ~10 GB per step).
+# The launcher keeps them in results/<run>/checkpoints/ next to the run's other artifacts.
+results/*/checkpoints/
+*.pt
