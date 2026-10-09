@@ -221,9 +221,10 @@ table gradient to the fp32 master, which stays the trained parameter.
 - **When the narrow copy is recast:** after every optimizer `step()` (a global step hook covers fused
   optimizers, which do not bump the version counter), and whenever the master is changed in place. Writes
   through `param.data` are invisible to both: call `invalidate_narrow_tables(module)` after them.
-- **Measured** at d24, 32k tokens, block fwd+bwd on an RTX 5090: `torch.float32` is fastest. The gain
-  comes from the fused score gradient. The narrow copies do not help on that GPU, because the fp32 table
-  already fits its L2.
+- **Which `table_dtype` to pick depends on the hardware.** Measured on one consumer card (h=16, tph=64,
+  nap=8, 32k tokens), the ranking was `torch.float32` fastest: the gain comes from the fused score
+  gradient, and the narrow copies did not help there, because the fp32 table already fit the card's L2.
+  On a GPU whose L2 cannot hold the fp32 table, the narrow copies may help; measure before choosing.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
@@ -283,7 +284,7 @@ The wrapper puts a linear map on each side of the cartridge:
   state_dict. The compress output is cast back to fp32 before the cartridge, so addressing, scoring and
   the gather stay fp32; the output comes back in the input's dtype. This is the narrowed fp32 island. Do
   not call `.half()` or `.bfloat16()` on the whole wrapper, which would drag the cartridge into low
-  precision. At the d24 geometry, bf16 compress flips ~0.6% of the cells (token × table) against an
+  precision. At h=16, tph=64, nap=8, bf16 compress flips ~0.6% of the cells (token × table) against an
   exact-fp32 compress. `fp8_projections` takes precedence per projection, so for example
   `projection_dtype=torch.bfloat16, fp8_projections=("decompress",)` runs compress in bf16 and
   decompress in fp8.
@@ -293,7 +294,7 @@ The wrapper puts a linear map on each side of the cartridge:
   accumulator, and runs the backward GEMMs with e5m2 gradients. The cartridge itself stays fp32. This
   needs a CUDA GPU that runs `torch._scaled_mm`; anything else raises at forward.
 - **fp8 `"compress"` changes the model.** With fp8 compress operands, ~9% of the cells (token × table)
-  read a different cell at the d24 geometry, measured against an exact-fp32 compress. These flips come
+  read a different cell at h=16, tph=64, nap=8, measured against an exact-fp32 compress. These flips come
   from the e4m3 operands, so `compress_fp8_out_dtype` (fp32 or bf16 handed to the addressing) does not
   reduce them. fp8 `"decompress"` alone leaves the addresses bit-identical.
 

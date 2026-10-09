@@ -53,7 +53,7 @@ _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasat
 _LOW_PRECISION = (torch.bfloat16, torch.float16)
 
 # Cell-index dtypes (``index_dtype``, every cartridge). The index the reads consume is the FLAT row index into the
-# [n_groups * tph * 2**nap, d_out] table, up to n_groups * tph * 2**nap - 1 (262,143 at the d24 geometry), not the
+# [n_groups * tph * 2**nap, d_out] table, up to n_groups * tph * 2**nap - 1 (262,143 at h=16, tph=64, nap=8), not the
 # within-table cell id < 2**nap; and torch's index ops (embedding_bag, index_select, index_add_, indexing) accept
 # only int32 / int64. So int32 is the only narrowing; int16/int8 cannot represent the flat index and are rejected.
 INDEX_DTYPES = (torch.int64, torch.int32)

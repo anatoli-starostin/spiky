@@ -7,7 +7,8 @@ sum and every gradient are accumulated in fp32.
 * :class:`NarrowTableCache` casts ONCE per change of the master, not once per forward, so with 32 micro-batches
   per optimizer step the cast is amortised 32x. Invalidation has two layers, because the version counter alone is
   NOT reliable (measured, torch 2.9.1: ``torch.optim.AdamW/Adam(fused=True)`` and any ``param.data`` write update
-  the values WITHOUT bumping ``_version``; SGD, foreach AdamW, ``copy_`` and nanochat's MuonAdamW do bump it):
+  the values WITHOUT bumping ``_version``; SGD, foreach AdamW, ``copy_`` and some custom optimizers (e.g. fused or
+  Muon-style wrappers that ``copy_`` into the parameter) do bump it):
     1. a global ``torch.optim`` step post-hook invalidates every live cache after ANY optimizer's ``step()``
        (fused included) - the recast then happens on the next forward, i.e. once per step;
     2. the key also holds the master's version counter + storage pointer + dtype, catching in-place updates made

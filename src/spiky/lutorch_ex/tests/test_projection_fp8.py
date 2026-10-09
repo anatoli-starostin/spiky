@@ -1,7 +1,7 @@
 """ProjectionMHL fp8_projections: opt-in fp8 GEMMs for compress / decompress (fp32 masters, fp32 accumulate).
 
-The flip-rate bound is measured, not assumed: at the d24 geometry (h=16, d=48, tph=64, nap=8) with the default
-init, e4m3 compress operands flip ~1.2% of sign bits / ~9.1% of cells vs an exact-fp32 compress (RTX 5090,
+The flip-rate bound is measured, not assumed: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default
+init, e4m3 compress operands flip ~1.2% of sign bits / ~9.1% of cells vs an exact-fp32 compress (measured
 2026-10-09) - the flips come from the operand quantisation, so the output dtype (fp32 vs bf16) does not matter.
 """
 import pytest
@@ -10,14 +10,14 @@ import torch
 from spiky.lutorch_ex import ConfidenceLUT, LUTSpec, MultiHeadLUT, ProjectionMHL
 from spiky.lutorch_ex.fp8 import fp8_available
 
-D24 = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48)
+GEOM_1536 = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48)
 _FP8_OK = torch.cuda.is_available() and fp8_available(torch.device("cuda"))[0]
 needs_fp8 = pytest.mark.skipif(not _FP8_OK, reason="needs a CUDA device that runs torch._scaled_mm")
 
 
 def _proj(fp8=(), out_dtype=torch.float32, d_model=1536, device="cuda", seed=0):
     torch.manual_seed(seed)
-    cart = ConfidenceLUT(LUTSpec(**D24), seed=1, read_top_n=1)
+    cart = ConfidenceLUT(LUTSpec(**GEOM_1536), seed=1, read_top_n=1)
     m = ProjectionMHL(cart, d_model=d_model, fp8_projections=fp8, compress_fp8_out_dtype=out_dtype).to(device)
     torch.nn.init.normal_(m.decompress.weight, std=0.02)       # off zero, so the output and backward are non-trivial
     return m

@@ -19,7 +19,7 @@ from spiky.lutorch_ex.cartridges._narrow_table import invalidate_narrow_tables
 SPEC = LUTSpec(h_in=4, h_out=4, tph=16, nap=8, d_in=16, d_out=12)
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 NARROW = [torch.bfloat16, torch.float8_e4m3fn]
-# Measured (CPU + RTX 5090, this fixture): output / input grad ~1.6e-3 bf16, ~2.6e-2 fp8. The single-scalar score
+# Measured (CPU + one CUDA GPU, this fixture): output / input grad ~1.6e-3 bf16, ~2.6e-2 fp8. The single-scalar score
 # parameters (beta, gamma, tau) each sum many terms and cancel, so their relative error is larger and seed/device
 # dependent: up to 3.9e-2 (tau, bf16) and 2.9e-1 (tau, fp8) measured.
 REL_TOL = {torch.float32: 1e-5, torch.bfloat16: 5e-3, torch.float8_e4m3fn: 6e-2}

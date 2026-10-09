@@ -1,21 +1,21 @@
 """ProjectionMHL projection_dtype: bf16 compress/decompress GEMMs from fp32 masters, cartridge stays fp32.
 
-The flip-rate bound is measured: at the d24 geometry (h=16, d=48, tph=64, nap=8) with the default init, bf16
-compress flips ~0.07% of sign bits / ~0.6% of cells vs an exact-fp32 compress (RTX 5090, 2026-10-09).
+The flip-rate bound is measured: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default init, bf16
+compress flips ~0.07% of sign bits / ~0.6% of cells vs an exact-fp32 compress (measured 2026-10-09).
 """
 import pytest
 import torch
 
 from spiky.lutorch_ex import ConfidenceLUT, LUTSpec, ProjectionMHL
 
-D24 = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48)
+GEOM_1536 = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48)
 needs_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="bf16 GEMM measurement needs CUDA")
 
 
 def _pair(device, d_model=1536, **kw):
     """(fp32 reference, twin with `kw`) sharing cartridge and weights; decompress nudged off its zero init."""
     torch.manual_seed(0)
-    cart = ConfidenceLUT(LUTSpec(**D24), seed=1, read_top_n=1)
+    cart = ConfidenceLUT(LUTSpec(**GEOM_1536), seed=1, read_top_n=1)
     ref = ProjectionMHL(cart, d_model=d_model).to(device)
     torch.nn.init.normal_(ref.decompress.weight, std=0.02)
     m = ProjectionMHL(cart, d_model=d_model, **kw).to(device)
