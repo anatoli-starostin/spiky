@@ -211,9 +211,11 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
 | `table_dtype` | `None` | `ConfidenceLUT` only. `None` uses the `embedding_bag` read. `torch.float32` uses a fused gather read on the fp32 master. `torch.bfloat16` or `torch.float8_e4m3fn` use the same fused read on a narrow copy of the table, cast once per optimizer step (see below) |
 
-`table_dtype` replaces the `embedding_bag` read with a fused gather, upcast and score-weighted fp32 sum,
-which Inductor compiles into one kernel. The backward re-gathers for the score gradient and sends the
-table gradient to the fp32 master, which stays the trained parameter.
+`table_dtype` replaces `embedding_bag`'s forward and score-gradient kernels with a gather, upcast and
+score-weighted fp32 sum, and a re-gather for the score gradient. The table gradient still calls
+`aten._embedding_bag_dense_backward`, to the fp32 master, which stays the trained parameter; so it keeps
+that op's [micro-batch limit](#training-micro-batch-limit). The read and the score gradient are fused into
+single kernels only when Inductor compiles the cartridge forward (CUDA). Eager runs them as separate ops.
 
 - **Correctness:** the table gradient is bit-identical to the default path. With `torch.float32`, outputs
   agree to fp32 re-association. A bf16 copy adds about 1.6e-3 relative output error, and fp8 (tensorwise

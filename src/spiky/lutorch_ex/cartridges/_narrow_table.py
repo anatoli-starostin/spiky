@@ -22,9 +22,13 @@ sum and every gradient are accumulated in fp32.
   gradient straight to the fp32 master via ``aten._embedding_bag_dense_backward`` (the same op embedding_bag's
   backward uses, fp32 in / fp32 out). The narrow copy never receives a gradient.
 
-``embedding_bag`` itself cannot be used: with a bf16 table it demands bf16 per-sample weights and returns bf16
-(rounding the scores and the sum), and with an fp8 table it is not implemented at all. The gather + upcast +
-weighted sum written here is fused into one kernel by Inductor when the cartridge forward is compiled (CUDA).
+So this replaces embedding_bag's FORWARD and SCORE-GRADIENT kernels only; the table gradient still calls
+``aten._embedding_bag_dense_backward`` (see :meth:`_NarrowScoredRead.backward`), with that op's size limit (see the
+EMBEDDING_BAG_* constants in manifesto_base). ``embedding_bag`` itself cannot be used for the forward: with a bf16
+table it demands bf16 per-sample weights and returns bf16 (rounding the scores and the sum), and with an fp8 table it
+is not implemented at all. Fusion is conditional: the gather + upcast + weighted sum (and the score-gradient
+re-gather) become single kernels only when Inductor compiles the cartridge forward (CUDA); eager runs them as
+separate ops and materialises the gathered rows.
 """
 from __future__ import annotations
 
@@ -34,7 +38,8 @@ from typing import Optional
 import torch
 
 # None = the default embedding_bag read. float32 = the same fused gather read as the narrow forms but straight from
-# the fp32 master (no copy): the control that separates "fused read instead of embedding_bag" from "fewer bytes".
+# the fp32 master (no copy): the control that separates "gather read instead of embedding_bag's forward and score
+# gradient" from "fewer bytes".
 NARROW_TABLE_DTYPES = (None, torch.float32, torch.bfloat16, torch.float8_e4m3fn)
 _E4M3_MAX = 448.0
 
