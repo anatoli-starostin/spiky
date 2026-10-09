@@ -1,0 +1,58 @@
+{
+ "gpu": "NVIDIA GeForce RTX 5090",
+ "torch": "2.9.1+cu130",
+ "results": {
+  "8192": {
+   "int64": {
+    "fwd_ms": 1.0699520111083984,
+    "fwdbwd_ms": 6.046095848083496,
+    "max_abs_diff_gradW": 0.0,
+    "max_abs_diff_grad_psw_kept": 0.0
+   },
+   "int32": {
+    "fwd_ms": 0.9351199865341187,
+    "fwdbwd_ms": 4.754879951477051,
+    "max_abs_diff_gradW": 0.0,
+    "max_abs_diff_grad_psw_kept": 0.0
+   },
+   "skipdrop": {
+    "fwd_ms": 1.0108479857444763,
+    "fwdbwd_ms": 11.900447845458984,
+    "max_abs_diff_gradW": 3.814697265625e-06,
+    "max_abs_diff_grad_psw_kept": 0.0
+   },
+   "int32+skipdrop": {
+    "fwd_ms": 0.8706240057945251,
+    "fwdbwd_ms": 10.365424156188965,
+    "max_abs_diff_gradW": 3.814697265625e-06,
+    "max_abs_diff_grad_psw_kept": 0.0
+   }
+  },
+  "32768": {
+   "int64": {
+    "fwd_ms": 4.461024045944214,
+    "fwdbwd_ms": 24.344751358032227,
+    "max_abs_diff_gradW": 0.0,
+    "max_abs_diff_grad_psw_kept": 0.0
+   },
+   "int32": {
+    "fwd_ms": 3.6995840072631836,
+    "fwdbwd_ms": 19.32926368713379,
+    "max_abs_diff_gradW": 0.0,
+    "max_abs_diff_grad_psw_kept": 0.0
+   },
+   "skipdrop": {
+    "fwd_ms": 3.9921599626541138,
+    "fwdbwd_ms": 48.67103958129883,
+    "max_abs_diff_gradW": 9.5367431640625e-06,
+    "max_abs_diff_grad_psw_kept": 0.0
+   },
+   "int32+skipdrop": {
+    "fwd_ms": 3.43996798992157,
+    "fwdbwd_ms": 45.10020637512207,
+    "max_abs_diff_gradW": 9.5367431640625e-06,
+    "max_abs_diff_grad_psw_kept": 0.0
+   }
+  }
+ }
+}
