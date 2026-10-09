@@ -231,6 +231,30 @@ Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `
 `read_top_n` defaults to `2`, the only form deployment supports. `read_top_n=1` still trains and evaluates,
 but `export_deployment` refuses it with a clear error.
 
+### Training micro-batch limit
+
+PyTorch's CUDA `embedding_bag` backward overflows a 32-bit thread index when
+
+    (numel // 10 + min(numel, num_weights)) * 32 * ceil(d_out / 32) > 2**31
+
+where `numel` is the number of index entries in one call (`B · n_groups · tph · cells read per table`),
+`num_weights` the table rows (`n_groups · tph · 2^nap`) and `d_out` the row width. Past that it crashes with an
+illegal memory access, or can return wrong table gradients. This is an upstream limitation: int32 and int64
+indices fail at exactly the same size. It was measured on torch 2.9.1, exact to the element across `d_out` from
+16 to 128 and row counts from 16 to 10^6.
+
+- **The guard:** `ManifestoLUT.forward` refuses a CUDA training call above `2**30` threads (a 2x margin) with an
+  error that names the fix: a smaller micro-batch or more gradient accumulation steps. It applies only to
+  training routes that read through a differentiable `embedding_bag`. Those are ConfidenceLUT and
+  QuantisedConfidenceLUT (one or two cells per table by `read_top_n`), SoftSignHardLUT (one), SoftSignSmoothLUT
+  (two), and the `tier1` route of the fused twins. It doesn't apply to native, `FusedHardSTE` or pure
+  Manifesto routes, to eval, or under `no_grad`.
+- **Checking at startup:** `cartridge.max_safe_microbatch_tokens` gives the largest admitted micro-batch, or
+  `None` when no route of the cartridge is affected. At h=16, tph=64, nap=8, d_out=48 that's 161,280 tokens
+  for one cell per table and 80,640 for two.
+- **If PyTorch changes the kernel:** `tests/test_embedding_bag_limit.py` re-checks the cliff on the installed
+  torch in a subprocess and fails if it has moved.
+
 ## Reference and fused cartridges
 
 The plain cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT`, `SoftSignHardLUT` and `SoftSignSmoothLUT`,

@@ -68,6 +68,67 @@ def check_index_dtype(index_dtype, spec) -> torch.dtype:
     return index_dtype
 
 
+# Size limits of the embedding_bag TRAIN read (both are PyTorch constraints, not lutorch_ex ones; checked together in
+# ManifestoLUT._check_embedding_bag_limits, which forward runs before dispatch).
+#
+# 1. Index RANGE: the flat row index must fit the index dtype (check_index_dtype above, at construction; with int32
+#    the table may have at most 2**31 rows -- 262,144 at h=16, tph=64, nap=8, so it never binds in practice).
+#
+# 2. Backward SIZE: PyTorch's CUDA embedding_bag backward (aten::_embedding_bag_dense_backward ->
+#    compute_grad_weight_bags) launches one warp-padded thread group per "partial segment" for an UPPER BOUND of
+#    numel // 10 + min(numel, num_weights) segments, and indexes those threads with a 32-bit integer. When
+#        (numel // 10 + min(numel, num_weights)) * 32 * ceil(d_out / 32) > 2**31
+#    the kernel reads out of bounds: an illegal memory access, or silently wrong table gradients if the stray reads
+#    land in live memory. numel = index entries passed to embedding_bag (B * G * tph * cells per table), num_weights =
+#    table rows (G * tph * 2**nap), d_out = row width. numel is an int64 on the host and never overflows; the 32-bit
+#    quantity is the kernel's launch-thread index, so the index DTYPE is irrelevant: int32 and int64 indices fail at
+#    the same size, and widening the indices does not help. Measured on torch 2.9.1+cu130 (one RTX 5090), exact to the
+#    element in 24/24 predicted boundary pairs across d_out 16..128, 16..1,000,000 rows, any index distribution and
+#    bag shape; e.g. 262,144 rows, d_out=48: last good numel 332,922,889, first bad 332,922,890. The "/10" and the
+#    warp padding are PyTorch internals inferred from that measurement (not read from its source) and may change
+#    between versions, so the guard keeps a 2x margin below the cliff; tests/test_embedding_bag_limit.py re-checks the
+#    cliff on the installed torch.
+EMBEDDING_BAG_ENTRIES_PER_SEGMENT = 10      # measured: one partial segment per 10 index entries of a row (+1 per row)
+EMBEDDING_BAG_THREAD_GROUP = 32             # measured: d_out is padded up to a multiple of a warp
+EMBEDDING_BAG_THREAD_CLIFF = 2 ** 31        # measured: the backward crashes above this many threads
+EMBEDDING_BAG_MAX_THREADS = 2 ** 30         # the guard: refuse above this (2x margin below the cliff)
+
+
+def embedding_bag_backward_threads(numel: int, num_weights: int, d_out: int) -> int:
+    """Threads PyTorch's CUDA embedding_bag backward launches for one call (see the comment above)."""
+    segments = numel // EMBEDDING_BAG_ENTRIES_PER_SEGMENT + min(numel, num_weights)
+    groups = -(-d_out // EMBEDDING_BAG_THREAD_GROUP)
+    return segments * groups * EMBEDDING_BAG_THREAD_GROUP
+
+
+@torch.compiler.disable
+def _raise_embedding_bag_limit(owner: str, tokens, threads, max_tokens: int):
+    # Runs eagerly even inside an outer torch.compile (nanochat compiles the whole model): there the sizes are
+    # symbolic while tracing, and building the message from them fails inside dynamo. Only reached when refusing.
+    raise RuntimeError(
+        f"{owner}: this training micro-batch of {int(tokens):,} tokens needs {int(threads):,} embedding_bag backward "
+        f"threads, above the supported {EMBEDDING_BAG_MAX_THREADS:,} (PyTorch's embedding_bag CUDA backward overflows "
+        f"a 32-bit thread index near {EMBEDDING_BAG_THREAD_CLIFF:,}; this limit keeps a 2x margin). At most "
+        f"{max_tokens:,} tokens per micro-batch fit this cartridge: reduce the batch size or increase gradient "
+        "accumulation steps.")
+
+
+def max_safe_embedding_bag_rows(entries_per_row: int, num_weights: int, d_out: int,
+                                max_threads: int = EMBEDDING_BAG_MAX_THREADS) -> int:
+    """Largest batch B (rows, i.e. tokens) whose embedding_bag backward, with ``entries_per_row`` index entries per
+    row, stays within ``max_threads``. The thread count is monotone in B, so a bisection is exact."""
+    lo, hi = 0, 1
+    while embedding_bag_backward_threads(hi * entries_per_row, num_weights, d_out) <= max_threads:
+        lo, hi = hi, hi * 2
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if embedding_bag_backward_threads(mid * entries_per_row, num_weights, d_out) <= max_threads:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
 
@@ -296,6 +357,7 @@ class ManifestoLUT(MultiHeadLUT):
         # Tensors a cartridge computes OUTSIDE the compiled region and hands to _forward_impl as arguments (e.g. the
         # ConfidenceLUT narrow-table copy, refreshed per optimizer step): passing them as inputs, not attributes,
         # keeps a refresh from triggering a recompile. Empty for every cartridge by default.
+        self._check_embedding_bag_limits(x)
         extra = self._forward_extra_args()
         if _COMPILE_ENABLED and x.is_cuda:
             if not self.training:
@@ -312,6 +374,45 @@ class ManifestoLUT(MultiHeadLUT):
     def _forward_extra_args(self) -> tuple:
         """Extra tensor arguments for :meth:`_forward_impl` (see :meth:`forward`); none by default."""
         return ()
+
+    # -- embedding_bag size limits (see the comment above EMBEDDING_BAG_MAX_THREADS) --------------------------------
+
+    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
+        """Index entries per table that THIS call's training read sends through a differentiable ``F.embedding_bag``
+        (whose CUDA backward has the size limit): 0 when the route never reaches it. Default 0 -- a cartridge whose
+        training route reads through embedding_bag opts in. Only consulted while training with grad enabled."""
+        return 0
+
+    def _embedding_bag_cells_per_table_max(self) -> int:
+        """The largest :meth:`_embedding_bag_cells_per_table` any training route of this cartridge can return."""
+        return 0
+
+    @property
+    def max_safe_microbatch_tokens(self) -> Optional[int]:
+        """Largest training micro-batch (rows of the cartridge input, i.e. tokens) the embedding_bag backward size
+        guard admits, over the cartridge's worst-case training route; None when no route reads through
+        embedding_bag. Lets a training script check its micro-batch at startup instead of failing mid-run."""
+        cells = self._embedding_bag_cells_per_table_max()
+        if cells == 0:
+            return None
+        G, tph = self.spec.n_groups, self.spec.tph
+        return max_safe_embedding_bag_rows(G * tph * cells, G * tph * self.spec.n_cells, self.spec.d_out)
+
+    def _check_embedding_bag_limits(self, x: torch.Tensor) -> None:
+        """Refuse a training call whose embedding_bag backward would exceed PyTorch's CUDA thread-index limit."""
+        if not (self.training and torch.is_grad_enabled() and x.is_cuda):
+            return
+        cells = self._embedding_bag_cells_per_table(x)
+        if cells == 0:
+            return
+        G, tph, d_out = self.spec.n_groups, self.spec.tph, self.spec.d_out
+        num_weights = G * tph * self.spec.n_cells
+        if num_weights - 1 > torch.iinfo(self.index_dtype).max:          # index range (also checked at construction)
+            raise ValueError(f"{type(self).__name__}: {num_weights} table rows do not fit index_dtype={self.index_dtype}")
+        threads = embedding_bag_backward_threads(x.shape[0] * G * tph * cells, num_weights, d_out)
+        if threads > EMBEDDING_BAG_MAX_THREADS:
+            _raise_embedding_bag_limit(type(self).__name__, x.shape[0], threads,
+                                       max_safe_embedding_bag_rows(G * tph * cells, num_weights, d_out))
 
     def _addr(self, x: torch.Tensor):
         """Addressing for the native TRAIN path. Identical result to :meth:`_addresses`, but

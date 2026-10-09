@@ -351,6 +351,12 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     def decompress_scale(self) -> Optional[torch.Tensor]:
         return None   # the pow2 output scale is already folded (statically) into the stored decompress weight
 
+    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
+        return 0      # inference only: no backward (and forward() is overridden, so the guard never runs here)
+
+    def _embedding_bag_cells_per_table_max(self) -> int:
+        return 0
+
     def _supports_low_precision(self) -> bool:
         return False
 

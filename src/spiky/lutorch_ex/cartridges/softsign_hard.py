@@ -33,6 +33,12 @@ class SoftSignHardLUT(SoftSignLUT):
     def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
         raise NotImplementedError
 
+    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
+        return 1    # training value read: fused_hard_read over c only (the surrogate's two-cell read is detached indexing)
+
+    def _embedding_bag_cells_per_table_max(self) -> int:
+        return 1
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         if not self.training:

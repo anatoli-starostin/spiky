@@ -36,6 +36,12 @@ class SoftSignSmoothLUT(SoftSignLUT):
         y_hard, y_alt = self._read_pair(c, c_alt)
         return (y_hard + w.unsqueeze(-1) * (y_alt - y_hard)).sum(dim=2)
 
+    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
+        return 2    # training read: fused_blend_read over (c, c_alt)
+
+    def _embedding_bag_cells_per_table_max(self) -> int:
+        return 2
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         w = self._blend_w(u_abs_star)

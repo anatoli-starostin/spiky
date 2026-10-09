@@ -97,6 +97,13 @@ class FusedSoftSignLUT(SoftSignLUT):
 class FusedSoftSignHardLUT(FusedSoftSignLUT):
     """Native fused twin of SoftSignHardLUT (variant 2.3)."""
 
+    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
+        be = self._pick(x) if self.backend == "auto" else self.backend
+        return 1 if be == "tier1" else 0    # tier1 value read is fused_hard_read over c; native owns its backward
+
+    def _embedding_bag_cells_per_table_max(self) -> int:
+        return 0 if self.backend == "native" else 1
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         low = x.dtype in _LOW_PREC
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
@@ -136,6 +143,13 @@ class FusedSoftSignSmoothLUT(FusedSoftSignLUT):
         # so "auto" prefers tier1 (embedding_bag). The native path stays reachable via an explicit
         # backend="native". (Hard keeps the base _pick: its native path is a clear win.)
         return "pure_eval" if not self.training else "tier1"
+
+    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
+        be = self._pick(x) if self.backend == "auto" else self.backend
+        return 2 if be == "tier1" else 0    # tier1 = fused_blend_read over (c, c_alt); native owns its backward
+
+    def _embedding_bag_cells_per_table_max(self) -> int:
+        return 0 if self.backend == "native" else 2
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         low = x.dtype in _LOW_PREC
