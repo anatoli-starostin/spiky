@@ -213,7 +213,7 @@ def guarded(name: str, fn):
         plf.free_cuda()
 
 
-def static_facts(name: str, cart) -> dict:
+def static_facts(name: str, cart, tokens=(32768,)) -> dict:
     """HARDWARE-INDEPENDENT facts for one arm (analytic; must be identical on every host)."""
     s = spec()
     a = ARMS[name]
@@ -242,14 +242,19 @@ def static_facts(name: str, cart) -> dict:
            "param_and_buffer_bytes": nbytes,
            "softsign_tail": a["tail"] if _SS["override"] == "per-arm" or a["tail"] is None else _SS["override"]}
     if a["kw"].get("backend") == "auto":
-        cart.train()
-        be = cart._pick(torch.empty(1, s.h_in, s.d_in, device="cuda", dtype=_DT[a["dtype"]]))
-        if be == "native" and "SoftSign" in a["cls"]:
-            be += (" (soft-sign surrogate kernel)" if lib_features()["ss_kernel"]
-                   else " (eager soft-sign tail: the kernel does not build in this lutorch_ex)")
-        cart.eval()
-        out["auto_resolves_to"] = {"train": be, "eval": cart._pick(torch.empty(1, s.h_in, s.d_in, device="cuda",
-                                                                               dtype=_DT[a["dtype"]]))}
+        # _pick can depend on the batch (FusedManifestoSoftLUT: tier1 from 4096 rows), so ask it at each token count
+        # of this run, with a zero-stride stand-in of the real shape (no allocation).
+        res = {}
+        for n in tokens:
+            xs = torch.empty(1, s.h_in, s.d_in, device="cuda", dtype=_DT[a["dtype"]]).expand(n, s.h_in, s.d_in)
+            cart.train()
+            be = cart._pick(xs)
+            if be == "native" and "SoftSign" in a["cls"]:
+                be += (" (soft-sign surrogate kernel)" if lib_features()["ss_kernel"]
+                       else " (eager soft-sign tail: the kernel does not build in this lutorch_ex)")
+            cart.eval()
+            res[str(n)] = {"train": be, "eval": cart._pick(xs)}
+        out["auto_resolves_to"] = res
     if name.startswith("quant"):
         # per CALL (not per token): ste_tables reads the 4-byte master for amax, reads it again to quantise and
         # writes the 4-byte fake-quant copy
@@ -285,7 +290,7 @@ def pass_ext() -> dict:
 def pass_static(args, carts) -> dict:
     out = {}
     for name in carts:
-        out[name] = guarded(name, lambda: static_facts(name, build(name)))
+        out[name] = guarded(name, lambda: static_facts(name, build(name), args.tokens))
         if out[name].get("status") == "ok":
             plf.log(f"  [static] {name:20s} MACs/tok {out[name]['read_macs_per_token']:7d}  read B/tok "
                     f"{out[name]['read_bytes_per_token']['total_bytes']:7d}  index {out[name]['index_dtype']}")
