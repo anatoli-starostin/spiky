@@ -197,7 +197,6 @@ What int32 gives you:
 - The fused twins' native CUDA kernels read int32 directly (they template on the index type) and create no
   int64 copy. Their host functions reject any other index dtype.
 - Training gradients are bit-identical to int64 under `torch.use_deterministic_algorithms(True)`.
-- One exception: ConfidenceLUT `read_top_n=1` compiled eval on CUDA differs by about 1 ulp.
 
 SoftSign (`SoftSignHardLUT`, `SoftSignSmoothLUT` and their fused twins):
 

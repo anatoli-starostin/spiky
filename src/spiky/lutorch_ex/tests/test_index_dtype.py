@@ -9,8 +9,8 @@ parameters, ProjectionMHL compress/decompress, input), measured 2026-10-09:
   * The fused twins on their tier1 (embedding_bag) path. Their NATIVE CUDA kernels read int32 indices directly
     (templated on the index type) and are nondeterministic in their own baseline (custom-kernel atomics), so there
     only closeness within that baseline noise is asserted; exact per-kernel parity is in test_native_index_dtype.py.
-  * EVAL: bit-identical everywhere EXCEPT ConfidenceLUT read_top_n=1 on CUDA, whose compiled eval read (an
-    Inductor-fused gather + score-weighted sum) is generated differently for int32 indices and differs by ~1 ulp.
+  * EVAL: bit-identical, CPU and CUDA (one compiled CUDA case is asserted with a tolerance for an Inductor
+    autotuning reason, not an index-dtype one -- see test_eval_int32_vs_int64).
 """
 import contextlib
 
@@ -116,7 +116,10 @@ def test_eval_int32_vs_int64(device, name, kw):
         with torch.no_grad():
             outs.append(m(torch.randn(128, spec.h_in, spec.d_in, generator=torch.Generator().manual_seed(2)).to(device)))
     if name == "ConfidenceLUT" and kw.get("read_top_n") == 1 and device == "cuda":
-        # Measured exception: the compiled eval read is code-generated differently for int32 indices (~1 ulp).
+        # Not an index-dtype issue: Inductor's autotuner may pick different XBLOCK / num_warps winners for the int32-
+        # and int64-indexed eval kernels, which changes the fp32 summation order (<= 1 ulp of the output scale at this
+        # geometry). Bit-identical with triton.autotune_pointwise=False or under use_deterministic_algorithms(True),
+        # and zero at the production geometry (h=16, tph=64, nap=8, d=48).
         torch.testing.assert_close(outs[1], outs[0], rtol=1e-6, atol=1e-7)
     else:
         assert torch.equal(*outs)
