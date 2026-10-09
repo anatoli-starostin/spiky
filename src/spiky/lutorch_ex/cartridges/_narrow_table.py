@@ -23,8 +23,8 @@ sum and every gradient are accumulated in fp32.
   backward uses, fp32 in / fp32 out). The narrow copy never receives a gradient.
 
 So this replaces embedding_bag's FORWARD and SCORE-GRADIENT kernels only; the table gradient still calls
-``aten._embedding_bag_dense_backward`` (see :meth:`_NarrowScoredRead.backward`), with that op's size limit (see the
-EMBEDDING_BAG_* constants in manifesto_base). ``embedding_bag`` itself cannot be used for the forward: with a bf16
+``aten._embedding_bag_dense_backward`` (see :meth:`_NarrowScoredRead.backward`), with that op's size limit (README:
+"PyTorch's embedding_bag backward size limit"). ``embedding_bag`` itself cannot be used for the forward: with a bf16
 table it demands bf16 per-sample weights and returns bf16 (rounding the scores and the sum), and with an fp8 table it
 is not implemented at all. Fusion is conditional: the gather + upcast + weighted sum (and the score-gradient
 re-gather) become single kernels only when Inductor compiles the cartridge forward (CUDA); eager runs them as

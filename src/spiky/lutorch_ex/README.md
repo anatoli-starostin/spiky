@@ -221,7 +221,7 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 `table_dtype` replaces `embedding_bag`'s forward and score-gradient kernels with a gather, upcast and
 score-weighted fp32 sum, and a re-gather for the score gradient. The table gradient still calls
 `aten._embedding_bag_dense_backward`, to the fp32 master, which stays the trained parameter; so it keeps
-that op's [micro-batch limit](#training-micro-batch-limit). The read and the score gradient are fused into
+that op's [size limit](#pytorchs-embedding_bag-backward-size-limit). The read and the score gradient are fused into
 single kernels only when Inductor compiles the cartridge forward (CUDA). Eager runs them as separate ops.
 
 - **Correctness:** the table gradient is bit-identical to the default path. With `torch.float32`, outputs
@@ -240,29 +240,30 @@ Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `
 `read_top_n` defaults to `2`, the only form deployment supports. `read_top_n=1` still trains and evaluates,
 but `export_deployment` refuses it with a clear error.
 
-### Training micro-batch limit
+### PyTorch's embedding_bag backward size limit
 
-PyTorch's CUDA `embedding_bag` backward overflows a 32-bit thread index when
+This is a known upstream constraint. lutorch_ex documents it but doesn't enforce it.
 
-    (numel // 10 + min(numel, num_weights)) * 32 * ceil(d_out / 32) > 2**31
-
-where `numel` is the number of index entries in one call (`B · n_groups · tph · cells read per table`),
-`num_weights` the table rows (`n_groups · tph · 2^nap`) and `d_out` the row width. Past that it crashes with an
-illegal memory access, or can return wrong table gradients. This is an upstream limitation: int32 and int64
-indices fail at exactly the same size. It was measured on torch 2.9.1, exact to the element across `d_out` from
-16 to 128 and row counts from 16 to 10^6.
-
-- **The guard:** `ManifestoLUT.forward` refuses a CUDA training call above `2**30` threads (a 2x margin) with an
-  error that names the fix: a smaller micro-batch or more gradient accumulation steps. It applies only to
-  training routes that read through a differentiable `embedding_bag`. Those are ConfidenceLUT and
-  QuantisedConfidenceLUT (one or two cells per table by `read_top_n`), SoftSignHardLUT (one), SoftSignSmoothLUT
-  (two), and the `tier1` route of the fused twins. It doesn't apply to native, `FusedHardSTE` or pure
-  Manifesto routes, to eval, or under `no_grad`.
-- **Checking at startup:** `cartridge.max_safe_microbatch_tokens` gives the largest admitted micro-batch, or
-  `None` when no route of the cartridge is affected. At h=16, tph=64, nap=8, d_out=48 that's 161,280 tokens
-  for one cell per table and 80,640 for two.
-- **If PyTorch changes the kernel:** `tests/test_embedding_bag_limit.py` re-checks the cliff on the installed
-  torch in a subprocess and fails if it has moved.
+- **Symptom:** a training step crashes with an opaque `CUDA error: an illegal memory access was encountered`.
+  It is not a readable error, and stray reads could in principle return wrong gradients instead of crashing.
+- **Cause:** PyTorch's CUDA `aten::_embedding_bag_dense_backward` (kernel `compute_grad_weight_bags`) indexes
+  its launch threads in 32 bits. It fails when
+  `(floor(numel/10) + min(numel, num_weights)) * 32 * ceil(d_out/32) > 2^31`, where:
+  - `numel` is the index-tensor element count of one call;
+  - `num_weights` is the table rows;
+  - `d_out` is the row width.
+- **Dtype-independent:** it reproduces identically for int32 and int64 indices.
+- **Where it bites:** far below 2^31 entries. At h=16, tph=64, nap=8, d_out=48 (262,144 rows) the cliff is at
+  ~2^28.3 entries (measured: 332,922,889 OK, 332,922,890 crashes; torch 2.9.1, RTX 5090). That's ~325k
+  tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
+  (~10× and ~5× headroom).
+- **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
+  ConfidenceLUT n=1/n=2, QuantisedConfidenceLUT, the fused narrow read's table gradient (`table_dtype`),
+  SoftSignHard/Smooth, and the fused twins' `tier1` reads.
+- **Not exposed:** the native backends, `FusedHardSTE`, and every eval / `no_grad` path.
+- **Workaround:** reduce the micro-batch size and raise gradient accumulation.
+- **Future fix:** an `index_add_` table gradient (a later PR) avoids this op. It was verified correct to 819M
+  entries, where memory ran out first.
 
 ## Reference and fused cartridges
 

@@ -72,13 +72,6 @@ class FusedManifestoSoftLUT(ManifestoLUT):
             return "native"                                  # train small/mid: native step wins (fp32/bf16/fp16)
         return "tier1" if x.is_cuda else "pure"
 
-    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
-        be = self._pick(x) if self.backend == "auto" else self.backend
-        return 2 if be == "tier1" else 0    # tier1 = fused_blend_read over (c, c_alt); pure/native do not use it
-
-    def _embedding_bag_cells_per_table_max(self) -> int:
-        return 2 if self.backend in ("auto", "tier1") else 0
-
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # bf16/fp16 support lives here (not in the pure base). fp32 addressing; fp32-accumulated
         # reads; output cast back to the input dtype once at the end.

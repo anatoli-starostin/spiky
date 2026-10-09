@@ -154,14 +154,6 @@ class ConfidenceLUT(ManifestoLUT):
     def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
         raise NotImplementedError
 
-    def _embedding_bag_cells_per_table(self, x: torch.Tensor) -> int:
-        # Every training read (embedding_bag, the narrow fused read's dense backward, and QuantisedConfidenceLUT's
-        # shared path and n=2 monolith) passes read_top_n index entries per table.
-        return self.read_top_n
-
-    def _embedding_bag_cells_per_table_max(self) -> int:
-        return self.read_top_n
-
     def _forward_extra_args(self) -> tuple:
         """The narrow table copy + its inverse scale, refreshed (outside the compiled region) only when the fp32
         master changed; nothing when ``table_dtype`` is None."""

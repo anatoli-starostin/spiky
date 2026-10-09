@@ -169,8 +169,9 @@ def test_resolve_index_dtype_rule():
 
 
 def test_auto_widens_a_call_too_large_for_int32_positions(monkeypatch):
-    """Auto mode reads in int64 for a call with more than 2^31 - 1 possible index entries (eval is not capped by the
-    training guard); an explicit int32 is never widened. The limit is patched down so a small batch exercises it."""
+    """Auto mode reads in int64 for a call with more than 2^31 - 1 possible index entries (PyTorch's CUDA embedding_bag
+    forward asserts above that with int32); an explicit int32 is never widened. The limit is patched down so a small
+    batch exercises it."""
     import spiky.lutorch_ex.cartridges.manifesto_base as mb
     spec = LUTSpec(**GEOM)                                         # G * tph * 2 = 128 entries per row
     monkeypatch.setattr(mb, "_INT32_MAX_ENTRIES", 128 * 10)
