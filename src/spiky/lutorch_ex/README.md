@@ -235,7 +235,8 @@ a bit; reads and reductions accumulate in fp32; and the output is cast back once
 
 ```python
 ProjectionMHL(cartridge, d_model=None, *, input_dim=None, output_dim=None,
-              compress=True, decompress=True, bias=True, device=None)
+              compress=True, decompress=True, bias=True, device=None,
+              fp8_projections=(), compress_fp8_out_dtype=torch.float32)
 ```
 
 The wrapper puts a linear map on each side of the cartridge:
@@ -248,6 +249,15 @@ The wrapper puts a linear map on each side of the cartridge:
   drop-in into a pretrained residual stream. The bias stays a trainable parameter.
 - Either projection may be switched off (`compress=False` or `decompress=False`, which makes that side
   an identity), provided the widths already match. Switching off both is refused.
+- `fp8_projections` (opt-in, default `()`) runs the GEMM of `"compress"` and/or `"decompress"` in fp8
+  (`fp8.py`). The weights stay fp32 `nn.Linear` parameters with the same state_dict. Each call casts both
+  operands to e4m3 with one amax scale per tensor, multiplies with `torch._scaled_mm` into an fp32
+  accumulator, and runs the backward GEMMs with e5m2 gradients. The cartridge itself stays fp32. This
+  needs a CUDA GPU that runs `torch._scaled_mm`; anything else raises at forward.
+- **fp8 `"compress"` changes the model.** With fp8 compress operands, ~9% of the cells (token × table)
+  read a different cell at the d24 geometry, measured against an exact-fp32 compress. These flips come
+  from the e4m3 operands, so `compress_fp8_out_dtype` (fp32 or bf16 handed to the addressing) does not
+  reduce them. fp8 `"decompress"` alone leaves the addresses bit-identical.
 
 ```python
 ffn = ProjectionMHL(ConfidenceLUT(spec, seed=1), input_dim=384, output_dim=256)
@@ -414,6 +424,7 @@ lutorch_ex/
 ├── addressing.py        MSB-first sign-bit packing
 ├── anchors.py           canonical full-coverage anchor sampling (pairs and singles)
 ├── projection.py        ProjectionMHL
+├── fp8.py               opt-in fp8 GEMMs for ProjectionMHL's projections (tensorwise e4m3/e5m2, fp32 master)
 ├── deploy.py            export_deployment / load_deployment
 ├── deploy_registry.py   format tag -> rebuilder registry
 ├── bench.py             the benchmark harness
