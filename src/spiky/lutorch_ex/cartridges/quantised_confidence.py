@@ -35,7 +35,7 @@ from ..lut_spec import LUTSpec
 from . import _pow2, _pow2_int8
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
-from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION, check_index_dtype
+from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION, resolve_index_dtype
 
 
 class QuantisedConfidenceLUT(ConfidenceLUT):
@@ -327,10 +327,12 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     holds no cartridge-specific knowledge; it is reached only via the format-tag registry (see
     :meth:`QuantisedConfidenceLUT.from_deployment`)."""
 
-    def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None, index_dtype: torch.dtype = torch.int64):
+    def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None,
+                 index_dtype: Optional[torch.dtype] = None):
         nn.Module.__init__(self)   # skip the fp32-weight-allocating ManifestoLUT.__init__
         self.spec = spec
-        self.index_dtype = check_index_dtype(index_dtype, spec)   # what ManifestoLUT.__init__ would set
+        self.index_dtype = resolve_index_dtype(index_dtype, spec)   # what ManifestoLUT.__init__ would set
+        self._index_dtype_auto = index_dtype is None
         self.read_top_n = int(meta["read_top_n"])
         if self.read_top_n != 2:
             raise NotImplementedError("DeployedQuantisedConfidenceLUT supports read_top_n==2 only")

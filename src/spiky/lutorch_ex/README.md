@@ -177,20 +177,27 @@ arguments are shared by all of them:
 | `cmp_eps` | `0.0` | the threshold `eps` in the bit test `u > eps` |
 | `table_dropout_rate` | `0.0` | whole-table dropout, see [Regularisers](#regularisers) |
 | `device` | `None` | where to build parameters and buffers |
-| `index_dtype` | `torch.int64` | dtype of the cell index, produced once in the shared addressing: `torch.int64` or `torch.int32` (see below) |
+| `index_dtype` | `None` | dtype of the **stored** cell-index tensors, produced once in the shared addressing. `None` picks `torch.int32` when the table fits it, else `torch.int64`; an explicit `torch.int32` or `torch.int64` is honoured (see below) |
 
-`index_dtype=torch.int32` produces the cell index as int32. The index the reads use is the flat row index
-into the `[n_groups·tph·2^nap, d_out]` table, up to `n_groups·tph·2^nap − 1` (262,143 at h=16, tph=64,
-nap=8). That needs at least int32. In any case, torch's index ops (`embedding_bag`, `index_select`,
-`index_add_`, indexing) accept only int32 and int64, so int16 and int8 are rejected.
+The cell index is stored as int32 by default. The index the reads use is the flat row index into the
+`[n_groups·tph·2^nap, d_out]` table, up to `n_groups·tph·2^nap − 1` (262,143 at h=16, tph=64, nap=8).
+That needs at least int32. torch's index ops (`embedding_bag`, `index_select`, `index_add_`, indexing) accept
+only int32 and int64, so int16 and int8 are rejected.
+
+- **The rule:** `index_dtype=None` (the default) uses int32 when `n_groups·tph·2^nap − 1` fits it and int64
+  otherwise. An explicit `torch.int32` that doesn't fit raises; an explicit `torch.int64` is always accepted.
+- **Only storage narrows.** Offset arithmetic (inside the native kernels too), the bit-powers buffer and bag
+  offsets stay int64, and the state_dict is unchanged.
+- **Large eval calls widen automatically:** in auto mode, a call whose read could exceed 2^31 − 1 index
+  entries uses int64, because PyTorch's CUDA `embedding_bag` forward fails above that with int32.
 
 What int32 gives you:
-- It halves the index tensor that is saved for the backward.
+- It halves the stored index tensors, including those saved for the backward.
 - It narrows the radix-sort keys in `embedding_bag`'s weight gradient.
+- The fused twins' native CUDA kernels read int32 directly (they template on the index type) and create no
+  int64 copy. Their host functions reject any other index dtype.
 - Training gradients are bit-identical to int64 under `torch.use_deterministic_algorithms(True)`.
 - One exception: ConfidenceLUT `read_top_n=1` compiled eval on CUDA differs by about 1 ulp.
-- The fused twins' native CUDA kernels receive the index cast back to int64, so the change doesn't reach
-  them.
 
 SoftSign (`SoftSignHardLUT`, `SoftSignSmoothLUT` and their fused twins):
 

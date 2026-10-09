@@ -50,7 +50,8 @@ def validate_backend(owner: str, backend, accepted: tuple) -> str:
 
 def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
     """Map per-(group,table) cell index c[B,G,tph] -> flat index into a [G*tph*K, d_out] table, in c's dtype (the
-    cartridge's ``index_dtype``: int64, or int32 for half the saved index bytes and narrower radix-sort keys)."""
+    cartridge's ``index_dtype``: int32 by default -- half the saved index bytes and narrower radix-sort keys -- or
+    int64). The values fit c's dtype by construction (resolve_index_dtype checks n_groups * tph * 2^nap)."""
     base = (torch.arange(G, device=c.device, dtype=c.dtype).view(G, 1) * tph
             + torch.arange(tph, device=c.device, dtype=c.dtype).view(1, tph)) * K   # [G, tph]
     return c + base  # [B, G, tph]

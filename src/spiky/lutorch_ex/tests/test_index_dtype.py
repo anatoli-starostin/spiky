@@ -1,13 +1,14 @@
-"""index_dtype (every cartridge): int32 cell indices, produced once in ManifestoLUT._addresses, vs the int64 default.
+"""index_dtype (every cartridge): int32 (the default when the table fits) vs int64 stored cell indices, produced once in
+ManifestoLUT._addresses.
 
 What is bit-identical (torch.equal on the output and on EVERY gradient: tables, score / blend / temperature
 parameters, ProjectionMHL compress/decompress, input), measured 2026-10-09:
   * TRAINING, every cartridge, CPU and CUDA, under torch.use_deterministic_algorithms(True). Without it the int64
     baseline itself is not run-to-run reproducible (atomic scatters in the input-grad and, on the pure CPU path,
     the table-grad index_put accumulate, ~1e-7 relative), so two int64 runs already differ.
-  * The fused twins on their tier1 (embedding_bag) path. Their NATIVE CUDA kernels take the index cast back to
-    int64 at the boundary (the narrowing does not reach them) and are nondeterministic in their own baseline
-    (custom-kernel atomics), so there only closeness within that baseline noise is asserted.
+  * The fused twins on their tier1 (embedding_bag) path. Their NATIVE CUDA kernels read int32 indices directly
+    (templated on the index type) and are nondeterministic in their own baseline (custom-kernel atomics), so there
+    only closeness within that baseline noise is asserted; exact per-kernel parity is in test_native_index_dtype.py.
   * EVAL: bit-identical everywhere EXCEPT ConfidenceLUT read_top_n=1 on CUDA, whose compiled eval read (an
     Inductor-fused gather + score-weighted sum) is generated differently for int32 indices and differs by ~1 ulp.
 """
@@ -89,8 +90,9 @@ def test_int32_bit_identical_to_int64(device, name, kw, wrap):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="the native kernels are CUDA-only")
 @pytest.mark.parametrize("name", FUSED)
 def test_fused_native_close_within_baseline_noise(name):
-    """Native kernels: int64 is not reproducible run-to-run (custom-kernel atomics); int32 must stay within the
-    same noise (measured: both ~4-7e-9 absolute on table grads ~5e-2)."""
+    """Native kernels, end to end: they now read the int32 indices directly. int64 is not reproducible run-to-run
+    (custom-kernel atomics); int32 must stay within the same noise (measured: both ~4-7e-9 absolute on table grads
+    ~5e-2). Exact per-kernel parity: test_native_index_dtype.py."""
     from spiky.lutorch_ex.cartridges._native_ops import native_available
     if not native_available(torch.device("cuda")):
         pytest.skip("native lutorch_cuda ops not available")
@@ -137,10 +139,47 @@ def test_deployed_int8_read_bit_identical(device):
     assert torch.equal(*outs)
 
 
-def test_default_is_int64_everywhere():
+def test_default_is_int32_everywhere_when_the_table_fits():
+    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
     spec = LUTSpec(**GEOM)
     for name, kw in CARTRIDGES:
-        assert getattr(lx, name)(spec, seed=1, **kw).index_dtype == torch.int64, name
+        m = getattr(lx, name)(spec, seed=1, **kw)
+        assert m.index_dtype == torch.int32 and m._index_dtype_auto, name
+        assert getattr(lx, name)(spec, seed=1, index_dtype=torch.int64, **kw).index_dtype == torch.int64, name
+    p = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=2).to_deployment()
+    assert DeployedQuantisedConfidenceLUT(spec, p["tensors"], p["meta"]).index_dtype == torch.int32
+
+
+def test_resolve_index_dtype_rule():
+    """None -> int32 iff n_groups * tph * 2^nap - 1 fits int32, else int64; explicit choices honoured; an explicit
+    int32 that does not fit raises (never silently widened). Pure arithmetic on the geometry, no allocation."""
+    from types import SimpleNamespace
+
+    from spiky.lutorch_ex.cartridges.manifesto_base import resolve_index_dtype
+    fits = SimpleNamespace(n_groups=16, tph=64, n_cells=256)                    # 262,144 rows
+    edge = SimpleNamespace(n_groups=1, tph=1, n_cells=2 ** 31)                  # max flat index 2^31 - 1: fits
+    over = SimpleNamespace(n_groups=2, tph=1, n_cells=2 ** 31)                  # max flat index 2^32 - 1: does not
+    assert resolve_index_dtype(None, fits) == torch.int32
+    assert resolve_index_dtype(None, edge) == torch.int32
+    assert resolve_index_dtype(None, over) == torch.int64
+    assert resolve_index_dtype(torch.int64, fits) == torch.int64
+    assert resolve_index_dtype(torch.int64, over) == torch.int64
+    with pytest.raises(ValueError, match="cannot hold the flat cell index"):
+        resolve_index_dtype(torch.int32, over)
+
+
+def test_auto_widens_a_call_too_large_for_int32_positions(monkeypatch):
+    """Auto mode reads in int64 for a call with more than 2^31 - 1 possible index entries (eval is not capped by the
+    training guard); an explicit int32 is never widened. The limit is patched down so a small batch exercises it."""
+    import spiky.lutorch_ex.cartridges.manifesto_base as mb
+    spec = LUTSpec(**GEOM)                                         # G * tph * 2 = 128 entries per row
+    monkeypatch.setattr(mb, "_INT32_MAX_ENTRIES", 128 * 10)
+    x_small, x_big = torch.randn(10, spec.h_in, spec.d_in), torch.randn(11, spec.h_in, spec.d_in)
+    auto = lx.ConfidenceLUT(spec, seed=1)
+    assert auto._addresses(x_small)[2].dtype == torch.int32
+    assert auto._addresses(x_big)[2].dtype == torch.int64
+    explicit = lx.ConfidenceLUT(spec, seed=1, index_dtype=torch.int32)
+    assert explicit._addresses(x_big)[2].dtype == torch.int32
 
 
 @pytest.mark.parametrize("bad", [torch.int16, torch.int8, torch.uint8, torch.float32, "int32"])

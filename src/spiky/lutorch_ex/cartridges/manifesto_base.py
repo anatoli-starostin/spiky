@@ -68,6 +68,23 @@ def check_index_dtype(index_dtype, spec) -> torch.dtype:
     return index_dtype
 
 
+def resolve_index_dtype(index_dtype: Optional[torch.dtype], spec) -> torch.dtype:
+    """``None`` (the default) -> int32 when the flat cell index fits it, else int64. An explicit dtype is honoured
+    exactly (an explicit int32 that does not fit raises, from :func:`check_index_dtype`). Only the STORED cell-index
+    tensors use this dtype; offset arithmetic and the powers buffer stay int64."""
+    if index_dtype is None:
+        fits = spec.n_groups * spec.tph * spec.n_cells - 1 <= torch.iinfo(torch.int32).max
+        return torch.int32 if fits else torch.int64
+    return check_index_dtype(index_dtype, spec)
+
+
+# Auto mode also widens per call: some PyTorch kernels use the index dtype for POSITIONS, not just values -- the CUDA
+# embedding_bag forward device-asserts above 2**31 - 1 index entries with int32 (measured, torch 2.9.1). Training is
+# capped far below that by the embedding_bag backward guard; eval is not, so an auto-int32 cartridge reads in int64
+# for a call whose read could exceed it (B * n_groups * tph * 2 entries, 2 = the most cells any read takes per table).
+_INT32_MAX_ENTRIES = torch.iinfo(torch.int32).max
+
+
 # Size limits of the embedding_bag TRAIN read (both are PyTorch constraints, not lutorch_ex ones; checked together in
 # ManifestoLUT._check_embedding_bag_limits, which forward runs before dispatch).
 #
@@ -170,14 +187,15 @@ class ManifestoLUT(MultiHeadLUT):
         cmp_eps: float = 0.0,
         table_dropout_rate: float = 0.0,
         device: Optional[torch.device] = None,
-        index_dtype: torch.dtype = torch.int64,
+        index_dtype: Optional[torch.dtype] = None,
         **unused,
     ):
         super().__init__(spec)
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
-        self.index_dtype = check_index_dtype(index_dtype, spec)
+        self.index_dtype = resolve_index_dtype(index_dtype, spec)
+        self._index_dtype_auto = index_dtype is None     # auto may widen per call (see _INT32_MAX_ENTRIES)
         # Table-level (whole-table) inverted dropout rate; 0 = off (default, every existing cartridge
         # byte-identical). See :meth:`_table_dropout_mask` / :meth:`_drop_tables`.
         self.table_dropout_rate = float(table_dropout_rate)
@@ -452,9 +470,13 @@ class ManifestoLUT(MultiHeadLUT):
             idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
             z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
             u = z_a - z_b
-        # The one place every cartridge's cell index is produced: in index_dtype (int64 default, or int32), so every
-        # downstream read (_global_cells keeps c's dtype) and the saved tensors use it. powers stays an int64 buffer.
+        # The one place every cartridge's cell index is produced: in index_dtype (int32 by default when the table fits,
+        # else int64; or an explicit choice), so every downstream read (_global_cells keeps c's dtype), the native
+        # kernels and the saved tensors use it. powers stays an int64 buffer; only the stored indices narrow.
         dt = self.index_dtype
+        if dt == torch.int32 and getattr(self, "_index_dtype_auto", False) and \
+                B * G * tph * 2 > _INT32_MAX_ENTRIES:            # auto: widen a call too large for int32 positions
+            dt = torch.int64
         powers = self.powers.to(dt)
         c = ((u > self.cmp_eps).to(dt) * powers).sum(dim=-1, dtype=dt)     # MSB-first, stop-grad
         u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
