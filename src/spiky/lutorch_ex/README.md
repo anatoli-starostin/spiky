@@ -236,7 +236,7 @@ a bit; reads and reductions accumulate in fp32; and the output is cast back once
 ```python
 ProjectionMHL(cartridge, d_model=None, *, input_dim=None, output_dim=None,
               compress=True, decompress=True, bias=True, device=None,
-              fp8_projections=(), compress_fp8_out_dtype=torch.float32)
+              fp8_projections=(), compress_fp8_out_dtype=torch.float32, projection_dtype=None)
 ```
 
 The wrapper puts a linear map on each side of the cartridge:
@@ -249,6 +249,15 @@ The wrapper puts a linear map on each side of the cartridge:
   drop-in into a pretrained residual stream. The bias stays a trainable parameter.
 - Either projection may be switched off (`compress=False` or `decompress=False`, which makes that side
   an identity), provided the widths already match. Switching off both is refused.
+- `projection_dtype` (opt-in, default `None`: unchanged) runs the compress and decompress GEMMs in
+  `torch.bfloat16` (or `torch.float32`). The weights stay fp32 `nn.Linear` parameters with the same
+  state_dict. The compress output is cast back to fp32 before the cartridge, so addressing, scoring and
+  the gather stay fp32; the output comes back in the input's dtype. This is the narrowed fp32 island. Do
+  not call `.half()` or `.bfloat16()` on the whole wrapper, which would drag the cartridge into low
+  precision. At the d24 geometry, bf16 compress flips ~0.6% of the cells (token × table) against an
+  exact-fp32 compress. `fp8_projections` takes precedence per projection, so for example
+  `projection_dtype=torch.bfloat16, fp8_projections=("decompress",)` runs compress in bf16 and
+  decompress in fp8.
 - `fp8_projections` (opt-in, default `()`) runs the GEMM of `"compress"` and/or `"decompress"` in fp8
   (`fp8.py`). The weights stay fp32 `nn.Linear` parameters with the same state_dict. Each call casts both
   operands to e4m3 with one amax scale per tensor, multiplies with `torch._scaled_mm` into an fp32
