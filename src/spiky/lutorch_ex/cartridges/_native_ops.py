@@ -29,6 +29,7 @@ batch. If that kernel cannot be built/loaded, the eager body is used (identical 
 from __future__ import annotations
 
 import os
+import warnings
 
 import torch
 
@@ -122,8 +123,18 @@ def _single_ig_ext():
         from torch.utils.cpp_extension import load
 
         src = os.path.join(_CSRC, "single_anchor_input_grad.cu")
-        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src], verbose=False)
-    except Exception:
+        # Same standard as _lprojection_ext: torch's default -std=c++17 does not compile its own headers here
+        # (ATen/core/List_inl.h).
+        std = os.environ.get("SPIKY_CXX_STD", "c++20")
+        cpp = [f"-std={std}", "-O3"]
+        cuda = [f"-std={std}", "-O3"]
+        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src],
+                              extra_cflags=cpp, extra_cuda_cflags=cuda, verbose=False)
+    except Exception as e:
+        # Still never raises (the eager body gives the same result), but say so once: _SINGLE_IG_TRIED makes this
+        # run once.
+        warnings.warn(f"lutorch_ex: the single_anchor_input_grad CUDA extension could not be built/loaded; using the "
+                      f"eager input-grad body instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
         _SINGLE_IG_EXT = None
     return _SINGLE_IG_EXT
 
