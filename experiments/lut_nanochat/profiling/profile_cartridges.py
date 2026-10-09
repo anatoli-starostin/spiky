@@ -28,6 +28,8 @@ the table fits, on a lutorch_ex with index_dtype; int64 on one without).
                      conf-n1-i64  conf-n1-fused-i64                (int64 index tie-in controls)
   Quantised          quant-n1  quant-n2                            (p2_int8)
   Deploy             deploy-n2   DeployedQuantisedConfidenceLUT from quant-n2.to_deployment()   [eval only]
+fmh-auto / fms-auto / fsh-auto / fss-auto (fp32): backend="auto", i.e. what the library itself picks; the static pass
+records what it resolved to (train / eval), including whether a soft-sign native pick ran the kernel or the eager tail.
 "-native" soft-sign arms run the softsign_surrogate_grad CUDA kernel; "-native-eager" force the eager surrogate tail
 IN-PROCESS (--softsign-tail overrides both). LUTORCH_EX_NO_CUDA_EXT=1 cannot be used for that: it also disables the
 lprojection extension the native backward needs.
@@ -87,6 +89,11 @@ def _arms() -> dict:
                 a[f"{short}-{be}{suf}"] = dict(cls=cls, kw=dict(backend=be.replace("-eager", "")), dtype=dt, tail=tail,
                                                eval_only=False, needs=["ss_kernel"] if tail == "kernel" else [],
                                                value_cells=cells, weighted=w)
+    # backend="auto": whatever the library itself picks (recorded by the static pass as "auto_resolves_to"); for the
+    # soft-sign cartridges that includes whether the surrogate kernel or the eager fallback runs (no override).
+    for short, cls, cells, w in [(f[0], f[1], f[3], f[4]) for f in fused]:
+        a[f"{short}-auto"] = dict(cls=cls, kw=dict(backend="auto"), dtype="float32", tail=None, eval_only=False,
+                                  needs=[], value_cells=cells, weighted=w)
     for n in (1, 2):
         a[f"conf-n{n}"] = dict(cls="ConfidenceLUT", kw=dict(read_top_n=n, **CONF), dtype="float32", tail=None,
                                eval_only=False, needs=[], value_cells=n, weighted=True)
@@ -234,6 +241,15 @@ def static_facts(name: str, cart) -> dict:
            "n_params": sum(p.numel() for p in cart.parameters()),
            "param_and_buffer_bytes": nbytes,
            "softsign_tail": a["tail"] if _SS["override"] == "per-arm" or a["tail"] is None else _SS["override"]}
+    if a["kw"].get("backend") == "auto":
+        cart.train()
+        be = cart._pick(torch.empty(1, s.h_in, s.d_in, device="cuda", dtype=_DT[a["dtype"]]))
+        if be == "native" and "SoftSign" in a["cls"]:
+            be += (" (soft-sign surrogate kernel)" if lib_features()["ss_kernel"]
+                   else " (eager soft-sign tail: the kernel does not build in this lutorch_ex)")
+        cart.eval()
+        out["auto_resolves_to"] = {"train": be, "eval": cart._pick(torch.empty(1, s.h_in, s.d_in, device="cuda",
+                                                                               dtype=_DT[a["dtype"]]))}
     if name.startswith("quant"):
         # per CALL (not per token): ste_tables reads the 4-byte master for amax, reads it again to quantise and
         # writes the 4-byte fake-quant copy
