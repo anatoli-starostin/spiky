@@ -62,9 +62,27 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]                  # <repo>/experiments/lut_nanochat/profiling/this.py
 NANOCHAT_DIR = REPO_ROOT / "experiments" / "lut_nanochat" / "nanochat"
-for p in (REPO_ROOT / "src", NANOCHAT_DIR):
+# LUTORCH_EX_SRC=<path to a repo's src/> profiles a different lutorch_ex (e.g. a feature branch's worktree) with this
+# harness; recorded in the env block.
+_LIB_SRC = Path(os.environ.get("LUTORCH_EX_SRC") or (REPO_ROOT / "src")).resolve()
+for p in (NANOCHAT_DIR, _LIB_SRC):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
+
+
+def _lib_src_git(*args):
+    try:
+        out = subprocess.run(["git", "-C", str(_LIB_SRC), *args], capture_output=True, text=True, timeout=30)
+        return (out.stdout.rstrip() or None) if out.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def lib_src_dirty_files() -> list[str]:
+    """Modified, staged AND untracked (non-ignored) files under the profiled src/ - an untracked module there is code
+    that runs but is in no commit, so it counts as dirty."""
+    out = _lib_src_git("status", "--porcelain", "--untracked-files=all", "--", ".")
+    return out.splitlines() if out else []
 
 import torch                                                      # noqa: E402
 import torch.nn as nn                                             # noqa: E402
@@ -73,8 +91,29 @@ import torch.nn.functional as F                                   # noqa: E402
 D_MODEL, N_LAYER, SEQ_LEN = 1536, 24, 2048
 STEP_TOKENS = 2 ** 20                                              # d24 global batch (tokens / optimizer step)
 LUT_GEOM = dict(h=16, d=48, tph=64, nap=8)                         # locked --lut-ffn geometry (r = h*d = 768)
-ALL_VARIANTS = ["dense-fp32", "dense-bf16", "dense-fp8", "lut-fp32", "lut-bf16", "lut-fp8"]
-ALL_PASSES = ["env", "peak", "block", "components", "closeness", "compile", "memory", "profile"]
+ALL_VARIANTS = ["dense-fp32", "dense-bf16", "dense-fp8", "lut-fp32", "lut-bf16", "lut-fp8",
+                "lut-fp8lib-c32", "lut-fp8lib-c16", "lut-fp8lib-d", "lut-bf16lib",
+                "lut-fp32-i32", "lut-bf16lib-i32",
+                "lut-fp32-i32-tbf16", "lut-bf16lib-i32-tfp32", "lut-bf16lib-i32-tbf16", "lut-bf16lib-i32-tfp8"]
+# "-i32": ConfidenceLUT(index_dtype=torch.int32) (needs a lutorch_ex with that option; skipped with a reason otherwise)
+I32_VARIANTS = {"lut-fp32-i32": "lut-fp32", "lut-bf16lib-i32": "lut-bf16lib"}
+# "-t<dtype>": ConfidenceLUT(table_dtype=...) narrow-table read (needs a lutorch_ex with that option)
+TABLE_VARIANTS = {"lut-fp32-i32-tbf16": ("lut-fp32-i32", "bfloat16"),
+                  "lut-bf16lib-i32-tfp32": ("lut-bf16lib-i32", "float32"),     # control: fused read, fp32 rows
+                  "lut-bf16lib-i32-tbf16": ("lut-bf16lib-i32", "bfloat16"),
+                  "lut-bf16lib-i32-tfp8": ("lut-bf16lib-i32", "float8_e4m3fn")}
+DEFAULT_VARIANTS = ALL_VARIANTS[:6]
+# Library-level fp8 projections (ProjectionMHL(fp8_projections=..., compress_fp8_out_dtype=...)): only where the
+# profiled lutorch_ex has that option; otherwise skipped with a reason.
+FP8LIB_VARIANTS = {
+    "lut-fp8lib-c32": dict(fp8_projections=("compress", "decompress"), compress_fp8_out_dtype="float32"),
+    "lut-fp8lib-c16": dict(fp8_projections=("compress", "decompress"), compress_fp8_out_dtype="bfloat16"),
+    "lut-fp8lib-d": dict(fp8_projections=("decompress",)),
+    # library bf16 knob: ProjectionMHL(projection_dtype=torch.bfloat16), cartridge fp32
+    "lut-bf16lib": dict(fp8_projections=(), projection_dtype="bfloat16"),
+}
+ALL_PASSES = ["env", "peak", "block", "components", "closeness", "fp8proj", "compile", "memory", "profile"]
+DEFAULT_PASSES = [p for p in ALL_PASSES if p != "fp8proj"]
 _R = LUT_GEOM["h"] * LUT_GEOM["d"]
 # Analytic multiply-accumulates per token (hardware-independent).
 MACS_PER_TOKEN = {
@@ -158,6 +197,10 @@ def env_block() -> dict:
     return {
         "timestamp": _dt.datetime.now().isoformat(timespec="seconds"),
         "repo_commit": _run(["git", "rev-parse", "HEAD"]),
+        "lutorch_ex_src": None if _LIB_SRC == (REPO_ROOT / "src").resolve() else "LUTORCH_EX_SRC override",
+        "lutorch_ex_src_commit": _lib_src_git("rev-parse", "HEAD"),
+        "lutorch_ex_src_describe": _lib_src_git("describe", "--always", "--dirty"),
+        "lutorch_ex_src_dirty_files": lib_src_dirty_files(),           # includes untracked; [] = clean
         "repo_tracked_changes": bool(dirty),
         "driver": _run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"]),
         "host_platform": platform.platform(),
@@ -263,8 +306,27 @@ def input_dtype(name: str):
     return torch.float32 if name == "dense-fp32" else torch.bfloat16    # the d24 residual stream is bf16
 
 
+def i32_supported() -> tuple[bool, str]:
+    import inspect
+    from spiky.lutorch_ex.cartridges.manifesto_base import ManifestoLUT
+    if "index_dtype" not in inspect.signature(ManifestoLUT.__init__).parameters:
+        return False, f"the profiled lutorch_ex ({_LIB_SRC}) has no ManifestoLUT(index_dtype=...)"
+    return True, ""
+
+
 def build_variant(name: str, decompress_std: float):
     """Fresh module for `name`, on CUDA, train mode, params fp32 (as in training: master weights fp32)."""
+    if name in TABLE_VARIANTS:
+        base, tdt = TABLE_VARIANTS[name]
+        mod = build_variant(base, decompress_std)
+        lut = mod if hasattr(mod, "mhl") else mod.lut
+        lut.mhl.cartridge.table_dtype = getattr(torch, tdt)   # read in forward; the cache exists from __init__
+        return mod
+    if name in I32_VARIANTS:
+        mod = build_variant(I32_VARIANTS[name], decompress_std)
+        lut = mod if hasattr(mod, "mhl") else mod.lut
+        lut.mhl.cartridge.index_dtype = torch.int32      # read at trace time; same as passing index_dtype=int32
+        return mod
     if name.startswith("dense"):
         mod = DenseFFN(D_MODEL).cuda()
         with torch.no_grad():                                      # base_train init: c_fc uniform, c_proj zeros
@@ -279,8 +341,32 @@ def build_variant(name: str, decompress_std: float):
     lut = LUTFeedForward(D_MODEL, _lut_cfg(), device="cuda")
     with torch.no_grad():                                          # zero-init decompress would make bwd trivial
         lut.mhl.decompress.weight.normal_(0, decompress_std)
+    if name in FP8LIB_VARIANTS:
+        lut.mhl = fp8lib_projection(lut.mhl, **FP8LIB_VARIANTS[name])
+        return lut.train()
     mod = lut if name == "lut-fp32" else LUTProjVariant(lut, name.split("-")[1])
     return mod.train()
+
+
+def fp8lib_supported(needs=("fp8_projections",)) -> tuple[bool, str]:
+    import inspect
+    from spiky.lutorch_ex import ProjectionMHL
+    params = inspect.signature(ProjectionMHL.__init__).parameters
+    missing = [n for n in needs if n not in params]
+    if missing:
+        return False, f"the profiled lutorch_ex ({_LIB_SRC}) has no ProjectionMHL({', '.join(missing)}=...)"
+    return True, ""
+
+
+def fp8lib_projection(mhl, fp8_projections, compress_fp8_out_dtype="float32", projection_dtype=None):
+    """A ProjectionMHL with library fp8 / bf16 projections sharing `mhl`'s cartridge and (copied) compress/decompress."""
+    from spiky.lutorch_ex import ProjectionMHL
+    kw = {} if projection_dtype is None else {"projection_dtype": getattr(torch, projection_dtype)}
+    new = ProjectionMHL(mhl.cartridge, d_model=mhl.input_dim, fp8_projections=fp8_projections,
+                        compress_fp8_out_dtype=getattr(torch, compress_fp8_out_dtype), **kw).float().cuda()
+    new.compress.load_state_dict(mhl.compress.state_dict())
+    new.decompress.load_state_dict(mhl.decompress.state_dict())
+    return new
 
 
 def configure_dynamo_like_base_train():
@@ -571,6 +657,167 @@ def pass_closeness(args, variants) -> dict:
     return out
 
 
+def pass_fp8proj(args) -> dict:
+    """Library fp8 projections (ProjectionMHL fp8_projections): (1) sign-bit flip rates of the compress output vs an
+    exact-fp32 compress, per variant, plus an emulation that attributes the flips to operand vs output precision;
+    (2) GEMM-only timings per direction (compress K=1536 -> 768, decompress K=768 -> 1536), fp32(TF32) / bf16 / fp8,
+    with the raw _scaled_mm cost separated from the amax/scale/cast overhead. Block-level timings of the same variants
+    come from the `block` pass (--variants lut-fp8lib-*)."""
+    ok, why = fp8lib_supported()
+    out = {"supported": ok, "reason": why}
+    if not ok:
+        log(f"  [fp8proj] skipped: {why}")
+        return out
+    from spiky.lutorch_ex.fp8 import _to_fp8, fp8_linear
+    N = max(args.tokens)
+    out["tokens"] = N
+    lut = build_variant("lut-fp32", args.decompress_std)
+    mhl, cart = lut.mhl, lut.mhl.cartridge
+    spec = cart.spec
+    W, b = mhl.compress.weight.detach(), mhl.compress.bias.detach()
+    x = make_input(N, requires_grad=False).reshape(N, D_MODEL).float()   # the island's input: bf16 stream cast up
+    prev = torch.get_float32_matmul_precision()
+
+    def linear_at(precision, *a):
+        torch.set_float32_matmul_precision(precision)
+        try:
+            return F.linear(*a)
+        finally:
+            torch.set_float32_matmul_precision(prev)
+
+    def bits_of(z):
+        u = cart._addresses(z.float().reshape(N, spec.h_in, spec.d_in))[1]          # [N, G, tph, nap] margins
+        return u > cart.cmp_eps
+
+    def q8(t):                                                                       # e4m3 quantise-dequantise
+        tq, inv = _to_fp8(t, torch.float8_e4m3fn)
+        return tq.float() * inv
+
+    with torch.no_grad():
+        z_exact = linear_at("highest", x, W, b)
+        bits_ref = bits_of(z_exact)
+        rms_ref = z_exact.pow(2).mean().sqrt()
+        cases = {
+            "tf32 operands, fp32 out (status quo)": lambda: linear_at("high", x, W, b),
+            "bf16 operands, bf16 out (harness lut-bf16)": lambda: F.linear(x.bfloat16(), W.bfloat16(), b.bfloat16()),
+            "fp8 lib: e4m3 operands, fp32 acc, fp32 out": lambda: fp8_linear(x, mhl.compress, torch.float32),
+            "fp8 lib: e4m3 operands, fp32 acc, bf16 out": lambda: fp8_linear(x, mhl.compress, torch.bfloat16),
+            "fp8 lib: decompress only (compress untouched = status quo)": lambda: linear_at("high", x, W, b),
+            "emu: exact operands, output rounded to bf16": lambda: z_exact.bfloat16().float(),
+            "emu: exact operands, output rounded to e4m3": lambda: q8(z_exact),
+            "emu: e4m3 operands (both), exact math, fp32 out": lambda: linear_at("highest", q8(x), q8(W), b),
+            "emu: e4m3 weight only, exact math": lambda: linear_at("highest", x, q8(W), b),
+            "emu: e4m3 activation only, exact math": lambda: linear_at("highest", q8(x), W, b),
+        }
+        flips = {}
+        for label, fn in cases.items():
+            z = fn().float()
+            d = bits_of(z) != bits_ref
+            flips[label] = {"bit_flip_fraction": d.float().mean().item(),
+                            "cell_flip_fraction": d.any(-1).float().mean().item(),
+                            "compress_out_rel_rms_err": ((z - z_exact).pow(2).mean().sqrt() / rms_ref).item()}
+            log(f"  [fp8proj] flips {label:58s} bits {100 * flips[label]['bit_flip_fraction']:7.3f}%  "
+                f"cells {100 * flips[label]['cell_flip_fraction']:7.3f}%  rel-rms(z) {flips[label]['compress_out_rel_rms_err']:.2e}")
+        # Library-faithful rows: the real ProjectionMHL variant (same weights), cartridge input captured by a hook.
+        for name, cfg in FP8LIB_VARIANTS.items():
+            needs = ("fp8_projections",) + (("projection_dtype",) if "projection_dtype" in cfg else ())
+            if not fp8lib_supported(needs)[0]:
+                continue
+            pm = fp8lib_projection(mhl, **cfg).eval()
+            seen = {}
+            hk = pm.cartridge.register_forward_pre_hook(lambda mod, a: seen.setdefault("z", a[0].detach()))
+            try:
+                pm(x)
+            finally:
+                hk.remove()
+            z = seen["z"]
+            assert z.dtype == torch.float32, z.dtype                                # cartridge input must be fp32
+            d = bits_of(z) != bits_ref
+            label = f"library {name} ({cfg})"
+            flips[label] = {"bit_flip_fraction": d.float().mean().item(),
+                            "cell_flip_fraction": d.any(-1).float().mean().item(),
+                            "compress_out_rel_rms_err": ((z.reshape(N, -1) - z_exact).pow(2).mean().sqrt()
+                                                         / rms_ref).item(),
+                            "cartridge_input_dtype": str(z.dtype)}
+            log(f"  [fp8proj] flips {label[:58]:58s} bits {100 * flips[label]['bit_flip_fraction']:7.3f}%  "
+                f"cells {100 * flips[label]['cell_flip_fraction']:7.3f}%  (cartridge input {z.dtype})")
+            del pm, z
+        u_abs = (z_exact.reshape(N, spec.h_in, spec.d_in))
+        u_ref = cart._addresses(u_abs)[1].abs()
+        out["margin_quantiles_abs"] = {f"q{int(p * 100)}": u_ref.flatten()[:2 ** 24].float().quantile(p).item()
+                                       for p in (0.01, 0.05, 0.5)}
+        out["compress_out_rms"] = rms_ref.item()
+    out["flips_vs_exact_fp32"] = flips
+    out["flip_caveat"] = ("measured at init (compress ~ N(0, 0.02), random bf16 inputs); trained margins differ")
+    del z_exact, bits_ref, x
+
+    # ---- GEMM-only timings per direction (eager and torch.compile'd, as base_train compiles the model)
+    gemm = {}
+    for direction, (k, n) in (("compress", (D_MODEL, _R)), ("decompress", (_R, D_MODEL))):
+        lin = nn.Linear(k, n).cuda()
+        nn.init.normal_(lin.weight, std=0.02)
+        xin = torch.randn(N, k, device="cuda")
+        r = {"M": N, "K": k, "N": n, "flops_fwd": 2 * N * k * n}
+        fwds = {
+            "tf32": lambda xx: lin(xx),
+            "bf16": lambda xx: F.linear(xx.bfloat16(), lin.weight.bfloat16(), lin.bias.bfloat16()),
+            # what ProjectionMHL(projection_dtype=bf16) runs: the bf16 GEMM + the cast back to fp32
+            "bf16 (lib, +cast to fp32)": lambda xx: F.linear(xx.bfloat16(), lin.weight.bfloat16(),
+                                                             lin.bias.bfloat16()).float(),
+            "fp8 (lib, fp32 out)": lambda xx: fp8_linear(xx, lin, torch.float32),
+            "fp8 (lib, bf16 out)": lambda xx: fp8_linear(xx, lin, torch.bfloat16),
+        }
+        for mode in ("eager", "compiled"):
+            for label, f in fwds.items():
+                fn = torch.compile(f, dynamic=False) if mode == "compiled" else f
+                xr = xin.clone().requires_grad_(True)
+                tf = cuda_time_ms(lambda: fn(xr), args.warmup, args.repeats)
+
+                def fb():
+                    fn(xr).float().sum().backward()
+
+                def zero():
+                    lin.weight.grad = lin.bias.grad = xr.grad = None
+                tb = cuda_time_ms(fb, args.warmup, args.repeats, setup=zero)
+                r[f"{mode}: {label}"] = {"fwd_ms": tf["median_ms"], "fwdbwd_ms": tb["median_ms"],
+                                         "fwd_iqr_ms": tf["iqr_ms"], "fwdbwd_iqr_ms": tb["iqr_ms"]}
+                log(f"  [fp8proj] GEMM {direction:10s} {mode:8s} {label:20s} fwd {tf['median_ms']:7.3f}  "
+                    f"fwd+bwd {tb['median_ms']:7.3f} ms")
+        # Raw fp8 GEMMs on pre-quantised operands: the floor the overhead (amax, scale, cast, layout copies) sits on.
+        with torch.no_grad():
+            xq, xi = _to_fp8(xin, torch.float8_e4m3fn)
+            wq, wi = _to_fp8(lin.weight, torch.float8_e4m3fn)
+            gq, gi = _to_fp8(torch.randn(N, n, device="cuda"), torch.float8_e5m2)
+            w_col = wq.t().contiguous().t()
+            g_t = gq.t().contiguous()
+            x_col = xq.t().contiguous().t()
+            raw_f = cuda_time_ms(lambda: torch._scaled_mm(xq, wq.t(), scale_a=xi, scale_b=wi, out_dtype=torch.float32),
+                                 args.warmup, args.repeats)
+            raw_dx = cuda_time_ms(lambda: torch._scaled_mm(gq, w_col, scale_a=gi, scale_b=wi, out_dtype=torch.float32),
+                                  args.warmup, args.repeats)
+            raw_dw = cuda_time_ms(lambda: torch._scaled_mm(g_t, x_col, scale_a=gi, scale_b=xi, out_dtype=torch.float32),
+                                  args.warmup, args.repeats)
+        with torch.no_grad():
+            xb, wb = xin.bfloat16(), lin.weight.bfloat16()
+            gb = torch.randn(N, n, device="cuda", dtype=torch.bfloat16)
+            rb_f = cuda_time_ms(lambda: xb @ wb.t(), args.warmup, args.repeats)
+            rb_dx = cuda_time_ms(lambda: gb @ wb, args.warmup, args.repeats)
+            rb_dw = cuda_time_ms(lambda: gb.t() @ xb, args.warmup, args.repeats)
+        r["raw bf16 mm (pre-cast operands)"] = {
+            "fwd_ms": rb_f["median_ms"], "fwdbwd_ms": rb_f["median_ms"] + rb_dx["median_ms"] + rb_dw["median_ms"]}
+        log(f"  [fp8proj] GEMM {direction:10s} raw bf16 mm only: fwd {rb_f['median_ms']:.3f}  "
+            f"3 GEMMs {r['raw bf16 mm (pre-cast operands)']['fwdbwd_ms']:.3f} ms")
+        r["raw fp8 _scaled_mm (pre-quantised)"] = {
+            "fwd_ms": raw_f["median_ms"], "fwdbwd_ms": raw_f["median_ms"] + raw_dx["median_ms"] + raw_dw["median_ms"]}
+        log(f"  [fp8proj] GEMM {direction:10s} raw fp8 _scaled_mm only: fwd {raw_f['median_ms']:.3f}  "
+            f"3 GEMMs {r['raw fp8 _scaled_mm (pre-quantised)']['fwdbwd_ms']:.3f} ms")
+        gemm[direction] = r
+        del lin, xin
+        free_cuda()
+    out["gemm_only"] = gemm
+    return out
+
+
 def pass_compile(args) -> dict:
     """How base_train's whole-module torch.compile sees the LUT block: graphs, breaks, recompiles."""
     import torch._dynamo
@@ -796,24 +1043,36 @@ def main(argv=None):
     ap.add_argument("--batch", type=int, nargs="+", default=[4, 16],
                     help="batch sizes (sequences); tokens per call = batch x --seq. d24 trains at DBS=16 (16x2048)")
     ap.add_argument("--seq", type=int, default=SEQ_LEN, help="sequence length (d24: 2048)")
-    ap.add_argument("--variants", nargs="+", default=ALL_VARIANTS, choices=ALL_VARIANTS)
+    ap.add_argument("--variants", nargs="+", default=DEFAULT_VARIANTS, choices=ALL_VARIANTS,
+                    help="lut-fp8lib-* need a lutorch_ex with ProjectionMHL(fp8_projections=...) (see LUTORCH_EX_SRC)")
     ap.add_argument("--proj-dtypes", nargs="+", default=["fp32", "bf16", "fp8"], choices=["fp32", "bf16", "fp8"],
                     help="projection dtypes for the components pass")
-    ap.add_argument("--passes", nargs="+", default=ALL_PASSES, choices=ALL_PASSES)
+    ap.add_argument("--passes", nargs="+", default=DEFAULT_PASSES, choices=ALL_PASSES)
     ap.add_argument("--compile-mode", default="model", choices=["model", "none"],
                     help="'model' = whole-module torch.compile as base_train does; 'none' = eager outer")
     ap.add_argument("--warmup", type=int, default=5)
     ap.add_argument("--repeats", type=int, default=20)
     ap.add_argument("--profile-iters", type=int, default=3)
     ap.add_argument("--profile-tokens", type=int, default=None, help="tokens for the profile pass (default: largest)")
+    ap.add_argument("--profile-variants", nargs="+", default=None, choices=ALL_VARIANTS,
+                    help="variants for the profile pass (default: lut-fp32 + the dense-fp8/bf16 reference)")
     ap.add_argument("--with-stack", action="store_true", help="profiler with_stack (slower, larger traces)")
     ap.add_argument("--decompress-std", type=float, default=0.02,
                     help="init std for decompress / c_proj so backward does real work (training zero-inits them)")
     ap.add_argument("--fp32-matmul-precision", default="high", choices=["highest", "high", "medium"],
                     help="base_train sets 'high' (TF32 for fp32 GEMMs)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--allow-dirty-lib", action="store_true",
+                    help="profile a lutorch_ex src/ with uncommitted or untracked files (recorded, not refused)")
     args = ap.parse_args(argv)
     SEQ_LEN = args.seq
+
+    dirty_lib = lib_src_dirty_files()
+    if dirty_lib and not args.allow_dirty_lib:
+        log(f"Refusing to run: the profiled lutorch_ex src/ ({_LIB_SRC}) has uncommitted or untracked files, so the "
+            "numbers would not be attributable to any commit:\n  " + "\n  ".join(dirty_lib)
+            + "\nCommit them, or pass --allow-dirty-lib to profile anyway (the dirty files are recorded in env).")
+        return 3
     args.tokens = sorted(b * args.seq for b in args.batch)
 
     if not torch.cuda.is_available():
@@ -830,11 +1089,36 @@ def main(argv=None):
     log(json.dumps(res["env"], indent=1))
     variants = list(args.variants)
     if not res["env"]["fp8_usable"]:
-        skipped = [v for v in variants if v.endswith("fp8")]
-        variants = [v for v in variants if not v.endswith("fp8")]
+        skipped = [v for v in variants if "fp8" in v]
+        variants = [v for v in variants if "fp8" not in v]
         args.proj_dtypes = [d for d in args.proj_dtypes if d != "fp8"]
-        res["skipped"] = {"variants": skipped, "reason": res["env"]["fp8_probe"]}
-        log(f"fp8 skipped ({res['env']['fp8_probe']}): {skipped}")
+        args.passes = [p for p in args.passes if p != "fp8proj"]
+        res["skipped"] = {"variants": skipped, "passes": ["fp8proj"], "reason": res["env"]["fp8_probe"]}
+        log(f"fp8 skipped ({res['env']['fp8_probe']}): {skipped} + fp8proj pass")
+    for v in [v for v in variants if v in TABLE_VARIANTS]:
+        import inspect
+        from spiky.lutorch_ex import ConfidenceLUT
+        if "table_dtype" not in inspect.signature(ConfidenceLUT.__init__).parameters:
+            variants.remove(v)
+            res.setdefault("skipped_lib_variants", {})[v] = "no ConfidenceLUT(table_dtype=...)"
+            log(f"{v} skipped: the profiled lutorch_ex has no ConfidenceLUT(table_dtype=...)")
+    for v in [v for v in variants if v in I32_VARIANTS or v in TABLE_VARIANTS]:
+        ok, why = i32_supported()
+        if not ok:
+            variants.remove(v)
+            res.setdefault("skipped_lib_variants", {})[v] = why
+            log(f"{v} skipped: {why}")
+    def _root(v):
+        v = TABLE_VARIANTS[v][0] if v in TABLE_VARIANTS else v
+        return I32_VARIANTS.get(v, v)
+    for v in [v for v in variants if _root(v) in FP8LIB_VARIANTS]:
+        base = _root(v)
+        needs = ("fp8_projections",) + (("projection_dtype",) if "projection_dtype" in FP8LIB_VARIANTS[base] else ())
+        lib_ok, lib_why = fp8lib_supported(needs)
+        if not lib_ok:
+            variants.remove(v)
+            res.setdefault("skipped_lib_variants", {})[v] = lib_why
+            log(f"{v} skipped: {lib_why}")
 
     def save():
         (args.out_dir / "results.json").write_text(json.dumps(res, indent=1, default=str))
@@ -850,11 +1134,14 @@ def main(argv=None):
         log("== components");    res["components"] = pass_components(args, args.proj_dtypes); save()
     if "closeness" in args.passes:
         log("== closeness");     res["closeness"] = pass_closeness(args, variants); save()
+    if "fp8proj" in args.passes:
+        log("== fp8proj");       res["fp8proj"] = pass_fp8proj(args); save()
     if "memory" in args.passes:
         log("== memory");        res["memory"] = pass_memory(args, variants); save()
     if "profile" in args.passes:
         dense_ref = "dense-fp8" if "dense-fp8" in variants else "dense-bf16"
-        log("== profile");       res["profile"] = pass_profile(args, [v for v in ("lut-fp32", dense_ref) if v in variants]); save()
+        pv = args.profile_variants or [v for v in ("lut-fp32", dense_ref) if v in variants]
+        log("== profile");       res["profile"] = pass_profile(args, [v for v in pv if v in variants]); save()
     # Attention is not part of this benchmark: record that nothing pulled in nanochat's FA3 loader.
     res["env"]["fa3_loader_imported"] = "nanochat.flash_attention" in sys.modules
     if res["env"]["fa3_loader_imported"]:
