@@ -28,6 +28,7 @@ weighted sum written here is fused into one kernel by Inductor when the cartridg
 """
 from __future__ import annotations
 
+import os
 import weakref
 from typing import Optional
 
@@ -116,14 +117,38 @@ class _NarrowScoredRead(torch.autograd.Function):
         grad_s = (_rows(narrow, idx) * go.unsqueeze(1)).sum(-1) * inv_scale if ctx.needs_input_grad[1] else None
         grad_w = None
         if ctx.needs_input_grad[2]:
-            n_bags, n_per = idx.shape
-            flat = idx.reshape(-1)
-            offset2bag = torch.arange(n_bags, device=idx.device, dtype=flat.dtype).repeat_interleave(n_per)
-            bag_size = torch.full((n_bags,), n_per, device=idx.device, dtype=flat.dtype)
-            no_max = torch.empty(0, device=idx.device, dtype=flat.dtype)
-            grad_w = torch.ops.aten._embedding_bag_dense_backward(
-                go, flat, offset2bag, bag_size, no_max, ctx.num_weights, False, 0, s.reshape(-1).to(go.dtype), -1)
+            grad_w = _table_grad(idx, s, go, ctx.num_weights)
         return None, grad_s, grad_w, None, None
+
+
+# EXPERIMENT (A/B only): how the table gradient dW[r] = sum_{(b,t): idx[b,t] = r} s[b,t] * go[b] is accumulated.
+#   embedding_bag (default): aten._embedding_bag_dense_backward -- sorted segments; subject to PyTorch's 32-bit
+#                            launch-thread limit (manifesto_base / the guard branch).
+#   index_add:   go.new_zeros(rows, d_out).index_add_(0, idx, s * go)   -- atomic scatter of the weighted rows.
+#   scatter_add: the same through scatter_add_ (needs an int64 [N, d_out] index).
+# Read once per process from LUTORCH_EX_TABLE_GRAD (a module attribute, so tests can switch it).
+TABLE_GRAD_MODES = ("embedding_bag", "index_add", "scatter_add")
+TABLE_GRAD = os.environ.get("LUTORCH_EX_TABLE_GRAD", "embedding_bag")
+if TABLE_GRAD not in TABLE_GRAD_MODES:
+    raise ValueError(f"LUTORCH_EX_TABLE_GRAD must be one of {TABLE_GRAD_MODES}, got {TABLE_GRAD!r}")
+
+
+def _table_grad(idx: torch.Tensor, s: torch.Tensor, go: torch.Tensor, num_weights: int) -> torch.Tensor:
+    """fp32 [num_weights, d_out] table gradient for idx [n_bags, n_per], s [n_bags, n_per], go [n_bags, d_out]."""
+    n_bags, n_per = idx.shape
+    flat = idx.reshape(-1)
+    if TABLE_GRAD == "embedding_bag":
+        offset2bag = torch.arange(n_bags, device=idx.device, dtype=flat.dtype).repeat_interleave(n_per)
+        bag_size = torch.full((n_bags,), n_per, device=idx.device, dtype=flat.dtype)
+        no_max = torch.empty(0, device=idx.device, dtype=flat.dtype)
+        return torch.ops.aten._embedding_bag_dense_backward(
+            go, flat, offset2bag, bag_size, no_max, num_weights, False, 0, s.reshape(-1).to(go.dtype), -1)
+    d_out = go.shape[-1]
+    src = (s.to(go.dtype).unsqueeze(-1) * go.unsqueeze(1)).reshape(-1, d_out)      # [n_bags * n_per, d_out]
+    grad_w = go.new_zeros(num_weights, d_out)
+    if TABLE_GRAD == "index_add":
+        return grad_w.index_add_(0, flat, src)
+    return grad_w.scatter_add_(0, flat.to(torch.int64).unsqueeze(-1).expand(-1, d_out), src)
 
 
 def narrow_scored_read(idx: torch.Tensor, s: torch.Tensor, master: torch.Tensor, narrow: torch.Tensor,
