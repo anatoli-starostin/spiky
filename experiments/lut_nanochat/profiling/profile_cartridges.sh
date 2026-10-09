@@ -1,6 +1,7 @@
 #!/bin/bash
-# [lut_nanochat] Thin wrapper: per-op profile of ConfidenceLUT vs QuantisedConfidenceLUT (p2_int8) at the locked d24
-# geometry, plus the deploy-only packed-int8 cartridge. All flags pass through to profile_cartridges.py (see --help).
+# [lut_nanochat] Thin wrapper: per-op profile of every lutorch_ex cartridge (35 arms: pure, fused tier1/native/eager,
+# fp32/bf16, Confidence/Quantised/Deploy) at the locked d24 geometry. All flags pass through to profile_cartridges.py
+# (see --help). LUTORCH_EX_SRC=<repo>/src profiles another lutorch_ex checkout (e.g. main vs a PR branch).
 # Same interpreter / TRITON_CACHE_DIR handling as profile_lut_ffn.sh.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
