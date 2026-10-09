@@ -40,7 +40,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from typing import Optional
+
 from ._fused_ops import _global_cells
+from ._narrow_table import NARROW_TABLE_DTYPES, NarrowTableCache, narrow_scored_read
 from .manifesto_base import ManifestoLUT
 
 
@@ -71,9 +74,16 @@ class ConfidenceLUT(ManifestoLUT):
         read_tau_init: float = 0.5,
         read_tau_learnable: bool = True,
         learnable_score: bool = True,
+        table_dtype: Optional[torch.dtype] = None,
         **kw,
     ):
         super().__init__(spec, **kw)
+        if table_dtype not in NARROW_TABLE_DTYPES:
+            raise ValueError(f"table_dtype must be one of {NARROW_TABLE_DTYPES}, got {table_dtype!r}")
+        # Narrow-table read (see cartridges/_narrow_table.py): gather from a bf16 / fp8 copy of the fp32 master,
+        # recast only when the master changes. None (default) = the unchanged fp32 embedding_bag read.
+        self.table_dtype = table_dtype
+        self._narrow_cache = NarrowTableCache()
         if read_top_n not in (1, 2):
             raise ValueError(f"read_top_n must be 1 or 2, got {read_top_n}")
         if not (beta_init > 0 and gamma_init > 0 and read_tau_init > 0):
@@ -144,7 +154,30 @@ class ConfidenceLUT(ManifestoLUT):
     def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
         raise NotImplementedError
 
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+    def _forward_extra_args(self) -> tuple:
+        """The narrow table copy + its inverse scale, refreshed (outside the compiled region) only when the fp32
+        master changed; nothing when ``table_dtype`` is None."""
+        dt = getattr(self, "table_dtype", None)
+        if dt is None:
+            return ()
+        return self._narrow_cache.get(self.weights, dt)
+
+    def _narrow_read(self, c, c_alt, s, v, narrow, inv_scale) -> torch.Tensor:
+        """Score-weighted read from the narrow table copy (fp32 accumulate; grads to the fp32 master)."""
+        G, tph, K, d_out = self.weights.shape
+        B = c.shape[0]
+        W2 = self.weights.reshape(G * tph * K, d_out)
+        N2 = narrow.reshape(G * tph * K, d_out)
+        if self.read_top_n == 1:
+            idx = _global_cells(c, G, tph, K).reshape(B * G, tph)
+            psw = s.reshape(B * G, tph)
+        else:
+            idx = torch.cat([_global_cells(c, G, tph, K), _global_cells(c_alt, G, tph, K)], dim=2).reshape(B * G, 2 * tph)
+            psw = torch.cat([s * (1.0 - v), s * v], dim=2).reshape(B * G, 2 * tph)
+        return narrow_scored_read(idx, psw.float(), W2, N2, inv_scale).to(W2.dtype).reshape(B, G, d_out)
+
+    def _forward_impl(self, x: torch.Tensor, narrow: Optional[torch.Tensor] = None,
+                      inv_scale: Optional[torch.Tensor] = None) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         s = self._score(u)                                    # [B, G, tph]
         # Table dropout folds into the per-table score s (which gates each table's whole
@@ -152,6 +185,9 @@ class ConfidenceLUT(ManifestoLUT):
         mask = self._table_dropout_mask(s.shape[0], s.device, s.dtype)
         if mask is not None:
             s = s * mask
+        if narrow is not None:
+            v = self._blend_v(u_abs_star) if self.read_top_n == 2 else None
+            return self._route(self._narrow_read(c, c_alt, s, v, narrow, inv_scale), x)
         if self.read_top_n == 1:
             if self.training:
                 grp_out = self._scored_read(c, s)

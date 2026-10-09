@@ -209,6 +209,21 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
+| `table_dtype` | `None` | `ConfidenceLUT` only. `None` uses the `embedding_bag` read. `torch.float32` uses a fused gather read on the fp32 master. `torch.bfloat16` or `torch.float8_e4m3fn` use the same fused read on a narrow copy of the table, cast once per optimizer step (see below) |
+
+`table_dtype` replaces the `embedding_bag` read with a fused gather, upcast and score-weighted fp32 sum,
+which Inductor compiles into one kernel. The backward re-gathers for the score gradient and sends the
+table gradient to the fp32 master, which stays the trained parameter.
+
+- **Correctness:** the table gradient is bit-identical to the default path. With `torch.float32`, outputs
+  agree to fp32 re-association. A bf16 copy adds about 1.6e-3 relative output error, and fp8 (tensorwise
+  e4m3) about 2.6e-2.
+- **When the narrow copy is recast:** after every optimizer `step()` (a global step hook covers fused
+  optimizers, which do not bump the version counter), and whenever the master is changed in place. Writes
+  through `param.data` are invisible to both: call `invalidate_narrow_tables(module)` after them.
+- **Measured** at d24, 32k tokens, block fwd+bwd on an RTX 5090: `torch.float32` is fastest. The gain
+  comes from the fused score gradient. The narrow copies do not help on that GPU, because the fp32 table
+  already fits its L2.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
