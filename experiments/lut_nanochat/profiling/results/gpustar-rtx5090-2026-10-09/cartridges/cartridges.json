@@ -1,0 +1,2121 @@
+{
+ "args": {
+  "out_dir": "/tmp/pc_full",
+  "batch": [
+   4,
+   16
+  ],
+  "seq": 2048,
+  "cartridges": [
+   "conf-n1",
+   "quant-n1",
+   "conf-n2",
+   "quant-n2",
+   "deploy-n2"
+  ],
+  "passes": [
+   "env",
+   "ext",
+   "bench",
+   "timing",
+   "components",
+   "profile",
+   "memory"
+  ],
+  "warmup": 5,
+  "repeats": 20,
+  "profile_iters": 3,
+  "profile_tokens": 32768,
+  "with_stack": false,
+  "fp32_matmul_precision": "high",
+  "seed": 0,
+  "tokens": [
+   8192,
+   32768
+  ]
+ },
+ "geometry": {
+  "h_in": 16,
+  "h_out": 16,
+  "tph": 64,
+  "nap": 8,
+  "d_in": 48,
+  "d_out": 48,
+  "anchor_mode": "pairs"
+ },
+ "common": {
+  "seed": 1,
+  "beta_init": 2.0,
+  "gamma_init": 1.0,
+  "learnable_score": true,
+  "table_dropout_rate": 0.2
+ },
+ "env": {
+  "timestamp": "2026-10-09T10:57:30",
+  "repo_commit": "cc6a47ea4e2d554763aa5d38de43ae10ee01dba3",
+  "repo_tracked_changes": false,
+  "driver": "595.84",
+  "host_platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.43",
+  "python": "3.12.13",
+  "gpu_name": "NVIDIA GeForce RTX 5090",
+  "gpu_vram_gib": 31.35,
+  "compute_capability": "12.0",
+  "sm_count": 170,
+  "torch": "2.9.1+cu130",
+  "cuda_runtime": "13.0",
+  "cudnn": 91300,
+  "triton": "3.5.1",
+  "fp32_matmul_precision": "high",
+  "fp8_usable": true,
+  "fp8_probe": "torch._scaled_mm (e4m3, tensorwise) ran on this device",
+  "macs_per_token": {
+   "dense": 18874368,
+   "lut_projections": 2359296,
+   "lut_read": 49152,
+   "lut": 2408448
+  },
+  "fa3_loader_imported": false
+ },
+ "read_bytes_per_token": {
+  "conf-n1": {
+   "rows_bytes": 196608,
+   "index_bytes": 8192,
+   "weight_bytes": 4096,
+   "total_bytes": 208896,
+   "row_dtype": "float32",
+   "cells_per_table": 1,
+   "note": "fp32 rows from the fp32 master table"
+  },
+  "quant-n1": {
+   "rows_bytes": 196608,
+   "index_bytes": 8192,
+   "weight_bytes": 4096,
+   "total_bytes": 208896,
+   "row_dtype": "float32",
+   "cells_per_table": 1,
+   "note": "fp32 rows gathered from the per-call fp32 fake-quant table copy (value W_hat*2^e)",
+   "per_call_fake_quant_table_pass_bytes": 150994944
+  },
+  "conf-n2": {
+   "rows_bytes": 393216,
+   "index_bytes": 16384,
+   "weight_bytes": 8192,
+   "total_bytes": 417792,
+   "row_dtype": "float32",
+   "cells_per_table": 2,
+   "note": "fp32 rows from the fp32 master table"
+  },
+  "quant-n2": {
+   "rows_bytes": 393216,
+   "index_bytes": 16384,
+   "weight_bytes": 8192,
+   "total_bytes": 417792,
+   "row_dtype": "float32",
+   "cells_per_table": 2,
+   "note": "fp32 rows gathered from the per-call fp32 fake-quant table copy (value W_hat*2^e)",
+   "per_call_fake_quant_table_pass_bytes": 150994944
+  },
+  "deploy-n2": {
+   "rows_bytes": 98304,
+   "index_bytes": 16384,
+   "weight_bytes": 0,
+   "total_bytes": 114688,
+   "row_dtype": "int8",
+   "cells_per_table": 2,
+   "note": "int8 rows (packed), int32 shift-add; no fp32 master; scale folded into decompress"
+  }
+ },
+ "ext": {
+  "ensure_registered": true,
+  "seconds": 0.17,
+  "enabled": true,
+  "error": null,
+  "validated_arches": [
+   [
+    12,
+    0
+   ],
+   [
+    9,
+    0
+   ]
+  ],
+  "torch_extensions_dir": "set by lutorch_ex (_native_ops.py) unless TORCH_EXTENSIONS_DIR is exported"
+ },
+ "bench": {
+  "conf-n1": [
+   {
+    "cartridge": "conf-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 0.9769655000582134,
+    "min_ms": 0.9727470001053007,
+    "throughput_rows_per_s": 8385147.683835174,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 3.860518500005128,
+    "min_ms": 3.8009859999874607,
+    "throughput_rows_per_s": 8487979.011098243,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 1.432606999969721,
+    "min_ms": 1.428374999704829,
+    "throughput_rows_per_s": 5718246.5255112825,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 5.461171999968428,
+    "min_ms": 5.451066000205174,
+    "throughput_rows_per_s": 6000177.251364622,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 6.399446999921565,
+    "min_ms": 6.3642149998486275,
+    "throughput_rows_per_s": 1280110.6095730467,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 25.15294700015147,
+    "min_ms": 24.607999000181735,
+    "throughput_rows_per_s": 1302749.9322366747,
+    "note": ""
+   }
+  ],
+  "quant-n1": [
+   {
+    "cartridge": "quant-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 1.4500595000299654,
+    "min_ms": 1.4462730000559532,
+    "throughput_rows_per_s": 5649423.351131945,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 5.411535000121148,
+    "min_ms": 5.405454999618087,
+    "throughput_rows_per_s": 6055213.539091297,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 1.463709500285404,
+    "min_ms": 1.4570600001206913,
+    "throughput_rows_per_s": 5596738.969312332,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 5.566481999721873,
+    "min_ms": 5.555335999815725,
+    "throughput_rows_per_s": 5886662.34825465,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 6.617005499947481,
+    "min_ms": 6.595424999886745,
+    "throughput_rows_per_s": 1238022.2443618975,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n1",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 25.52635949996329,
+    "min_ms": 25.48028000001068,
+    "throughput_rows_per_s": 1283692.6472044368,
+    "note": ""
+   }
+  ],
+  "conf-n2": [
+   {
+    "cartridge": "conf-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 3.6000279999370832,
+    "min_ms": 3.5093170004074636,
+    "throughput_rows_per_s": 2275537.8569675484,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 14.329069000041272,
+    "min_ms": 14.274493999892002,
+    "throughput_rows_per_s": 2286819.8903854545,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 2.510830999881364,
+    "min_ms": 2.504475000023376,
+    "throughput_rows_per_s": 3262664.8310408266,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 9.757445500099493,
+    "min_ms": 9.743967999838787,
+    "throughput_rows_per_s": 3358256.010721851,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 12.566116000016336,
+    "min_ms": 12.078943000233267,
+    "throughput_rows_per_s": 651911.8556592467,
+    "note": ""
+   },
+   {
+    "cartridge": "conf-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 47.74851799993485,
+    "min_ms": 47.56264800016652,
+    "throughput_rows_per_s": 686262.136974486,
+    "note": ""
+   }
+  ],
+  "quant-n2": [
+   {
+    "cartridge": "quant-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 2.840774000105739,
+    "min_ms": 2.8349379999781377,
+    "throughput_rows_per_s": 2883721.1265996797,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 10.955849000083617,
+    "min_ms": 10.942328000055568,
+    "throughput_rows_per_s": 2990913.80318859,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 2.880973500168693,
+    "min_ms": 2.8766150003320945,
+    "throughput_rows_per_s": 2843483.2876874167,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_train",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 11.141189999989365,
+    "min_ms": 11.115170999801194,
+    "throughput_rows_per_s": 2941157.9912048248,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 12.498841000024186,
+    "min_ms": 12.44917300027737,
+    "throughput_rows_per_s": 655420.770612583,
+    "note": ""
+   },
+   {
+    "cartridge": "quant-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "backward",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 48.84246550000171,
+    "min_ms": 48.798656999679224,
+    "throughput_rows_per_s": 670891.6035370666,
+    "note": ""
+   }
+  ],
+  "deploy-n2": [
+   {
+    "cartridge": "deploy-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 8192,
+    "status": "ok",
+    "median_ms": 3.8546109999515465,
+    "min_ms": 3.8456820002465975,
+    "throughput_rows_per_s": 2125246.879672936,
+    "note": ""
+   },
+   {
+    "cartridge": "deploy-n2",
+    "device": "cuda:NVIDIAGeForceRTX5090",
+    "operation": "forward_eval",
+    "batch_size": 32768,
+    "status": "ok",
+    "median_ms": 35.55038950025846,
+    "min_ms": 35.153067000010196,
+    "throughput_rows_per_s": 921733.9236117727,
+    "note": ""
+   }
+  ]
+ },
+ "timing": {
+  "conf-n1": {
+   "8192": {
+    "eval_fwd": {
+     "median_ms": 0.9816640019416809,
+     "q1_ms": 0.9800480157136917,
+     "q3_ms": 0.9852720201015472,
+     "iqr_ms": 0.00522400438785553,
+     "min_ms": 0.9761599898338318,
+     "max_ms": 0.9993600249290466,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 1.4399839639663696,
+     "q1_ms": 1.4385599792003632,
+     "q3_ms": 1.443703979253769,
+     "iqr_ms": 0.005144000053405762,
+     "min_ms": 1.4347840547561646,
+     "max_ms": 1.4472960233688354,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 7.576479911804199,
+     "q1_ms": 7.571584105491638,
+     "q3_ms": 7.5781121253967285,
+     "iqr_ms": 0.006528019905090332,
+     "min_ms": 7.545087814331055,
+     "max_ms": 7.591872215270996,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 6.13649594783783,
+    "peak_alloc_gib": 0.853177547454834
+   },
+   "32768": {
+    "eval_fwd": {
+     "median_ms": 3.800480008125305,
+     "q1_ms": 3.798527956008911,
+     "q3_ms": 3.8030640482902527,
+     "iqr_ms": 0.004536092281341553,
+     "min_ms": 3.7940800189971924,
+     "max_ms": 3.8935999870300293,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 5.5289599895477295,
+     "q1_ms": 5.48688018321991,
+     "q3_ms": 5.57968008518219,
+     "iqr_ms": 0.09279990196228027,
+     "min_ms": 5.460127830505371,
+     "max_ms": 5.614880084991455,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 29.5239839553833,
+     "q1_ms": 29.504680633544922,
+     "q3_ms": 29.54852867126465,
+     "iqr_ms": 0.04384803771972656,
+     "min_ms": 29.485248565673828,
+     "max_ms": 34.50592041015625,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 23.99502396583557,
+    "peak_alloc_gib": 2.9445838928222656
+   }
+  },
+  "quant-n1": {
+   "8192": {
+    "eval_fwd": {
+     "median_ms": 1.4505760073661804,
+     "q1_ms": 1.4492160379886627,
+     "q3_ms": 1.4528480470180511,
+     "iqr_ms": 0.0036320090293884277,
+     "min_ms": 1.4440640211105347,
+     "max_ms": 1.4579839706420898,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 1.485535979270935,
+     "q1_ms": 1.4839760065078735,
+     "q3_ms": 1.4869039952754974,
+     "iqr_ms": 0.0029279887676239014,
+     "min_ms": 1.478943943977356,
+     "max_ms": 1.4897600412368774,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 7.809632062911987,
+     "q1_ms": 7.804711818695068,
+     "q3_ms": 7.8160640001297,
+     "iqr_ms": 0.011352181434631348,
+     "min_ms": 7.7674560546875,
+     "max_ms": 12.669055938720703,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 6.324096083641052,
+    "peak_alloc_gib": 0.853177547454834
+   },
+   "32768": {
+    "eval_fwd": {
+     "median_ms": 5.413968086242676,
+     "q1_ms": 5.409279942512512,
+     "q3_ms": 5.424784064292908,
+     "iqr_ms": 0.015504121780395508,
+     "min_ms": 5.403744220733643,
+     "max_ms": 5.4311041831970215,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 5.563008069992065,
+     "q1_ms": 5.558416128158569,
+     "q3_ms": 5.57318389415741,
+     "iqr_ms": 0.014767765998840332,
+     "min_ms": 5.55299186706543,
+     "max_ms": 5.587935924530029,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 30.50712013244629,
+     "q1_ms": 30.487584114074707,
+     "q3_ms": 30.521000385284424,
+     "iqr_ms": 0.0334162712097168,
+     "min_ms": 30.442047119140625,
+     "max_ms": 35.505985260009766,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 24.944112062454224,
+    "peak_alloc_gib": 3.040286064147949
+   }
+  },
+  "conf-n2": {
+   "8192": {
+    "eval_fwd": {
+     "median_ms": 3.6040159463882446,
+     "q1_ms": 3.591576039791107,
+     "q3_ms": 3.6152080297470093,
+     "iqr_ms": 0.0236319899559021,
+     "min_ms": 3.561984062194824,
+     "max_ms": 3.648736000061035,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 2.5118719339370728,
+     "q1_ms": 2.5092480182647705,
+     "q3_ms": 2.5150479674339294,
+     "iqr_ms": 0.0057999491691589355,
+     "min_ms": 2.506783962249756,
+     "max_ms": 2.5349440574645996,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 14.361199855804443,
+     "q1_ms": 14.352352142333984,
+     "q3_ms": 14.37227177619934,
+     "iqr_ms": 0.019919633865356445,
+     "min_ms": 14.321727752685547,
+     "max_ms": 16.908479690551758,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 11.84932792186737,
+    "peak_alloc_gib": 2.079348564147949
+   },
+   "32768": {
+    "eval_fwd": {
+     "median_ms": 14.302095890045166,
+     "q1_ms": 14.28379225730896,
+     "q3_ms": 14.355455875396729,
+     "iqr_ms": 0.07166361808776855,
+     "min_ms": 14.250880241394043,
+     "max_ms": 14.399680137634277,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 9.7739839553833,
+     "q1_ms": 9.771576404571533,
+     "q3_ms": 9.781983852386475,
+     "iqr_ms": 0.010407447814941406,
+     "min_ms": 9.755423545837402,
+     "max_ms": 9.795488357543945,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 56.56673622131348,
+     "q1_ms": 56.54158306121826,
+     "q3_ms": 56.61809539794922,
+     "iqr_ms": 0.07651233673095703,
+     "min_ms": 56.53094482421875,
+     "max_ms": 61.49660873413086,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 46.792752265930176,
+    "peak_alloc_gib": 7.094973564147949
+   }
+  },
+  "quant-n2": {
+   "8192": {
+    "eval_fwd": {
+     "median_ms": 2.836992025375366,
+     "q1_ms": 2.833568036556244,
+     "q3_ms": 2.8436960577964783,
+     "iqr_ms": 0.010128021240234375,
+     "min_ms": 2.8300158977508545,
+     "max_ms": 2.9352641105651855,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 2.8823680877685547,
+     "q1_ms": 2.88018399477005,
+     "q3_ms": 2.884455978870392,
+     "iqr_ms": 0.004271984100341797,
+     "min_ms": 2.874880075454712,
+     "max_ms": 2.8973441123962402,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 15.069664001464844,
+     "q1_ms": 15.058575868606567,
+     "q3_ms": 15.078207731246948,
+     "iqr_ms": 0.01963186264038086,
+     "min_ms": 15.035552024841309,
+     "max_ms": 15.102144241333008,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 12.187295913696289,
+    "peak_alloc_gib": 1.3379435539245605
+   },
+   "32768": {
+    "eval_fwd": {
+     "median_ms": 10.957327842712402,
+     "q1_ms": 10.953696012496948,
+     "q3_ms": 10.974120140075684,
+     "iqr_ms": 0.02042412757873535,
+     "min_ms": 10.941951751708984,
+     "max_ms": 10.99135971069336,
+     "n": 20
+    },
+    "train_fwd": {
+     "median_ms": 11.143072128295898,
+     "q1_ms": 11.136776208877563,
+     "q3_ms": 11.157632112503052,
+     "iqr_ms": 0.02085590362548828,
+     "min_ms": 11.127167701721191,
+     "max_ms": 11.35148811340332,
+     "n": 20
+    },
+    "train_fwdbwd": {
+     "median_ms": 59.457759857177734,
+     "q1_ms": 59.431495666503906,
+     "q3_ms": 59.47927188873291,
+     "iqr_ms": 0.047776222229003906,
+     "min_ms": 59.389183044433594,
+     "max_ms": 69.55382537841797,
+     "n": 20
+    },
+    "train_bwd_by_difference_ms": 48.314687728881836,
+    "peak_alloc_gib": 4.882084369659424
+   }
+  },
+  "deploy-n2": {
+   "8192": {
+    "eval_fwd": {
+     "median_ms": 3.8600319623947144,
+     "q1_ms": 3.8544479608535767,
+     "q3_ms": 3.863144040107727,
+     "iqr_ms": 0.00869607925415039,
+     "min_ms": 3.850912094116211,
+     "max_ms": 3.8699519634246826,
+     "n": 20
+    },
+    "peak_alloc_gib": 0.5910673141479492
+   },
+   "32768": {
+    "eval_fwd": {
+     "median_ms": 35.01748847961426,
+     "q1_ms": 34.84727191925049,
+     "q3_ms": 35.07383155822754,
+     "iqr_ms": 0.22655963897705078,
+     "min_ms": 34.53363037109375,
+     "max_ms": 39.57088088989258,
+     "n": 20
+    },
+    "peak_alloc_gib": 1.4582548141479492
+   }
+  }
+ },
+ "components": {
+  "tokens": 32768,
+  "conf-n1": {
+   "addressing (margins + sign-bit pack, compiled)": {
+    "fwd_ms": 1.6071839928627014,
+    "fwdbwd_ms": 9.441391944885254
+   },
+   "confidence score s (compiled)": {
+    "fwd_ms": 15.0697603225708,
+    "fwdbwd_ms": 19.442511558532715
+   },
+   "table-dropout mask": {
+    "fwd_ms": 0.4548320025205612,
+    "fwdbwd_ms": null
+   },
+   "embedding_bag read (fp32 rows)": {
+    "fwd_ms": 4.2602081298828125,
+    "fwdbwd_ms": 22.090463638305664
+   },
+   "cell-TV penalty (per optimizer step)": {
+    "fwd_ms": 0.30900800228118896,
+    "fwdbwd_ms": 2.5096160173416138
+   },
+   "cast bf16->fp32 [N,768]": {
+    "fwd_ms": 0.10681600123643875,
+    "fwdbwd_ms": 0.2075520008802414
+   }
+  },
+  "quant-n1": {
+   "addressing (margins + sign-bit pack, compiled)": {
+    "fwd_ms": 1.6200479865074158,
+    "fwdbwd_ms": 9.441152095794678
+   },
+   "confidence score s (compiled)": {
+    "fwd_ms": 15.072080135345459,
+    "fwdbwd_ms": 19.420671463012695
+   },
+   "power-of-two STE score weight (compiled)": {
+    "fwd_ms": 15.117503643035889,
+    "fwdbwd_ms": 18.70252799987793
+   },
+   "fake-quant tables (STE, full table, compiled)": {
+    "fwd_ms": 0.06192000024020672,
+    "fwdbwd_ms": 0.46798400580883026
+   },
+   "fake-quant tables (eager)": {
+    "fwd_ms": 0.3712480068206787,
+    "fwdbwd_ms": 0.46876800060272217
+   },
+   "table-dropout mask": {
+    "fwd_ms": 0.45505599677562714,
+    "fwdbwd_ms": null
+   },
+   "embedding_bag read (fp32 rows)": {
+    "fwd_ms": 4.2550880908966064,
+    "fwdbwd_ms": 22.08571147918701
+   },
+   "cell-TV penalty (per optimizer step)": {
+    "fwd_ms": 0.31193600594997406,
+    "fwdbwd_ms": 2.5367040634155273
+   },
+   "cast bf16->fp32 [N,768]": {
+    "fwd_ms": 0.10923199728131294,
+    "fwdbwd_ms": 0.2035360038280487
+   }
+  }
+ },
+ "profile": {
+  "conf-n1": {
+   "tokens": 32768,
+   "eval": {
+    "cuda_time_per_iter_ms": 3.8254823333333343,
+    "n_kernels": 2,
+    "kernels_ms": [
+     {
+      "kernel": "triton_per_fused_add_arange_exp_index_mul_sum_unsqueeze_view_1",
+      "ms": 2.9005,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_exp_expand_gather_index_log_sigmoid_forward_mul_sub_sum_view_0",
+      "ms": 0.9249,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   },
+   "train_fwd": {
+    "cuda_time_per_iter_ms": 5.4287566666666685,
+    "n_kernels": 4,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 4.3072,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_div_exp_expand_gather_index_log_sigmoid_forward_lt_mul_rand_sub_sum_view_0",
+      "ms": 1.1181,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_arange_1",
+      "ms": 0.0021,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::distribution_elementwise_grid_stride_kernel<unsigned long, 2, at::native::templates::cuda::random_from_to_kernel<at::CUDAGeneratorImpl*>(at::TensorIteratorBase&",
+      "ms": 0.0014,
+      "bucket": "elementwise/other"
+     }
+    ]
+   },
+   "train_bwd": {
+    "cuda_time_per_iter_ms": 24.73507633333331,
+    "n_kernels": 25,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::_embedding_bag_per_sample_weights_backward_kernel<float, long>(float const*, long, long, float const*, long, long, long const*, long const*, long, long, float*, long)",
+      "ms": 10.1405,
+      "bucket": "embedding_bag bwd: per_sample_weights grad"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortOnesweepKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000, ",
+      "ms": 5.6777,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_abs_add_div_exp_expand_gather_index_log_sigmoid_backward_log_sigmoid_forward_mul_neg_new_zeros_scatter_add_sgn_sub_unsqueeze_view_4",
+      "ms": 3.0079,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_grad_weight_bags<float, long>(long const*, float const*, long const*, long const*, long, long, int, long const*, float const*, long, long const*, long c",
+      "ms": 2.6946,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_exp_expand_log_sigmoid_backward_log_sigmoid_forward_mul_sum_unsqueeze_5",
+      "ms": 1.0105,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::sum_and_scatter<float, long>(long const*, float*, long, long const*, long const*, at::AccumulateType<float, true>::type const*, long const*, long const*, long, ",
+      "ms": 0.4281,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_div_exp_mul_view_0",
+      "ms": 0.3449,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_add_index_put_new_zeros_7",
+      "ms": 0.2662,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void (anonymous namespace)::elementwise_kernel_with_index<int, at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{",
+      "ms": 0.243,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::unique_by_key::DeviceUniqueByKeySweepKernel<at_cuda_detail::cub::detail::unique_by_key::policy_hub<long, int>::Policy1000, long const*, thrust::THRUST_300001_SM_750_8",
+      "ms": 0.2149,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+      "ms": 0.1839,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortHistogramKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000,",
+      "ms": 0.1679,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_red_fused_mul_sum_1",
+      "ms": 0.1458,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_expand_mul_neg_new_zeros_scatter_add_sgn_view_3",
+      "ms": 0.1258,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partial_segment_offset<long>(long*, long const*, long const*, long const*, long const*)",
+      "ms": 0.0321,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, std::array<char*, 1ul> >(int, at::native::FillFunctor<float>, std::array<char*, 1ul>)",
+      "ms": 0.0261,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "Memset (Device)",
+      "ms": 0.0242,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partials_per_segment<long>(long*, long const*, long const*, long)",
+      "ms": 0.005,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanKernel<at_cuda_detail::cub::detail::scan::policy_hub<long, long, long, unsigned int, at::cuda::cub::(anonymous namespace)::SumOp<long> >::Policy1000, ",
+      "ms": 0.0031,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused_abs_exp_expand_log_sigmoid_backward_log_sigmoid_forward_mul_sum_unsqueeze_6",
+      "ms": 0.0016,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceCompactInitKernel<at_cuda_detail::cub::ScanTileState<unsigned long long, true>, long*>(at_cuda_detail::cub::ScanTileState<unsigned long long, true>, int, ",
+      "ms": 0.0015,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_num_of_partial_segments<long>(long const*, long const*, long const*, long*)",
+      "ms": 0.0013,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_per_fused_exp_mul_sum_2",
+      "ms": 0.0013,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanInitKernel<at_cuda_detail::cub::ScanTileState<long, true> >(at_cuda_detail::cub::ScanTileState<long, true>, int)",
+      "ms": 0.001,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": -0.0032,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_div_exp_expand_gather_index_log_sigmoid_forward_lt_mul_rand_sub_sum_view_0",
+      "ms": -0.012,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   }
+  },
+  "quant-n1": {
+   "tokens": 32768,
+   "eval": {
+    "cuda_time_per_iter_ms": 5.389744,
+    "n_kernels": 6,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 4.2804,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__embedding_bag_forward_only__to_copy__unsafe_view_abs_add_arange_ceil_clamp_clamp_min_clone_div_exp_expand_floor_gather_index_log2_log_sigmoid_forward_lt_mul_pow_sub_sum_view_where_ze",
+      "ms": 1.0187,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__embedding_bag_forward_only__unsafe_view_add_arange_ceil_clamp_clamp_min_clone_div_exp_expand_floor_log2_lt_mul_pow_sub_view_where_zeros_like_3",
+      "ms": 0.0526,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_0",
+      "ms": 0.0347,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__embedding_bag_forward_only__unsafe_view_add_arange_ceil_clamp_clamp_min_clone_div_exp_expand_floor_log2_lt_mul_pow_sub_view_where_zeros_like_4",
+      "ms": 0.0021,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_1",
+      "ms": 0.0012,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   },
+   "train_fwd": {
+    "cuda_time_per_iter_ms": 7.117515666666668,
+    "n_kernels": 7,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 5.7891,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_clamp_clamp_min_div_exp_expand_floor_gather_gt_index_log2_log_sigmoid_forward_lt_mul_pow_rand_sub_sum_view_where_zeros_like_0",
+      "ms": 1.2617,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_1",
+      "ms": 0.0363,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__unsafe_view_add_ceil_clamp_clamp_min_clone_div_expand_floor_log2_mul_pow_sub_view_3",
+      "ms": 0.0255,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_arange_4",
+      "ms": 0.002,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_2",
+      "ms": 0.0015,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::distribution_elementwise_grid_stride_kernel<unsigned long, 2, at::native::templates::cuda::random_from_to_kernel<at::CUDAGeneratorImpl*>(at::TensorIteratorBase&",
+      "ms": 0.0014,
+      "bucket": "elementwise/other"
+     }
+    ]
+   },
+   "train_bwd": {
+    "cuda_time_per_iter_ms": 23.909397666666678,
+    "n_kernels": 26,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::_embedding_bag_per_sample_weights_backward_kernel<float, long>(float const*, long, long, float const*, long, long, long const*, long const*, long, long, float*, long)",
+      "ms": 10.1197,
+      "bucket": "embedding_bag bwd: per_sample_weights grad"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortOnesweepKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000, ",
+      "ms": 5.6977,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused_abs_add_div_exp_expand_gather_index_log_sigmoid_backward_log_sigmoid_forward_mul_neg_new_zeros_scatter_add_sgn_sub_unsqueeze_view_zeros_like_5",
+      "ms": 3.4132,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_grad_weight_bags<float, long>(long const*, float const*, long const*, long const*, long, long, int, long const*, float const*, long, long const*, long c",
+      "ms": 2.6906,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_mul_sum_6",
+      "ms": 1.2988,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::sum_and_scatter<float, long>(long const*, float*, long, long const*, long const*, at::AccumulateType<float, true>::type const*, long const*, long const*, long, ",
+      "ms": 0.4306,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_add_clamp_clamp_min_div_exp_floor_log2_mul_pow_view_0",
+      "ms": 0.3394,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_add_index_put_new_zeros_8",
+      "ms": 0.2672,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_div_exp_mul_sum_1",
+      "ms": 0.2502,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void (anonymous namespace)::elementwise_kernel_with_index<int, at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{",
+      "ms": 0.2431,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::unique_by_key::DeviceUniqueByKeySweepKernel<at_cuda_detail::cub::detail::unique_by_key::policy_hub<long, int>::Policy1000, long const*, thrust::THRUST_300001_SM_750_8",
+      "ms": 0.2136,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+      "ms": 0.1821,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortHistogramKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000,",
+      "ms": 0.1679,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused_expand_neg_new_zeros_scatter_add_view_4",
+      "ms": 0.1187,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partial_segment_offset<long>(long*, long const*, long const*, long const*, long const*)",
+      "ms": 0.0323,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "Memset (Device)",
+      "ms": 0.0242,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, std::array<char*, 1ul> >(int, at::native::FillFunctor<float>, std::array<char*, 1ul>)",
+      "ms": 0.0223,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partials_per_segment<long>(long*, long const*, long const*, long)",
+      "ms": 0.005,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanKernel<at_cuda_detail::cub::detail::scan::policy_hub<long, long, long, unsigned int, at::cuda::cub::(anonymous namespace)::SumOp<long> >::Policy1000, ",
+      "ms": 0.0031,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_exp_mul_sum_7",
+      "ms": 0.0019,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceCompactInitKernel<at_cuda_detail::cub::ScanTileState<unsigned long long, true>, long*>(at_cuda_detail::cub::ScanTileState<unsigned long long, true>, int, ",
+      "ms": 0.0017,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_num_of_partial_segments<long>(long const*, long const*, long const*, long*)",
+      "ms": 0.0013,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_per_fused_div_mul_sum_2",
+      "ms": 0.0013,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused_add_exp_mul_sum_3",
+      "ms": 0.0013,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanInitKernel<at_cuda_detail::cub::ScanTileState<long, true> >(at_cuda_detail::cub::ScanTileState<long, true>, int)",
+      "ms": 0.001,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_clamp_clamp_min_div_exp_expand_floor_gather_gt_index_log2_log_sigmoid_forward_lt_mul_pow_rand_sub_sum_view_where_zeros_like_0",
+      "ms": -0.0972,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": -1.5229,
+      "bucket": "embedding_bag fwd"
+     }
+    ]
+   }
+  },
+  "conf-n2": {
+   "tokens": 32768,
+   "eval": {
+    "cuda_time_per_iter_ms": 14.260791666666666,
+    "n_kernels": 3,
+    "kernels_ms": [
+     {
+      "kernel": "triton_poi_fused_add_arange_bitwise_xor_div_exp_index_mul_sigmoid_sub_unsqueeze_view_1",
+      "ms": 9.318,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused_sum_2",
+      "ms": 3.8834,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_exp_expand_gather_index_log_sigmoid_forward_min_mul_sub_sum_view_0",
+      "ms": 1.0594,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   },
+   "train_fwd": {
+    "cuda_time_per_iter_ms": 9.722109666666666,
+    "n_kernels": 4,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 8.3878,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_bitwise_xor_div_exp_expand_gather_index_log_sigmoid_forward_lt_min_mul_rand_rsub_sigmoid_sub_sum_view_0",
+      "ms": 1.3301,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_arange_1",
+      "ms": 0.0029,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::distribution_elementwise_grid_stride_kernel<unsigned long, 2, at::native::templates::cuda::random_from_to_kernel<at::CUDAGeneratorImpl*>(at::TensorIteratorBase&",
+      "ms": 0.0013,
+      "bucket": "elementwise/other"
+     }
+    ]
+   },
+   "train_bwd": {
+    "cuda_time_per_iter_ms": 47.89177300000002,
+    "n_kernels": 26,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::_embedding_bag_per_sample_weights_backward_kernel<float, long>(float const*, long, long, float const*, long, long, long const*, long const*, long, long, float*, long)",
+      "ms": 19.8983,
+      "bucket": "embedding_bag bwd: per_sample_weights grad"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortOnesweepKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000, ",
+      "ms": 11.4521,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_grad_weight_bags<float, long>(long const*, float const*, long const*, long const*, long, long, int, long const*, float const*, long, long const*, long c",
+      "ms": 5.3469,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_div_exp_expand_gather_index_min_mul_neg_rsub_scatter_sigmoid_sigmoid_backward_slice_sub_unsqueeze_view_zeros_1",
+      "ms": 3.0437,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused_abs_add_exp_expand_log_sigmoid_backward_log_sigmoid_forward_mul_neg_new_zeros_scatter_add_sgn_sum_unsqueeze_view_6",
+      "ms": 2.6051,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_exp_mul_sum_7",
+      "ms": 1.7856,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::sum_and_scatter<float, long>(long const*, float*, long, long const*, long const*, at::AccumulateType<float, true>::type const*, long const*, long const*, long, ",
+      "ms": 0.8184,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused_div_exp_mul_scatter_unsqueeze_zeros_0",
+      "ms": 0.6177,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void (anonymous namespace)::elementwise_kernel_with_index<int, at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{",
+      "ms": 0.4856,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::unique_by_key::DeviceUniqueByKeySweepKernel<at_cuda_detail::cub::detail::unique_by_key::policy_hub<long, int>::Policy1000, long const*, thrust::THRUST_300001_SM_750_8",
+      "ms": 0.3884,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortHistogramKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000,",
+      "ms": 0.3317,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused_add_index_put_new_zeros_8",
+      "ms": 0.2649,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_exp_mul_sum_4",
+      "ms": 0.2511,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+      "ms": 0.1787,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_red_fused_div_exp_mul_neg_sum_2",
+      "ms": 0.1702,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_expand_neg_new_zeros_scatter_add_view_5",
+      "ms": 0.1379,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partial_segment_offset<long>(long*, long const*, long const*, long const*, long const*)",
+      "ms": 0.0637,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "Memset (Device)",
+      "ms": 0.0395,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, std::array<char*, 1ul> >(int, at::native::FillFunctor<float>, std::array<char*, 1ul>)",
+      "ms": 0.0234,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partials_per_segment<long>(long*, long const*, long const*, long)",
+      "ms": 0.005,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanKernel<at_cuda_detail::cub::detail::scan::policy_hub<long, long, long, unsigned int, at::cuda::cub::(anonymous namespace)::SumOp<long> >::Policy1000, ",
+      "ms": 0.0032,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused_div_exp_mul_neg_sum_3",
+      "ms": 0.0026,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceCompactInitKernel<at_cuda_detail::cub::ScanTileState<unsigned long long, true>, long*>(at_cuda_detail::cub::ScanTileState<unsigned long long, true>, int, ",
+      "ms": 0.0015,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_num_of_partial_segments<long>(long const*, long const*, long const*, long*)",
+      "ms": 0.0014,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanInitKernel<at_cuda_detail::cub::ScanTileState<long, true> >(at_cuda_detail::cub::ScanTileState<long, true>, int)",
+      "ms": 0.0011,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": -0.0061,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_bitwise_xor_div_exp_expand_gather_index_log_sigmoid_forward_lt_min_mul_rand_rsub_sigmoid_sub_sum_view_0",
+      "ms": -0.021,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   }
+  },
+  "quant-n2": {
+   "tokens": 32768,
+   "eval": {
+    "cuda_time_per_iter_ms": 10.939562333333335,
+    "n_kernels": 10,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 8.3854,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_bitwise_xor_expand_gather_index_min_mul_sub_sum_view_0",
+      "ms": 1.17,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "(anonymous namespace)::p2_scalar_kernel(float const*, float*, unsigned char*, signed char*, long, int, int, int, int, float const*, float const*, float const*, float const*)",
+      "ms": 0.9574,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_poi_fused__embedding_bag_forward_only__unsafe_view_add_arange_cat_ceil_clamp_clamp_min_clone_div_expand_floor_log2_mul_pow_select_sub_view_7",
+      "ms": 0.3493,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_3",
+      "ms": 0.0358,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__embedding_bag_forward_only__unsafe_view_add_arange_cat_ceil_clamp_clamp_min_clone_div_expand_floor_log2_mul_pow_select_sub_view_5",
+      "ms": 0.0329,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_exp_1",
+      "ms": 0.0043,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__embedding_bag_forward_only__unsafe_view_add_arange_cat_ceil_clamp_clamp_min_clone_div_expand_floor_log2_mul_pow_select_sub_view_6",
+      "ms": 0.002,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_4",
+      "ms": 0.0015,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_zeros_2",
+      "ms": 0.0011,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   },
+   "train_fwd": {
+    "cuda_time_per_iter_ms": 11.085357333333334,
+    "n_kernels": 13,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 8.3605,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "(anonymous namespace)::p2_scalar_kernel(float const*, float*, unsigned char*, signed char*, long, int, int, int, int, float const*, float const*, float const*, float const*)",
+      "ms": 0.9477,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_poi_fused_exp_expand_gather_index_p2_scalars_sub_view_zeros_0",
+      "ms": 0.8187,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_add_arange_mul_slice_view_7",
+      "ms": 0.4526,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_div_mul_unsqueeze_9",
+      "ms": 0.3747,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_lt_rand_3",
+      "ms": 0.0525,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_4",
+      "ms": 0.0357,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__unsafe_view_add_ceil_clamp_clamp_min_clone_div_expand_floor_log2_mul_pow_sub_view_6",
+      "ms": 0.0327,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_exp_1",
+      "ms": 0.0042,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_arange_mul_8",
+      "ms": 0.0019,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::distribution_elementwise_grid_stride_kernel<unsigned long, 2, at::native::templates::cuda::random_from_to_kernel<at::CUDAGeneratorImpl*>(at::TensorIteratorBase&",
+      "ms": 0.0017,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_red_fused_abs_amax_view_5",
+      "ms": 0.0015,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_zeros_2",
+      "ms": 0.001,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   },
+   "train_bwd": {
+    "cuda_time_per_iter_ms": 49.39220499999997,
+    "n_kernels": 32,
+    "kernels_ms": [
+     {
+      "kernel": "void at::native::_embedding_bag_per_sample_weights_backward_kernel<float, long>(float const*, long, long, float const*, long, long, long const*, long const*, long, long, float*, long)",
+      "ms": 19.8918,
+      "bucket": "embedding_bag bwd: per_sample_weights grad"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortOnesweepKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000, ",
+      "ms": 11.4029,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_grad_weight_bags<float, long>(long const*, float const*, long const*, long const*, long, long, int, long const*, float const*, long, long const*, long c",
+      "ms": 5.3117,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused_abs_add_exp_expand_gather_index_log_sigmoid_backward_log_sigmoid_forward_mul_neg_new_zeros_scatter_add_sgn_squeeze_sub_sum_unsqueeze_view_9",
+      "ms": 2.616,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_add_cat_div_exp_mul_neg_scatter_sigmoid_sigmoid_backward_slice_sum_unsqueeze_view_zeros_3",
+      "ms": 2.3416,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_abs_exp_expand_gather_index_mul_sub_sum_view_10",
+      "ms": 1.7917,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused_abs_exp_expand_gather_index_log_sigmoid_forward_min_mul_sub_sum_view_zeros_0",
+      "ms": 1.26,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_add_cat_clamp_min_div_exp_mul_neg_pow_sigmoid_stack_sub_unsqueeze_view_1",
+      "ms": 0.8442,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::sum_and_scatter<float, long>(long const*, float*, long, long const*, long const*, at::AccumulateType<float, true>::type const*, long const*, long const*, long, ",
+      "ms": 0.8196,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_poi_fused_add_div_exp_mul_neg_scatter_sigmoid_sigmoid_backward_slice_zeros_2",
+      "ms": 0.6335,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void (anonymous namespace)::elementwise_kernel_with_index<int, at::native::arange_cuda_out(c10::Scalar const&, c10::Scalar const&, c10::Scalar const&, at::Tensor&)::{lambda()#1}::operator()() const::{",
+      "ms": 0.4856,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::unique_by_key::DeviceUniqueByKeySweepKernel<at_cuda_detail::cub::detail::unique_by_key::policy_hub<long, int>::Policy1000, long const*, thrust::THRUST_300001_SM_750_8",
+      "ms": 0.3885,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::radix_sort::DeviceRadixSortHistogramKernel<at_cuda_detail::cub::detail::radix::policy_hub<long, at::cuda::cub::detail::OpaqueType<8>, unsigned long long>::Policy1000,",
+      "ms": 0.3314,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_red_fused_add_div_exp_mul_neg_sigmoid_sigmoid_backward_slice_sum_4",
+      "ms": 0.2799,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_add_index_put_new_zeros_11",
+      "ms": 0.2648,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused_add_exp_mul_squeeze_sum_7",
+      "ms": 0.246,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)",
+      "ms": 0.1825,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_poi_fused_add_exp_expand_gather_index_mul_neg_new_zeros_scatter_add_sgn_squeeze_sub_unsqueeze_view_8",
+      "ms": 0.1259,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partial_segment_offset<long>(long*, long const*, long const*, long const*, long const*)",
+      "ms": 0.0638,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "Memset (Device)",
+      "ms": 0.0426,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::vectorized_elementwise_kernel<4, at::native::FillFunctor<float>, std::array<char*, 1ul> >(int, at::native::FillFunctor<float>, std::array<char*, 1ul>)",
+      "ms": 0.026,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::EmbeddingBag_updateOutputKernel_sum_mean<float, long>(long const*, long const*, float const*, float*, long*, long, long, long, long, long, int, long*, float con",
+      "ms": 0.0203,
+      "bucket": "embedding_bag fwd"
+     },
+     {
+      "kernel": "triton_poi_fused_exp_expand_gather_index_p2_scalars_sub_view_zeros_0",
+      "ms": 0.0095,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::krn_partials_per_segment<long>(long*, long const*, long const*, long)",
+      "ms": 0.005,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanKernel<at_cuda_detail::cub::detail::scan::policy_hub<long, long, long, unsigned int, at::cuda::cub::(anonymous namespace)::SumOp<long> >::Policy1000, ",
+      "ms": 0.0032,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused_add_div_exp_mul_neg_sigmoid_sigmoid_backward_slice_sum_6",
+      "ms": 0.0028,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__unsafe_view_add_ceil_clamp_clamp_min_clone_div_expand_floor_log2_mul_pow_sub_view_6",
+      "ms": 0.0025,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceCompactInitKernel<at_cuda_detail::cub::ScanTileState<unsigned long long, true>, long*>(at_cuda_detail::cub::ScanTileState<unsigned long long, true>, int, ",
+      "ms": 0.0016,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "triton_per_fused_add_div_exp_mul_neg_sigmoid_sigmoid_backward_slice_sum_5",
+      "ms": 0.0014,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "void at::native::(anonymous namespace)::compute_num_of_partial_segments<long>(long const*, long const*, long const*, long*)",
+      "ms": 0.0014,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "void at_cuda_detail::cub::detail::scan::DeviceScanInitKernel<at_cuda_detail::cub::ScanTileState<long, true> >(at_cuda_detail::cub::ScanTileState<long, true>, int)",
+      "ms": 0.0011,
+      "bucket": "embedding_bag bwd: weight grad (sort/unique/scatter)"
+     },
+     {
+      "kernel": "(anonymous namespace)::p2_scalar_kernel(float const*, float*, unsigned char*, signed char*, long, int, int, int, int, float const*, float const*, float const*, float const*)",
+      "ms": -0.0012,
+      "bucket": "elementwise/other"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_div_mul_unsqueeze_9",
+      "ms": -0.0016,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_add_arange_mul_slice_view_7",
+      "ms": -0.0051,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   }
+  },
+  "deploy-n2": {
+   "tokens": 32768,
+   "eval": {
+    "cuda_time_per_iter_ms": 35.12057700000003,
+    "n_kernels": 6,
+    "kernels_ms": [
+     {
+      "kernel": "triton_red_fused__to_copy_bitwise_left_shift_full_like_index_lt_slice_sum_view_where_zeros_like_3",
+      "ms": 16.6913,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_red_fused__to_copy_bitwise_left_shift_full_like_index_lt_slice_sum_view_where_zeros_like_2",
+      "ms": 16.5063,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_per_fused__to_copy_abs_add_arange_bitwise_xor_clamp_exp_expand_floor_gather_index_log2_log_sigmoid_forward_lt_min_mul_neg_pow_reciprocal_squeeze_stack_sub_sum_unsqueeze_view_where_zeros_like_0",
+      "ms": 1.1886,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_add_bitwise_not_bitwise_or_clamp_exp_floor_gt_lt_mul_reciprocal_squeeze_stack_sub_unsqueeze_1",
+      "ms": 0.39,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused_cat_view_4",
+      "ms": 0.2277,
+      "bucket": "fused_triton (addressing/score/casts)"
+     },
+     {
+      "kernel": "triton_poi_fused__to_copy_5",
+      "ms": 0.1167,
+      "bucket": "fused_triton (addressing/score/casts)"
+     }
+    ]
+   }
+  }
+ },
+ "memory": {
+  "conf-n1": {
+   "tokens": 32768,
+   "held_after_fwd_gib": 1.0078125,
+   "peak_alloc_fwdbwd_gib": 2.9445838928222656,
+   "peak_reserved_fwdbwd_gib": 4.412109375,
+   "saved_total_gib": 1.0548096969723701,
+   "n_saved": 16,
+   "saved_top": [
+    {
+     "shape": [
+      33554432
+     ],
+     "dtype": "int64",
+     "MiB": 256.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "float32",
+     "MiB": 128.0
+    },
+    {
+     "shape": [
+      33554432
+     ],
+     "dtype": "float32",
+     "MiB": 128.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 96.0
+    },
+    {
+     "shape": [
+      16,
+      64,
+      256,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 48.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "bool",
+     "MiB": 32.0
+    },
+    {
+     "shape": [
+      524288
+     ],
+     "dtype": "int64",
+     "MiB": 4.0
+    },
+    {
+     "shape": [
+      16,
+      64,
+      8
+     ],
+     "dtype": "int64",
+     "MiB": 0.1
+    },
+    {
+     "shape": [
+      16
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    },
+    {
+     "shape": [],
+     "dtype": "float32",
+     "MiB": 0.0
+    },
+    {
+     "shape": [
+      0
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    }
+   ]
+  },
+  "quant-n1": {
+   "tokens": 32768,
+   "held_after_fwd_gib": 1.0546875,
+   "peak_alloc_fwdbwd_gib": 3.040286064147949,
+   "peak_reserved_fwdbwd_gib": 5.427734375,
+   "saved_total_gib": 1.0548096969723701,
+   "n_saved": 16,
+   "saved_top": [
+    {
+     "shape": [
+      33554432
+     ],
+     "dtype": "int64",
+     "MiB": 256.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "float32",
+     "MiB": 128.0
+    },
+    {
+     "shape": [
+      33554432
+     ],
+     "dtype": "float32",
+     "MiB": 128.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 96.0
+    },
+    {
+     "shape": [
+      262144,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 48.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "bool",
+     "MiB": 32.0
+    },
+    {
+     "shape": [
+      524288
+     ],
+     "dtype": "int64",
+     "MiB": 4.0
+    },
+    {
+     "shape": [
+      16,
+      64,
+      8
+     ],
+     "dtype": "int64",
+     "MiB": 0.1
+    },
+    {
+     "shape": [
+      16
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    },
+    {
+     "shape": [],
+     "dtype": "float32",
+     "MiB": 0.0
+    },
+    {
+     "shape": [
+      0
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    }
+   ]
+  },
+  "conf-n2": {
+   "tokens": 32768,
+   "held_after_fwd_gib": 1.6328125,
+   "peak_alloc_fwdbwd_gib": 5.069584369659424,
+   "peak_reserved_fwdbwd_gib": 5.98828125,
+   "saved_total_gib": 1.6798097006976604,
+   "n_saved": 17,
+   "saved_top": [
+    {
+     "shape": [
+      67108864
+     ],
+     "dtype": "int64",
+     "MiB": 512.0
+    },
+    {
+     "shape": [
+      67108864
+     ],
+     "dtype": "float32",
+     "MiB": 256.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "float32",
+     "MiB": 128.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 96.0
+    },
+    {
+     "shape": [
+      16,
+      64,
+      256,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 48.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "bool",
+     "MiB": 32.0
+    },
+    {
+     "shape": [
+      524288
+     ],
+     "dtype": "int64",
+     "MiB": 4.0
+    },
+    {
+     "shape": [
+      16,
+      64,
+      8
+     ],
+     "dtype": "int64",
+     "MiB": 0.1
+    },
+    {
+     "shape": [
+      16
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    },
+    {
+     "shape": [],
+     "dtype": "float32",
+     "MiB": 0.0
+    },
+    {
+     "shape": [
+      0
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    }
+   ]
+  },
+  "quant-n2": {
+   "tokens": 32768,
+   "held_after_fwd_gib": 1.4921875,
+   "peak_alloc_fwdbwd_gib": 4.882084369659424,
+   "peak_reserved_fwdbwd_gib": 6.01953125,
+   "saved_total_gib": 1.4923097006976604,
+   "n_saved": 17,
+   "saved_top": [
+    {
+     "shape": [
+      67108864
+     ],
+     "dtype": "int64",
+     "MiB": 512.0
+    },
+    {
+     "shape": [
+      67108864
+     ],
+     "dtype": "float32",
+     "MiB": 256.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 96.0
+    },
+    {
+     "shape": [
+      262144,
+      48
+     ],
+     "dtype": "float32",
+     "MiB": 48.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "bool",
+     "MiB": 32.0
+    },
+    {
+     "shape": [
+      32768,
+      16,
+      64
+     ],
+     "dtype": "int8",
+     "MiB": 32.0
+    },
+    {
+     "shape": [
+      524288
+     ],
+     "dtype": "int64",
+     "MiB": 4.0
+    },
+    {
+     "shape": [
+      16,
+      64,
+      8
+     ],
+     "dtype": "int64",
+     "MiB": 0.1
+    },
+    {
+     "shape": [
+      16
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    },
+    {
+     "shape": [],
+     "dtype": "float32",
+     "MiB": 0.0
+    },
+    {
+     "shape": [
+      0
+     ],
+     "dtype": "int64",
+     "MiB": 0.0
+    }
+   ]
+  },
+  "param_and_buffer_MiB": {
+   "conf-n2": 48.1,
+   "quant-n2": 48.1,
+   "deploy-n2": 12.1
+  }
+ }
+}
