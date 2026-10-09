@@ -52,6 +52,21 @@ _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasat
 
 _LOW_PRECISION = (torch.bfloat16, torch.float16)
 
+# Cell-index dtypes (``index_dtype``, every cartridge). The index the reads consume is the FLAT row index into the
+# [n_groups * tph * 2**nap, d_out] table, up to n_groups * tph * 2**nap - 1 (262,143 at the d24 geometry), not the
+# within-table cell id < 2**nap; and torch's index ops (embedding_bag, index_select, index_add_, indexing) accept
+# only int32 / int64. So int32 is the only narrowing; int16/int8 cannot represent the flat index and are rejected.
+INDEX_DTYPES = (torch.int64, torch.int32)
+
+
+def check_index_dtype(index_dtype, spec) -> torch.dtype:
+    if index_dtype not in INDEX_DTYPES:
+        raise ValueError(f"index_dtype must be one of {INDEX_DTYPES}, got {index_dtype!r}")
+    max_flat = spec.n_groups * spec.tph * spec.n_cells - 1
+    if max_flat > torch.iinfo(index_dtype).max:
+        raise ValueError(f"index_dtype={index_dtype} cannot hold the flat cell index (max {max_flat})")
+    return index_dtype
+
 
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
@@ -94,12 +109,14 @@ class ManifestoLUT(MultiHeadLUT):
         cmp_eps: float = 0.0,
         table_dropout_rate: float = 0.0,
         device: Optional[torch.device] = None,
+        index_dtype: torch.dtype = torch.int64,
         **unused,
     ):
         super().__init__(spec)
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
+        self.index_dtype = check_index_dtype(index_dtype, spec)
         # Table-level (whole-table) inverted dropout rate; 0 = off (default, every existing cartridge
         # byte-identical). See :meth:`_table_dropout_mask` / :meth:`_drop_tables`.
         self.table_dropout_rate = float(table_dropout_rate)
@@ -326,9 +343,13 @@ class ManifestoLUT(MultiHeadLUT):
             idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
             z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
             u = z_a - z_b
-        c = ((u > self.cmp_eps).to(torch.long) * self.powers).sum(dim=-1)  # MSB-first, stop-grad
+        # The one place every cartridge's cell index is produced: in index_dtype (int64 default, or int32), so every
+        # downstream read (_global_cells keeps c's dtype) and the saved tensors use it. powers stays an int64 buffer.
+        dt = self.index_dtype
+        powers = self.powers.to(dt)
+        c = ((u > self.cmp_eps).to(dt) * powers).sum(dim=-1, dtype=dt)     # MSB-first, stop-grad
         u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
-        c_alt = c ^ self.powers[j_star]
+        c_alt = c ^ powers[j_star]
         return z, u, c, j_star, u_abs_star, c_alt
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:

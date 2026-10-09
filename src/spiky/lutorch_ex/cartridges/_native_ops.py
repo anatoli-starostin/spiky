@@ -202,8 +202,8 @@ def _flatten(weights, c, c_alt, u_signed_star):
     B = c.shape[0]
     nt = G * tph
     W = weights.reshape(nt, K, d_out).contiguous()
-    li = c.reshape(B, nt).contiguous()
-    lai = c_alt.reshape(B, nt, 1).contiguous()
+    li = c.reshape(B, nt).to(torch.int64).contiguous()           # native kernels take int64 indices
+    lai = c_alt.reshape(B, nt, 1).to(torch.int64).contiguous()
     lad = u_signed_star.reshape(B, nt, 1).to(weights.dtype).contiguous()
     return W, li, lai, lad, nt, B, G, tph, K, d_out
 

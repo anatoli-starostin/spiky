@@ -119,8 +119,8 @@ def _prep(weights, c, c_alt, z):
     nt = G * tph
     d_in = z.shape[2]
     W = weights.reshape(nt, K, d_out).contiguous()
-    li = c.reshape(B, nt).contiguous()
-    lai = c_alt.reshape(B, nt, 1).contiguous()
+    li = c.reshape(B, nt).to(torch.int64).contiguous()           # native kernels take int64 indices
+    lai = c_alt.reshape(B, nt, 1).to(torch.int64).contiguous()
     tif = _table_indices(B, nt, z.device)
     return W, li, lai, tif, (G, tph, K, d_out, B, d_in, nt)
 

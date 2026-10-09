@@ -177,6 +177,20 @@ arguments are shared by all of them:
 | `cmp_eps` | `0.0` | the threshold `eps` in the bit test `u > eps` |
 | `table_dropout_rate` | `0.0` | whole-table dropout, see [Regularisers](#regularisers) |
 | `device` | `None` | where to build parameters and buffers |
+| `index_dtype` | `torch.int64` | dtype of the cell index, produced once in the shared addressing: `torch.int64` or `torch.int32` (see below) |
+
+`index_dtype=torch.int32` produces the cell index as int32. The index the reads use is the flat row index
+into the `[n_groups·tph·2^nap, d_out]` table, up to `n_groups·tph·2^nap − 1` (262,143 at h=16, tph=64,
+nap=8). That needs at least int32. In any case, torch's index ops (`embedding_bag`, `index_select`,
+`index_add_`, indexing) accept only int32 and int64, so int16 and int8 are rejected.
+
+What int32 gives you:
+- It halves the index tensor that is saved for the backward.
+- It narrows the radix-sort keys in `embedding_bag`'s weight gradient.
+- Training gradients are bit-identical to int64 under `torch.use_deterministic_algorithms(True)`.
+- One exception: ConfidenceLUT `read_top_n=1` compiled eval on CUDA differs by about 1 ulp.
+- The fused twins' native CUDA kernels receive the index cast back to int64, so the change doesn't reach
+  them.
 
 SoftSign (`SoftSignHardLUT`, `SoftSignSmoothLUT` and their fused twins):
 
