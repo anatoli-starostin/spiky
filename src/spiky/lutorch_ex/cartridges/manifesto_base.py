@@ -301,7 +301,8 @@ class ManifestoLUT(MultiHeadLUT):
             raise TypeError(
                 f"{type(self).__name__} does not support low precision: got input dtype "
                 f"{x.dtype} and weight dtype {self.weights.dtype}. bf16/fp16 is supported only by "
-                "the fused cartridges (FusedManifestoHardLUT / FusedManifestoSoftLUT); keep this "
+                "the fused cartridges (FusedManifestoHardLUT / FusedManifestoSoftLUT / FusedSoftSign*LUT / "
+                "FusedConfidenceLUT); keep this "
                 "cartridge (and ProjectionMHL wrapping it) in float32/float64."
             )
         # Compile the forward on CUDA (built lazily on first such call, per instance). EVAL is

@@ -11,13 +11,19 @@
 // memory, and the backward recomputes them from z instead of saving them.
 //
 // Launch knobs (host side, see fused_confidence.py): threads per CTA (forward and backward separately), rows per
-// CTA, vector width VEC (1, 2, 4) and whether the weight-gradient scatter uses vector atomics (sm_90+).
+// CTA, vector width VEC (1, 2, 4; 8 for bf16) and whether the weight-gradient scatter uses vector atomics (sm_90+).
+//
+// Table dtype T: fp32 or bf16. A bf16 table is loaded and upconverted to fp32 in registers; every reduction, the
+// output and the weight-gradient buffer stay fp32 (a bf16 atomic scatter would lose small contributions to
+// rounding, and the loss grows with the number of tokens hitting a row).
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
 #include <cstdint>
+#include <type_traits>
 
 namespace {
 
@@ -27,7 +33,8 @@ struct Params {
     const float* z;          // [B, G, d_in]
     const int16_t* anc_a;    // [G, tph, nap]
     const int16_t* anc_b;    // [G, tph, nap], nullptr in single-anchor mode
-    const float* W;          // [G * tph * K, d_out]
+    const float* W;          // [G * tph * K, d_out], fp32 table (nullptr when the table is bf16)
+    const __nv_bfloat16* Wb; // the same, bf16 table (nullptr when the table is fp32)
     const uint8_t* keep;     // [B, G, tph] table-dropout keep flags, nullptr = no dropout
     const float* log_beta;   // 0-dim device scalars (read in-kernel: no host sync)
     const float* log_gamma;
@@ -74,6 +81,29 @@ __device__ inline void load_vec(const float* p, float (&v)[VEC]) {
     for (int k = 0; k < VEC; ++k) v[k] = f[k];
 }
 
+// bf16 table: one 2/4/8/16-byte read-only load of VEC elements, upconverted to fp32 in registers.
+template <int VEC>
+__device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
+    static_assert(VEC == 1 || VEC == 2 || VEC == 4 || VEC == 8, "bf16 vec must be 1, 2, 4 or 8");
+    if constexpr (VEC == 1) {
+        v[0] = __bfloat162float(__ushort_as_bfloat16(__ldg(reinterpret_cast<const unsigned short*>(p))));
+    } else {
+        using Raw = std::conditional_t<VEC == 2, unsigned int, std::conditional_t<VEC == 4, uint2, uint4>>;
+        const Raw x = __ldg(reinterpret_cast<const Raw*>(p));
+        const __nv_bfloat162* h = reinterpret_cast<const __nv_bfloat162*>(&x);
+#pragma unroll
+        for (int k = 0; k < VEC / 2; ++k) {
+            const float2 f = __bfloat1622float2(h[k]);
+            v[2 * k] = f.x;
+            v[2 * k + 1] = f.y;
+        }
+    }
+}
+
+template <typename T> __device__ inline const T* table(const Params& p);
+template <> __device__ inline const float* table<float>(const Params& p) { return p.W; }
+template <> __device__ inline const __nv_bfloat16* table<__nv_bfloat16>(const Params& p) { return p.Wb; }
+
 // log(sigmoid(x)), the same formula Inductor emits: min(0, x) - log1p(exp(-|x|)).
 __device__ inline float log_sigmoid(float x) { return fminf(0.f, x) - log1pf(expf(-fabsf(x))); }
 
@@ -81,6 +111,11 @@ template <int VEC>
 __device__ inline void atomic_add_vec(float* dst, const float (&v)[VEC], bool vec_atomics) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900
     if (vec_atomics) {
+        if constexpr (VEC == 8) {
+            atomicAdd(reinterpret_cast<float4*>(dst), make_float4(v[0], v[1], v[2], v[3]));
+            atomicAdd(reinterpret_cast<float4*>(dst + 4), make_float4(v[4], v[5], v[6], v[7]));
+            return;
+        }
         if constexpr (VEC == 4) { atomicAdd(reinterpret_cast<float4*>(dst), make_float4(v[0], v[1], v[2], v[3])); return; }
         if constexpr (VEC == 2) { atomicAdd(reinterpret_cast<float2*>(dst), make_float2(v[0], v[1])); return; }
     }
@@ -125,7 +160,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
     }
 }
 
-template <int N, int VEC>
+template <int N, int VEC, typename T>
 __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
     const int nchunk = p.d_out / VEC;
@@ -165,12 +200,12 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
             float acc[VEC] = {};
             for (int t = stripe; t < p.tph; t += nstripe) {
                 float v[VEC];
-                load_vec<VEC>(p.W + (size_t)cs[t] * p.d_out + chunk * VEC, v);
+                load_vec<VEC>(table<T>(p) + (size_t)cs[t] * p.d_out + chunk * VEC, v);
                 const float a = w1[t];
 #pragma unroll
                 for (int k = 0; k < VEC; ++k) acc[k] = fmaf(a, v[k], acc[k]);
                 if constexpr (N == 2) {
-                    load_vec<VEC>(p.W + (size_t)cas[t] * p.d_out + chunk * VEC, v);
+                    load_vec<VEC>(table<T>(p) + (size_t)cas[t] * p.d_out + chunk * VEC, v);
                     const float a2 = w2[t];
 #pragma unroll
                     for (int k = 0; k < VEC; ++k) acc[k] = fmaf(a2, v[k], acc[k]);
@@ -201,7 +236,7 @@ __device__ inline float block_sum(float v, float* red) {
     return s;                                             // valid in thread 0
 }
 
-template <int N, int VEC>
+template <int N, int VEC, typename T>
 __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, float* __restrict__ gW,
                                       float* __restrict__ gz, float* __restrict__ gscal, bool vec_atomics) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
@@ -256,7 +291,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
             for (int t = stripe; t < p.tph; t += nstripe) {
                 float v[VEC], d[VEC];
                 const size_t off = (size_t)cs[t] * p.d_out + chunk * VEC;
-                load_vec<VEC>(p.W + off, v);
+                load_vec<VEC>(table<T>(p) + off, v);
                 float dot = 0.f;
 #pragma unroll
                 for (int k = 0; k < VEC; ++k) { dot = fmaf(v[k], gv[k], dot); d[k] = w1[t] * gv[k]; }
@@ -264,7 +299,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
                 atomicAdd(&rc[t], dot);
                 if constexpr (N == 2) {
                     const size_t off2 = (size_t)cas[t] * p.d_out + chunk * VEC;
-                    load_vec<VEC>(p.W + off2, v);
+                    load_vec<VEC>(table<T>(p) + off2, v);
                     float dot2 = 0.f;
 #pragma unroll
                     for (int k = 0; k < VEC; ++k) { dot2 = fmaf(v[k], gv[k], dot2); d[k] = w2[t] * gv[k]; }
@@ -339,14 +374,17 @@ Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10
                    const torch::Tensor& log_beta, const torch::Tensor& log_gamma, const torch::Tensor& log_tau,
                    int nap, double eps, int rows_per_cta) {
     TORCH_CHECK(z.is_cuda() && z.scalar_type() == torch::kFloat32 && z.is_contiguous() && z.dim() == 3, "z: contiguous fp32 CUDA [B, G, d_in]");
-    TORCH_CHECK(W.scalar_type() == torch::kFloat32 && W.is_contiguous() && W.dim() == 2, "W: contiguous fp32 [rows, d_out]");
+    TORCH_CHECK((W.scalar_type() == torch::kFloat32 || W.scalar_type() == torch::kBFloat16) && W.is_contiguous() && W.dim() == 2,
+                "W: contiguous fp32 or bf16 [rows, d_out]");
     TORCH_CHECK(anc_a.scalar_type() == torch::kInt16 && anc_a.is_contiguous() && anc_a.dim() == 3, "anchors: contiguous int16 [G, tph, nap]");
     TORCH_CHECK(nap >= 1 && nap <= MAX_NAP, "nap must be in [1, 16]");
     Params p{};
     p.z = z.data_ptr<float>();
     p.anc_a = anc_a.data_ptr<int16_t>();
     p.anc_b = anc_b.has_value() ? anc_b->data_ptr<int16_t>() : nullptr;
-    p.W = W.data_ptr<float>();
+    const bool bf16 = W.scalar_type() == torch::kBFloat16;
+    p.W = bf16 ? nullptr : W.data_ptr<float>();
+    p.Wb = bf16 ? reinterpret_cast<const __nv_bfloat16*>(W.data_ptr()) : nullptr;
     if (keep.has_value())
         TORCH_CHECK(keep->scalar_type() == torch::kBool && keep->is_contiguous() && keep->numel() == z.size(0) * z.size(1) * anc_a.size(1),
                     "keep: contiguous bool [B, G, tph]");
@@ -365,8 +403,9 @@ Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10
     return p;
 }
 
-void check_launch(int threads, int vec, int d_out) {
-    TORCH_CHECK(vec == 1 || vec == 2 || vec == 4, "vec must be 1, 2 or 4");
+void check_launch(int threads, int vec, int d_out, bool bf16) {
+    TORCH_CHECK(vec == 1 || vec == 2 || vec == 4 || (bf16 && vec == 8),
+                bf16 ? "vec must be 1, 2, 4 or 8 for a bf16 table" : "vec must be 1, 2 or 4 for an fp32 table");
     TORCH_CHECK(d_out % vec == 0, "d_out must be divisible by vec");
     TORCH_CHECK(threads % 32 == 0 && threads >= 32 && threads <= 1024, "threads must be a multiple of 32 in [32, 1024]");
     TORCH_CHECK(threads >= d_out / vec, "threads must be >= d_out / vec (one stripe at least)");
@@ -380,8 +419,17 @@ void check_launch(int threads, int vec, int d_out) {
         else if (N == 2 && VEC == 4) { constexpr int kN = 2, kV = 4; __VA_ARGS__(); }     \
         else if (N == 2 && VEC == 2) { constexpr int kN = 2, kV = 2; __VA_ARGS__(); }     \
         else if (N == 2 && VEC == 1) { constexpr int kN = 2, kV = 1; __VA_ARGS__(); }     \
+        else if (N == 1 && VEC == 8) { constexpr int kN = 1, kV = 8; __VA_ARGS__(); }     \
+        else if (N == 2 && VEC == 8) { constexpr int kN = 2, kV = 8; __VA_ARGS__(); }     \
         else TORCH_CHECK(false, "read_top_n must be 1 or 2");                             \
     }()
+
+// Runs fn(T{}) with T = float for an fp32 table, __nv_bfloat16 for a bf16 one.
+template <typename Fn>
+void dispatch_table(const torch::Tensor& W, Fn&& fn) {
+    if (W.scalar_type() == torch::kBFloat16) fn(__nv_bfloat16{});
+    else fn(float{});
+}
 
 }  // namespace
 
@@ -392,17 +440,24 @@ torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional
                              int64_t threads, int64_t rows_per_cta, int64_t vec) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
-    check_launch(threads, vec, p.d_out);
-    auto out = torch::empty({p.B, p.G, p.d_out}, z.options());
+    check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
+    auto out = torch::empty({p.B, p.G, p.d_out}, z.options());   // fp32 for either table dtype
     if (p.B == 0) return out;
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, false);
     const int grid = p.G * ((p.B + rows_per_cta - 1) / rows_per_cta);
     auto stream = at::cuda::getCurrentCUDAStream();
-    DISPATCH_N_VEC(read_top_n, vec, [&] {
-        auto k = confidence_fwd_kernel<kN, kV>;
-        if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-        k<<<grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+    dispatch_table(W, [&](auto tag) {
+        using T = decltype(tag);
+        DISPATCH_N_VEC(read_top_n, vec, [&] {
+            if constexpr (kV == 8 && std::is_same_v<T, float>) {
+                TORCH_CHECK(false, "vec 8 is bf16-only");
+            } else {
+                auto k = confidence_fwd_kernel<kN, kV, T>;
+                if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
+                k<<<grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+            }
+        });
     });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return out;
@@ -416,10 +471,11 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
                                           int64_t threads, int64_t rows_per_cta, int64_t vec, bool vec_atomics) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
-    check_launch(threads, vec, p.d_out);
+    check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
-    auto gW = torch::zeros_like(W);
+    // The weight-gradient accumulator is fp32 for either table dtype (the caller casts it to the table dtype once).
+    auto gW = torch::zeros(W.sizes(), W.options().dtype(torch::kFloat32));
     auto gz = torch::empty_like(z);
     const int grid = p.G * ((p.B + rows_per_cta - 1) / rows_per_cta);
     auto gscal = torch::zeros({std::max(grid, 1), 3}, z.options());
@@ -427,11 +483,18 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, true);
     auto stream = at::cuda::getCurrentCUDAStream();
-    DISPATCH_N_VEC(read_top_n, vec, [&] {
-        auto k = confidence_bwd_kernel<kN, kV>;
-        if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-        k<<<grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(), gz.data_ptr<float>(),
-                                              gscal.data_ptr<float>(), vec_atomics);
+    dispatch_table(W, [&](auto tag) {
+        using T = decltype(tag);
+        DISPATCH_N_VEC(read_top_n, vec, [&] {
+            if constexpr (kV == 8 && std::is_same_v<T, float>) {
+                TORCH_CHECK(false, "vec 8 is bf16-only");
+            } else {
+                auto k = confidence_bwd_kernel<kN, kV, T>;
+                if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
+                k<<<grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(), gz.data_ptr<float>(),
+                                                      gscal.data_ptr<float>(), vec_atomics);
+            }
+        });
     });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {gW, gz, gscal};
