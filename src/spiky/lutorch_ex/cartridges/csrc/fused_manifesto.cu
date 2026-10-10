@@ -173,7 +173,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
 }
 
 template <int MODE, int VEC, typename T>
-__global__ void manifesto_fwd_kernel(Params p, float* __restrict__ out) {
+__global__ void manifesto_fwd_kernel(Params p, float* __restrict__ out, __nv_bfloat16* __restrict__ outb) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
     const int nchunk = p.d_out / VEC;
     const int nstripe = blockDim.x / nchunk;
@@ -230,7 +230,8 @@ __global__ void manifesto_fwd_kernel(Params p, float* __restrict__ out) {
         for (int i = tid; i < p.d_out; i += bd) {
             float y = 0.f;
             for (int s = 0; s < nstripe; ++s) y += part[s * p.d_out + i];
-            out[row * p.d_out + i] = y;
+            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bf16-output mode: one RNE rounding at the store
+            else out[row * p.d_out + i] = y;
         }
         __syncthreads();                                  // part / zs reused by the next row
     }
@@ -238,7 +239,7 @@ __global__ void manifesto_fwd_kernel(Params p, float* __restrict__ out) {
 
 template <int MODE, int VEC, typename T>
 __global__ void manifesto_bwd_kernel(Params p, const float* __restrict__ go, float* __restrict__ gW,
-                                     float* __restrict__ gz, bool vec_atomics) {
+                                     float* __restrict__ gz, __nv_bfloat16* __restrict__ gzb, bool vec_atomics) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
     const int nchunk = p.d_out / VEC;
     const int nstripe = blockDim.x / nchunk;
@@ -318,7 +319,10 @@ __global__ void manifesto_bwd_kernel(Params p, const float* __restrict__ go, flo
             }
         }
         __syncthreads();
-        for (int i = tid; i < p.d_in; i += bd) gz[row * p.d_in + i] = gzs[i];
+        for (int i = tid; i < p.d_in; i += bd) {           // bf16 input: grad z stored in bf16, one RNE rounding
+            if (gzb) gzb[row * p.d_in + i] = __float2bfloat16(gzs[i]);
+            else gz[row * p.d_in + i] = gzs[i];
+        }
         __syncthreads();
     }
 }
@@ -391,11 +395,13 @@ void dispatch_table(const torch::Tensor& W, Fn&& fn) {
 torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<torch::Tensor> anc_b,
                             torch::Tensor W, c10::optional<torch::Tensor> mask,
                             int64_t nap, double eps, int64_t mode,
-                            int64_t threads, int64_t rows_per_cta, int64_t vec) {
+                            int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, mask, nap, eps, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
-    auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(torch::kFloat32));   // fp32 for any table / input dtype
+    // fp32 output, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1 onto output heads).
+    TORCH_CHECK(!out_bf16 || z.scalar_type() == torch::kBFloat16, "out_bf16 needs a bf16 input");
+    auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(out_bf16 ? torch::kBFloat16 : torch::kFloat32));
     if (p.B == 0) return out;
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, false);
@@ -410,7 +416,9 @@ torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<
             } else {
                 auto k = manifesto_fwd_kernel<kM, kV, T>;
                 if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-                k<<<(unsigned)grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+                k<<<(unsigned)grid, threads, L.total, stream>>>(
+                    p, out_bf16 ? nullptr : out.data_ptr<float>(),
+                    out_bf16 ? reinterpret_cast<__nv_bfloat16*>(out.data_ptr()) : nullptr);
             }
         });
     });
@@ -429,7 +437,8 @@ std::vector<torch::Tensor> manifesto_bwd(torch::Tensor go, torch::Tensor z, torc
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
     auto gW = torch::zeros(W.sizes(), W.options().dtype(torch::kFloat32));
-    auto gz = torch::empty(z.sizes(), z.options().dtype(torch::kFloat32));   // fp32 for either input dtype
+    const bool zbf16 = z.scalar_type() == torch::kBFloat16;   // grad z in the input dtype (one rounding in-kernel)
+    auto gz = torch::empty(z.sizes(), z.options().dtype(zbf16 ? torch::kBFloat16 : torch::kFloat32));
     if (p.B == 0) return {gW, gz};
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, true);
@@ -445,7 +454,9 @@ std::vector<torch::Tensor> manifesto_bwd(torch::Tensor go, torch::Tensor z, torc
                 auto k = manifesto_bwd_kernel<kM, kV, T>;
                 if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
                 k<<<(unsigned)grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(),
-                                                                 gz.data_ptr<float>(), vec_atomics);
+                                                                 zbf16 ? nullptr : gz.data_ptr<float>(),
+                                                                 zbf16 ? reinterpret_cast<__nv_bfloat16*>(gz.data_ptr()) : nullptr,
+                                                                 vec_atomics);
             }
         });
     });

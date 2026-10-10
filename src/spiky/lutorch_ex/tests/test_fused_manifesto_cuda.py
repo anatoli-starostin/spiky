@@ -135,7 +135,7 @@ def test_projection_gradients_match(cls, ref):
 
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
-@pytest.mark.parametrize("geom", ["mid", "canonical"])
+@pytest.mark.parametrize("geom", ["mid", "fan_in", "canonical"])   # fan_in: the fp32-output path (groups summed)
 def test_cuda_bf16_matches_fp32_math_on_the_bf16_values(cls, geom, anchor_mode):
     """A bf16 table + input: identical to the fp32 cuda backend run on the same (bf16-representable) values, up to
     the bf16 rounding of the outputs (the kernels upconvert and accumulate in fp32)."""

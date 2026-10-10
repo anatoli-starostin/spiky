@@ -129,12 +129,14 @@ def _launch(knobs, d_out: int, table_dtype: torch.dtype):
 
 class _FusedManifesto(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, z, weights, anc_a, anc_b, mask, nap, eps, mode, knobs):
-        # z: fp32 [B, G, d_in]. weights: fp32 or bf16 [G, tph, K, d_out] (read in place). mask: fp32 [B, G, tph] or None.
+    def forward(ctx, z, weights, anc_a, anc_b, mask, nap, eps, mode, knobs, out_bf16=False):
+        # z: fp32 or bf16 [B, G, d_in]. weights: fp32 or bf16 [G, tph, K, d_out] (read in place). mask: fp32 [B, G, tph]
+        # or None. out_bf16: the kernel stores its (fp32-accumulated) output as bf16; only for a bf16 z.
         ext = fused_manifesto_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
-        out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, nap, eps, mode, fwd_threads, knobs.rows_per_cta, vec)
+        out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, nap, eps, mode, fwd_threads, knobs.rows_per_cta, vec,
+                                out_bf16)
         ctx.save_for_backward(z, weights, anc_a, anc_b, mask)
         ctx.cfg = (nap, eps, mode, knobs, vec, bwd_threads)
         return out                                                   # fp32 [B, G, d_out]
@@ -148,8 +150,8 @@ class _FusedManifesto(torch.autograd.Function):
             go.float().contiguous(), z, anc_a, anc_b, W2, mask, nap, eps, mode,
             bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         # gW accumulates in fp32 whatever the table dtype; cast once to the parameter's dtype.
-        # gz is fp32; a bf16 z receives one cast (the same single rounding the input cast's backward used to do).
-        return gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), None, None, None, None, None, None, None
+        # gz comes back in z's dtype (a bf16 z: rounded once, in the kernel's store); the .to is then a no-op.
+        return gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), None, None, None, None, None, None, None, None
 
 
 def init_cuda_backend(module, knobs) -> None:
@@ -177,6 +179,9 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     # overridden _table_dropout_mask is honoured), fp32, applied per table to the value and every gradient.
     mask = module._table_dropout_mask(x.shape[0], x.device, torch.float32)
     mask = None if mask is None else mask.contiguous()
+    # Routing gate: the kernel may store bf16 directly only when _route is the identity (h_out == n_groups: per-head and
+    # fan-out). Fan-in sums groups in _route, which must happen on the fp32 output before the single cast below.
+    out_bf16 = z.dtype == torch.bfloat16 and module.spec.h_out == module.spec.n_groups
     grp = _FusedManifesto.apply(z, module.weights, module._anc_a16, module._anc_b16, mask,
-                                module.spec.nap, module.cmp_eps, mode, module.knobs)
+                                module.spec.nap, module.cmp_eps, mode, module.knobs, out_bf16)
     return module._route(grp, x).to(x.dtype)
