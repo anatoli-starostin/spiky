@@ -130,6 +130,10 @@ def classify_yesno(t: str):
 # The SDK auto-compacts near the hard limit anyway; this just keeps live sessions
 # lean and snappy instead of waiting for the last-second automatic compaction. Tunable.
 COMPACT_AT_TOKENS = 150_000
+# Prime for a freshly spawned thread session (e.g. after a restart): the root message plus the latest
+# PRIME_MSGS replies, trimmed to the newest PRIME_CHARS characters.
+PRIME_MSGS = 40
+PRIME_CHARS = 40_000
 
 
 def _ctx_tokens(result_msg) -> int:
@@ -562,8 +566,18 @@ async def main():
                 r = await web.conversations_history(channel=chan, limit=40)
                 msgs = list(reversed(r.get("messages", [])))
             else:
-                r = await web.conversations_replies(channel=chan, ts=convo, limit=200)
-                msgs = r.get("messages", [])
+                # conversations_replies pages OLDEST-first: one page of 200 is the thread's
+                # beginning, not its end. Walk every page and keep the root + the latest
+                # PRIME_MSGS replies, so a respawned session remembers what was said last.
+                msgs, cursor = [], None
+                while True:
+                    r = await web.conversations_replies(channel=chan, ts=convo, limit=200, cursor=cursor)
+                    msgs += r.get("messages", [])
+                    cursor = (r.get("response_metadata") or {}).get("next_cursor")
+                    if not cursor:
+                        break
+                if len(msgs) > PRIME_MSGS + 1:
+                    msgs = msgs[:1] + msgs[-PRIME_MSGS:]
         except Exception:
             return None
         lines = []
@@ -576,6 +590,15 @@ async def main():
             mine = m.get("user") == me or (my_bot_id and m.get("bot_id") == my_bot_id)
             who = f"{HOST} (you)" if mine else await display_name(m.get("user", "someone"))
             lines.append(f"{who}: {txt}")
+        # Cap the prime: keep the newest lines that fit PRIME_CHARS (the root stays first).
+        if sum(len(l) + 1 for l in lines) > PRIME_CHARS and len(lines) > 1:
+            kept, used = [], len(lines[0]) + 1
+            for l in reversed(lines[1:]):
+                if used + len(l) + 1 > PRIME_CHARS:
+                    break
+                kept.append(l)
+                used += len(l) + 1
+            lines = [lines[0], "[… older messages omitted …]"] + list(reversed(kept))
         return "\n".join(lines) or None
 
     async def handle(_c: SocketModeClient, req: SocketModeRequest):
@@ -882,13 +905,44 @@ async def main():
         # Periodically /compact any live thread whose context has grown past the
         # threshold — proactive summarize-and-continue so long DMs/threads stay lean
         # rather than waiting for the SDK's last-second automatic compaction.
+        # Manual trigger: `touch compact_now` (next to app.py) compacts every live thread once,
+        # regardless of size. Threads busy mid-reply are retried on each 15 s pass; the flag is
+        # removed once every live thread has been handled.
+        force_flag = HERE / "compact_now"
+        # Threads already handled in the current manual episode. Without this, a thread that stays
+        # busy keeps the flag alive and every idle thread is re-compacted every 15 s (summary of a
+        # summary). Each thread is compacted once per episode; the flag clears once all are covered.
+        forced: set[str] = set()
+        n = 0
         while True:
-            await asyncio.sleep(90)
+            await asyncio.sleep(15)
+            n += 1
+            force = force_flag.exists()
+            if not force:
+                forced.clear()
+                if n % 6:                    # the size-threshold check stays every ~90 s
+                    continue
             for thread in list(mind._threads.keys()):
                 try:
-                    await mind.maybe_compact(thread, COMPACT_AT_TOKENS)
+                    if not force:
+                        await mind.maybe_compact(thread, COMPACT_AT_TOKENS)
+                        continue
+                    rec = mind._threads.get(thread)
+                    if thread in forced or rec is None or rec[1].locked():
+                        continue             # done this episode / reaped / mid-reply: retry next pass
+                    done = await mind.maybe_compact(thread, 0)
+                    if done or not rec[1].locked():
+                        forced.add(thread)   # compacted (or nothing to do); a lost lock race retries
+                    if done:
+                        log.info("manual compact of thread %s done", thread)
                 except Exception:
                     log.exception("compactor failed for thread %s", thread)
+                    if force:
+                        forced.add(thread)   # don't hammer a failing thread every 15 s
+            if force and set(mind._threads) <= forced:
+                force_flag.unlink(missing_ok=True)
+                log.info("manual compact pass complete (%d thread(s))", len(forced))
+                forced.clear()
 
     async def heartbeat():
         # Touch a file so the body's transport_slack.available() knows the face is up

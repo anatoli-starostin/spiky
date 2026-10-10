@@ -217,6 +217,10 @@ phone at the time — none of which the API can see or override.
   shell's cmdline and SIGTERMs it (exit 144). Stop the Monitor task, kill any orphan by
   explicit PID, then re-arm a fresh persistent Monitor. Count real faces with
   `ps … | grep 'python -u app.py' | grep -v 'bash -c' | grep -v grep`.
+- **Compacting on demand:** `touch compact_now` next to `app.py` makes the compactor `/compact`
+  every live thread once (regardless of size) within ~15 s. Threads busy mid-reply are retried, and
+  the face deletes the flag once all threads are handled. Without the flag, threads are compacted
+  only past `COMPACT_AT_TOKENS`, checked every ~90 s.
 - **The cord after a restart must be `console`** — the owner is at the keyboard when a
   session starts; a stale `slack` sends the console session's approvals to a Slack DM where
   they time out with nobody there. `session_start_bridge.py` resets it every SessionStart.
