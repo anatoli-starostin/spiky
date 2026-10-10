@@ -166,7 +166,10 @@ def init_cuda_backend(module, knobs) -> None:
 def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     """The 'cuda' backend: ``[B, h_in, d_in]`` -> ``[B, h_out, d_out]`` in the input dtype."""
     module._check_input(x)
-    z = x[:, module.in_head, :].float().contiguous()                 # fp32 addressing; grad flows back via the cast
+    # Group g reads input head g % h_in. When h_in == n_groups that map is the identity, so x already IS the per-group
+    # input: skip the gather (eager it is a full extra pass + intermediate, which the compiled path used to fuse away).
+    zin = x if module.spec.h_in == module.spec.n_groups else x[:, module.in_head, :]
+    z = zin.float().contiguous()                                     # fp32 addressing; grad flows back via the cast
     # Table dropout: the cartridge's own mask (one source of truth with the other backends: same draw, and an
     # overridden _table_dropout_mask is honoured), fp32, applied per table to the value and every gradient.
     mask = module._table_dropout_mask(x.shape[0], x.device, torch.float32)
