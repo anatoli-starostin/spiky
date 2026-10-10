@@ -14,7 +14,7 @@ from __future__ import annotations
 import torch
 
 from ._fused_ops import fused_blend_read, _acc_dtype, validate_backend
-from ._native_ops import NativeSoft, native_available
+from ._native_ops import NativeSoft, native_available, raise_if_forced_native_unavailable, require_native_or_report
 from .manifesto_base import ManifestoLUT
 from .uncertainty import rational_uncertainty
 
@@ -70,6 +70,10 @@ class FusedManifestoSoftLUT(ManifestoLUT):
             return "pure"                                    # eval small/mid: compiled read wins
         if native_available(x.device):
             return "native"                                  # train small/mid: native step wins (fp32/bf16/fp16)
+        # Here native was the choice and is unavailable: on a CUDA input that is an involuntary fallback (reported
+        # once per process, or raised under SPIKY_LUTORCH_REQUIRE_NATIVE=1). The large-batch tier1 above is a
+        # deliberate heuristic and stays quiet.
+        require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1" if x.is_cuda else "pure"
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
@@ -78,6 +82,9 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         low = x.dtype in _LOW_PREC
         xa = x.float() if low else x
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if self.backend == "native":
+            raise_if_forced_native_unavailable(type(self).__name__, x)
+        self.last_backend = be                               # provenance for benchmarks (what actually ran)
         # Every TRAIN path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization),
         # including the large-batch tier-1 (embedding_bag) route this cartridge picks at scale. Eval
         # keeps plain _addresses — it is already compiled whole by the base forward, so gating on

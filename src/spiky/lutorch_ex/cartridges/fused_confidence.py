@@ -31,15 +31,17 @@ distribution does not.
 from __future__ import annotations
 
 import os
-import warnings
 from dataclasses import dataclass, field
 
 import torch
 from torch.nn.utils.stateless import _reparametrize_module
 
+from . import _fallback
 from ._fused_ops import validate_backend
 from ._native_ops import _CSRC
 from .confidence import ConfidenceLUT
+
+EXT_NAME = "lutorch_ex_fused_confidence"
 
 _LOW_PREC = (torch.bfloat16, torch.float16)
 _CUDA_TABLE_DTYPES = (torch.float32, torch.bfloat16)
@@ -73,16 +75,20 @@ def fused_confidence_ext():
     if _TRIED:
         return _EXT
     _TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1" or not torch.cuda.is_available():
+    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
+        _fallback.record_build_failure(EXT_NAME, disabled=True)
+        return None
+    if not torch.cuda.is_available():
+        _fallback.record_build_failure(EXT_NAME)
         return None
     try:
         from torch.utils.cpp_extension import load
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        _EXT = load(name="lutorch_ex_fused_confidence", sources=[os.path.join(_CSRC, "fused_confidence.cu")],
+        _EXT = load(name=EXT_NAME, sources=[os.path.join(_CSRC, "fused_confidence.cu")],
                     extra_cflags=[f"-std={std}", "-O3"], extra_cuda_cflags=[f"-std={std}", "-O3"], verbose=False)
     except Exception as e:
-        warnings.warn(f"lutorch_ex: the fused_confidence extension could not be built/loaded; FusedConfidenceLUT uses "
-                      f"the ConfidenceLUT path instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
+        # Never raise here; classify WHY. FusedConfidenceLUT reports it loudly where it actually falls back.
+        _fallback.record_build_failure(EXT_NAME, e)
         _EXT = None
     return _EXT
 
@@ -145,9 +151,14 @@ class FusedConfidenceLUT(ConfidenceLUT):
     def _supports_low_precision(self) -> bool:
         return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads ('cuda' and 'pure')
 
-    def _cuda_ok(self, x: torch.Tensor) -> bool:
+    def _shape_ok(self, x: torch.Tensor) -> bool:
+        """Everything the CUDA kernels need EXCEPT the extension itself (a CUDA input, fp32/bf16 table, nap <= 16).
+        Failing this is a deliberate design fallback (no kernel for that case), not a broken fast path."""
         return (x.is_cuda and x.dtype in (torch.float32,) + _LOW_PREC and self.weights.dtype in _CUDA_TABLE_DTYPES
-                and self.spec.nap <= 16 and fused_confidence_ext() is not None)
+                and self.spec.nap <= 16)
+
+    def _cuda_ok(self, x: torch.Tensor) -> bool:
+        return self._shape_ok(x) and fused_confidence_ext() is not None
 
     def _keep_flags(self, B: int, device):
         """Table-dropout keep flags ``[B, G, tph]`` bool (TRAIN + grad only, else None); kernels scale by 1/keep."""
@@ -158,12 +169,24 @@ class FusedConfidenceLUT(ConfidenceLUT):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         be = self.backend
         if be == "auto":
-            be = "cuda" if self._cuda_ok(x) else "pure"
+            if self._cuda_ok(x):
+                be = "cuda"
+            else:
+                if self._shape_ok(x):   # the case the kernels exist for, but the extension is missing: involuntary
+                    _fallback.report_involuntary_fallback(type(self).__name__, EXT_NAME, "auto", "pure")
+                be = "pure"
         elif be == "cuda" and not self._cuda_ok(x):
+            if self._shape_ok(x):       # only the extension is missing: name the classified cause
+                cause = _fallback.recorded(EXT_NAME) or _fallback.Cause(
+                    "unclassified", "the extension loader did not record a cause",
+                    remedy=_fallback.CAUSES["unclassified"][1])
+                raise _fallback.NativeUnavailableError(
+                    _fallback.banner(type(self).__name__, EXT_NAME, "cuda", "(none: explicit request)", cause))
             raise RuntimeError(
                 f"{type(self).__name__}: backend='cuda' needs a CUDA input, an fp32 or bf16 table, nap <= 16 and the "
                 f"fused_confidence extension; got input {x.dtype} on {x.device}, table {self.weights.dtype}, "
                 f"nap {self.spec.nap}, extension {'loaded' if fused_confidence_ext() is not None else 'unavailable'}")
+        self.last_backend = be                                   # provenance for benchmarks (what actually ran)
         if be == "pure":
             return self._pure_forward(x)
         self._check_input(x)
