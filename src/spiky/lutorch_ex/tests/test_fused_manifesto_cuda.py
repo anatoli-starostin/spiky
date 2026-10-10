@@ -261,22 +261,48 @@ def test_eval_non_cuda_inputs_keep_the_old_eval_paths_quietly(recwarn):
     assert not [w for w in recwarn if "FAST CUDA PATH" in str(w.message)]
 
 
-def test_wide_d_out_is_not_a_cuda_case():
-    """A d_out one CTA cannot cover (> 1024 threads at the widest legal vector) is not a cuda case: 'auto' falls back
-    instead of failing at launch, and an explicit 'cuda' says why."""
-    spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=2, d_in=4, d_out=4100, anchor_mode="pairs")
+@pytest.mark.parametrize("d_out,vec", [(4100, 4), (2050, 2), (1025, 1)])
+@pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
+def test_wide_d_out_is_not_a_cuda_case(cls, d_out, vec):
+    """A d_out one CTA cannot cover (> 1024 threads at the widest vector dividing it: d_out % 4 == 0 -> vec 4, cap
+    4096; d_out % 4 == 2 -> vec 2, cap 2048; odd -> vec 1, cap 1024) is not a cuda case: 'auto' falls back in training
+    and in eval instead of failing at launch, and an explicit 'cuda' says why."""
+    spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=2, d_in=4, d_out=d_out, anchor_mode="pairs")
     x = torch.randn(4, 1, 4, device="cuda")
-    m = HARD(spec).cuda().train()
+    m = cls(spec).cuda().train()
     m(x).sum().backward()
     assert m.last_backend != "cuda"
-    with pytest.raises(RuntimeError, match="d_out 4100 needs"):
-        HARD(spec, backend="cuda").cuda().train()(x)
+    m.eval()
+    with torch.no_grad():
+        m(x)
+    assert m.last_backend != "cuda"
+    with pytest.raises(RuntimeError, match=rf"d_out={d_out} is too wide for the fused kernel \(max {vec * 1024} "):
+        cls(spec, backend="cuda").cuda().train()(x)
+
+
+@pytest.mark.parametrize("pure_cls, cls", [(lx.ManifestoHardLUT, HARD), (lx.ManifestoSoftLUT, SOFT)], ids=["hard", "soft"])
+@pytest.mark.parametrize("d_out", [4096, 1026])
+def test_cuda_matches_the_fp64_oracle_at_the_d_out_boundary(pure_cls, cls, d_out):
+    """Eligible widths at the edge of a launch class: d_out 4096 (vec 4, exactly 1024 threads per CTA, the largest
+    eligible width at the default knobs) and d_out 1026 (vec 2, the 2-wide load path). Value, grad x and grad W of the
+    cuda backend in fp32 against the pure cartridge in float64."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=d_out, anchor_mode="pairs")
+    x, go = _inputs(spec, 96)
+    m = _make(cls, spec, "cuda")
+    got = _run(m, x, go)
+    assert m.last_backend == "cuda"
+    oracle = pure_cls(spec, seed=7, weight_init_std=0.5).cuda().train().double()
+    xo = x.double().requires_grad_(True)
+    yo = oracle(xo)
+    yo.backward(go.double())
+    for what, a, b in zip(("value", "grad x", "grad W"), got, (yo.detach(), xo.grad, oracle.weights.grad)):
+        assert _rel(a.double(), b) < 1e-5, f"d_out {d_out} {what}: rel {_rel(a.double(), b):.2e}"
 
 
 def test_explicit_cuda_backend_errors_off_cuda():
     spec = _spec("small")
     m = HARD(spec, backend="cuda")
-    with pytest.raises(RuntimeError, match="backend='cuda' cannot run this input: the input is on cpu"):
+    with pytest.raises(RuntimeError, match="The input is on the CPU, but the fused kernel runs on CUDA only"):
         m(torch.randn(4, spec.h_in, spec.d_in))
 
 

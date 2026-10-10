@@ -83,24 +83,49 @@ def _row_launch(knobs, d_out: int, table_dtype: torch.dtype):
     return vec, -(-(d_out // vec) // 32) * 32
 
 
-def ineligible_reason(module, x: torch.Tensor):
-    """Why this input / configuration is NOT a case the kernels cover (None when it is). These are deliberate
-    fallbacks (there is no kernel for that case), not a broken fast path: no CUDA device or a CPU input, an fp64
-    input, an fp16 / fp64 table, nap > 16, d_in beyond int16 anchors, or a d_out one CTA cannot cover."""
+#: The one remedy every ineligibility message gives (the case is fine on the other backends).
+REMEDY = "Use backend='auto' to run on a supported path."
+_MAX_CTA_THREADS = 1024
+
+
+def _dt(dtype) -> str:
+    return str(dtype).replace("torch.", "")
+
+
+def _ineligible(module, x: torch.Tensor):
+    """``(what, internals)`` when this input / configuration is NOT a case the kernels cover, else None. These are
+    deliberate fallbacks (there is no kernel for that case), not a broken fast path."""
     if not x.is_cuda:
-        return "no CUDA device on this machine" if not torch.cuda.is_available() else f"the input is on {x.device}"
+        if not torch.cuda.is_available():
+            return "This machine has no CUDA device, which the fused kernel needs.", "torch.cuda.is_available() is False"
+        return "The input is on the CPU, but the fused kernel runs on CUDA only.", f"input device: {x.device}"
     if x.dtype not in CUDA_INPUT_DTYPES:
-        return f"input dtype {x.dtype} has no kernel (fp32 / bf16 / fp16 only)"
+        return (f"The input dtype {_dt(x.dtype)} is not supported by the fused kernel.",
+                "supported inputs: " + ", ".join(_dt(d) for d in CUDA_INPUT_DTYPES))
     if module.weights.dtype not in CUDA_TABLE_DTYPES:
-        return f"table dtype {module.weights.dtype} has no kernel (fp32 / bf16 only)"
+        return (f"The table dtype {_dt(module.weights.dtype)} is not supported by the fused kernel.",
+                "supported tables: " + ", ".join(_dt(d) for d in CUDA_TABLE_DTYPES))
     if module.spec.nap > MAX_NAP:
-        return f"nap {module.spec.nap} > {MAX_NAP}"
-    if module.spec.d_in > torch.iinfo(torch.int16).max:
-        return f"d_in {module.spec.d_in} exceeds the int16 anchors"
+        return (f"nap={module.spec.nap} is more than the fused kernel supports (max {MAX_NAP}).",
+                f"the cell index packs at most {MAX_NAP} bits")
+    d_in_max = torch.iinfo(torch.int16).max
+    if module.spec.d_in > d_in_max:
+        return (f"d_in={module.spec.d_in} is too wide for the fused kernel (max {d_in_max}).",
+                "anchor indices are stored as int16")
     vec, need = _row_launch(module.knobs, module.spec.d_out, module.weights.dtype)
-    if need > 1024:
-        return f"d_out {module.spec.d_out} needs {need} threads per CTA (> 1024) at vec {vec}"
+    if need > _MAX_CTA_THREADS:
+        return (f"d_out={module.spec.d_out} is too wide for the fused kernel (max {vec * _MAX_CTA_THREADS} at this "
+                f"vector width).", f"needs {need} threads per CTA, limit {_MAX_CTA_THREADS}, vec {vec}")
     return None
+
+
+def ineligible_reason(module, x: torch.Tensor):
+    """Why this input / configuration is NOT a case the kernels cover (None when it is), as a user-facing message:
+    what the kernel cannot handle, the remedy (the same sentence for every reason), then the internals in a trailing
+    parenthetical. The cases: no CUDA device or a CPU input, an fp64 input, an fp16 / fp64 table, nap > 16, d_in beyond
+    int16 anchors, or a d_out one CTA cannot cover."""
+    r = _ineligible(module, x)
+    return None if r is None else f"{r[0]} {REMEDY} ({r[1]})"
 
 
 def shape_ok(module, x: torch.Tensor) -> bool:
@@ -119,13 +144,14 @@ def auto_wants_cuda(module, x: torch.Tensor, next_backend: str) -> bool:
       cause (once per process), or NativeUnavailableError under SPIKY_LUTORCH_REQUIRE_NATIVE=1;
     - not a case the kernels cover (CPU input, fp64, fp16 table, nap > 16, ...): quiet, a debug log line only;
     - no CUDA device on this machine: quiet, a debug log line only."""
-    reason = ineligible_reason(module, x)
-    if reason is None:
+    r = _ineligible(module, x)
+    if r is None:
         if fused_manifesto_ext() is not None:
             return True
         _fallback.report_involuntary_fallback(type(module).__name__, EXT_NAME, "auto", next_backend)
         return False
-    _fallback.log.debug("%s: auto -> %s, not 'cuda': %s", type(module).__name__, next_backend, reason)
+    # 'auto' already IS the remedy, so the debug line carries what and why, without the remedy sentence.
+    _fallback.log.debug("%s: auto -> %s instead of 'cuda'. %s (%s)", type(module).__name__, next_backend, r[0], r[1])
     return False
 
 
@@ -141,7 +167,7 @@ def require_cuda(module, x: torch.Tensor) -> None:
             "unclassified", "the extension loader did not record a cause", remedy=_fallback.CAUSES["unclassified"][1])
         raise _fallback.NativeUnavailableError(
             _fallback.banner(name, EXT_NAME, "cuda", "(none: explicit request)", cause))
-    raise RuntimeError(f"{name}: backend='cuda' cannot run this input: {reason}")
+    raise RuntimeError(f"{name}(backend='cuda'): {reason}")
 
 
 def _launch(knobs, d_out: int, table_dtype: torch.dtype):
