@@ -6,15 +6,20 @@ forward/backward dispatch to whichever implementation is fastest for the current
 it (the oracle):
 
 * eval  -> the pure compiled gather read (fastest on the inference path);
-* train -> tier-2 NATIVE lprojection kernels when available, else tier-1 embedding_bag +
-  the custom straight-through autograd.Function.
+* train -> the hand-written 'cuda' kernels (``csrc/fused_manifesto.cu``: one forward and one
+  backward kernel, nothing per table in global memory) when they can run; else tier-2 NATIVE
+  lprojection kernels when available; else tier-1 embedding_bag + the custom straight-through
+  autograd.Function.
 
-``backend`` forces a path ('pure_eval'/'tier1'/'native'/'auto'); 'auto' is the hybrid.
+``backend`` forces a path ('pure_eval'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid.
+``knobs`` (a :class:`ManifestoCudaKnobs`) sets the 'cuda' kernels' launch configuration.
 """
 from __future__ import annotations
 
 import torch
 
+from ._fused_manifesto_cuda import (MODE_HARD, auto_wants_cuda, init_cuda_backend, manifesto_cuda_forward,
+                                    require_cuda, shape_ok)
 from ._fused_ops import FusedHardSTE, _acc_dtype, validate_backend
 from ._native_ops import NativeHard, native_available, raise_if_forced_native_unavailable, require_native_or_report
 from .manifesto_base import ManifestoLUT
@@ -24,12 +29,13 @@ _LOW_PREC = (torch.bfloat16, torch.float16)
 
 class FusedManifestoHardLUT(ManifestoLUT):
     #: Every backend _forward_impl dispatches on ('auto' picks one of the others per call).
-    _BACKENDS = ("auto", "pure_eval", "tier1", "native")
+    _BACKENDS = ("auto", "pure_eval", "tier1", "native", "cuda")
 
-    def __init__(self, spec, *, backend: str = "auto", **kw):
+    def __init__(self, spec, *, backend: str = "auto", knobs=None, **kw):
         validate_backend(type(self).__name__, backend, self._BACKENDS)
         super().__init__(spec, **kw)
         self.backend = backend
+        init_cuda_backend(self, knobs)
 
     def _supports_low_precision(self) -> bool:
         return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1)
@@ -61,11 +67,16 @@ class FusedManifestoHardLUT(ManifestoLUT):
     def _pick(self, x: torch.Tensor) -> str:
         if not self.training:
             return "pure_eval"                        # eval: compiled gather read wins
-        if native_available(x.device):
+        has_native = native_available(x.device)
+        if auto_wants_cuda(self, x, "native" if has_native else "tier1"):
+            return "cuda"                             # train: one fused forward + one fused backward kernel
+        if has_native:
             return "native"                           # train: native backward (fp32/bf16/fp16, both modes)
         # train (CPU / no native): embedding_bag + STE. On a CUDA input this is an involuntary fallback: report its
-        # cause loudly (once per process), or raise under SPIKY_LUTORCH_REQUIRE_NATIVE=1.
-        require_native_or_report(type(self).__name__, x, "auto", "tier1")
+        # cause loudly (once per process), or raise under SPIKY_LUTORCH_REQUIRE_NATIVE=1. Already reported above when
+        # the 'cuda' kernels were the first choice for this input (one banner per fallback, naming 'tier1').
+        if not shape_ok(self, x):
+            require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1"
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
@@ -77,7 +88,11 @@ class FusedManifestoHardLUT(ManifestoLUT):
         be = self._pick(x) if self.backend == "auto" else self.backend
         if self.backend == "native":
             raise_if_forced_native_unavailable(type(self).__name__, x)
+        if self.backend == "cuda":
+            require_cuda(self, x)
         self.last_backend = be                        # provenance for benchmarks (what actually ran)
+        if be == "cuda":                              # addressing, read and backward all inside the kernels
+            return manifesto_cuda_forward(self, x, MODE_HARD)
         # Native train path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization);
         # eval/tier1 keep plain _addresses (eval is already compiled whole by the base forward).
         z, u, c, j_star, u_abs_star, c_alt = self._addr(xa) if be == "native" else self._addresses(xa)

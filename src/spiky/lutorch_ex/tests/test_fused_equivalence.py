@@ -80,6 +80,7 @@ def test_fused_equiv_cuda_f32(PureCls, FusedCls, name, h_in, h_out, B, backend, 
 
 
 # ---- backend validation: every accepted name runs; a wrong-but-plausible name raises ----------------
+from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import fused_manifesto_ext  # noqa: E402
 from spiky.lutorch_ex.cartridges._native_ops import native_available  # noqa: E402
 
 _TRAINABLE = {"auto", "tier1", "native", "pure"}       # 'pure_eval' is the eval-only read
@@ -88,7 +89,9 @@ _TRAINABLE = {"auto", "tier1", "native", "pure"}       # 'pure_eval' is the eval
 def _run_backend(FusedCls, backend):
     if backend == "native" and not (torch.cuda.is_available() and native_available(torch.device("cuda"))):
         pytest.skip("native lutorch_cuda ops not available")
-    dev = "cuda" if backend == "native" else "cpu"
+    if backend == "cuda" and not (torch.cuda.is_available() and fused_manifesto_ext() is not None):
+        pytest.skip("fused_manifesto CUDA extension not available")
+    dev = "cuda" if backend in ("native", "cuda") else "cpu"
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).to(dev)
     x = torch.randn(8, 2, 6, device=dev, requires_grad=True)

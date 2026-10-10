@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import spiky.lutorch_ex as lx
-from spiky.lutorch_ex.cartridges import _fallback, _native_ops, fused_confidence, fused_manifesto_hard
+from spiky.lutorch_ex.cartridges import _fallback, _fused_manifesto_cuda, _native_ops, fused_confidence, fused_manifesto_hard
 from spiky.lutorch_ex.cartridges import fused_manifesto_soft
 from spiky.lutorch_ex.cartridges._fallback import Cause, NativeUnavailableError, classify, record_build_failure
 from spiky.lutorch_ex.lut_spec import LUTSpec
@@ -149,12 +149,15 @@ def _spec():
 
 @pytest.fixture
 def no_native(monkeypatch):
-    """Native lprojection unavailable, with a recorded cause."""
+    """Neither Manifesto CUDA extension is available (lprojection for 'native', fused_manifesto for 'cuda'), with a
+    recorded cause: the setuptools case, which breaks every JIT build at once."""
     monkeypatch.setattr(_native_ops, "native_available", lambda device: False)
     monkeypatch.setattr(fused_manifesto_hard, "native_available", lambda device: False)
     monkeypatch.setattr(fused_manifesto_soft, "native_available", lambda device: False)
-    record_build_failure("lutorch_ex_lprojection", ModuleNotFoundError("No module named 'setuptools'",
-                                                                       name="setuptools"))
+    monkeypatch.setattr(_fused_manifesto_cuda, "_TRIED", True)
+    monkeypatch.setattr(_fused_manifesto_cuda, "_EXT", None)
+    for ext in ("lutorch_ex_lprojection", _fused_manifesto_cuda.EXT_NAME):
+        record_build_failure(ext, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")

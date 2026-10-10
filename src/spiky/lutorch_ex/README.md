@@ -276,8 +276,18 @@ The `Fused…` twins have identical mathematics but pick the fastest available i
 call on their own: an `F.embedding_bag` read that runs anywhere, or, on CUDA, the native
 `lutorch_ex_lprojection` kernels when they are available.
 
-The Gen-3 cartridges have no twin: their `embedding_bag` read with a compiled forward is already the
-fast path.
+`FusedManifestoHardLUT` and `FusedManifestoSoftLUT` also have a `backend="cuda"`: one hand-written
+forward and one backward kernel (`cartridges/csrc/fused_manifesto.cu`, the `lutorch_ex_fused_manifesto`
+extension), built like `FusedConfidenceLUT`'s. The kernels do the addressing, the read summed over each
+head's tables, the table-gradient scatter (fp32 vector atomics) and the margin gradient. Nothing per
+table goes through global memory, and the backward recomputes the addressing from the input. `auto` picks
+it for every CUDA training step with an fp32 or bf16 table and nap ≤ 16; eval keeps its existing paths.
+Launch knobs: `knobs=ManifestoCudaKnobs(...)` (from `cartridges._fused_manifesto_cuda`) or the
+`LUTORCH_EX_MANI_CUDA_*` variables. The table
+gradient is accumulated with atomics, so it is not bit-reproducible run to run (the forward is).
+
+The Gen-3 `ConfidenceLUT` has the hand-written twin `FusedConfidenceLUT` (`cartridges/fused_confidence.py`);
+`QuantisedConfidenceLUT` has none (its compiled `embedding_bag` read is its fast path).
 
 **Precision.** The plain cartridges and Gen-3 run in fp32 or fp64, and raise a `TypeError` on
 bf16/fp16. The four fused twins accept bf16/fp16: addressing runs in fp32, so a lossy margin cannot flip
@@ -511,6 +521,8 @@ lutorch_ex/
 │   ├── quantised_confidence.py      QuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
 │   ├── _pow2.py, _pow2_int8.py      power-of-two quantisation maths and its CUDA read
 │   ├── _fused_ops.py, _native_ops.py, _native_softsign.py   tier-1 ops and native-extension glue
+│   ├── _fused_manifesto_cuda.py     the FusedManifesto* 'cuda' backend (glue for csrc/fused_manifesto.cu)
+│   ├── _fallback.py                 classified "fast path unavailable" warnings, strict mode, provenance
 │   ├── uncertainty.py               rational_uncertainty
 │   └── csrc/                        CUDA / C++ kernel sources
 └── tests/               pytest suite
