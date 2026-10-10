@@ -44,13 +44,6 @@ class CudaKnobs:
     rows_per_cta: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_ROWS_PER_CTA", 4))
     vec: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC", 4))
     vec_atomics: bool = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC_ATOMICS", 1) == 1)
-    # L2 handling of the table W (prototype). l2_hint: per-load L2 eviction priority on the W reads,
-    # 0 = none, 1 = evict_last, 2 = evict_first. l2_window: hitRatio of a persisting access-policy window over W
-    # on the launch stream (0 = off); the persisting carve-out is sized to min(W bytes, the device maximum).
-    l2_hint: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_L2_HINT", 0))
-    l2_window: float = field(default_factory=lambda: float(os.environ.get("LUTORCH_EX_CONF_CUDA_L2_WINDOW", "0")))
-    # Which table the BACKWARD window covers: 0 = W (the reads), 1 = grad W (the atomic scatter target).
-    l2_window_target: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_L2_WINDOW_TARGET", 0))
 
 
 _EXT = None
@@ -83,8 +76,7 @@ class _ConfidenceCuda(torch.autograd.Function):
         ext = confidence_cuda_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-                                 nap, eps, n, knobs.fwd_threads, knobs.rows_per_cta, knobs.vec,
-                                 knobs.l2_hint, knobs.l2_window)
+                                 nap, eps, n, knobs.fwd_threads, knobs.rows_per_cta, knobs.vec)
         ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep)
         ctx.cfg = (keep_scale, nap, eps, n, knobs)
         return out
@@ -96,8 +88,7 @@ class _ConfidenceCuda(torch.autograd.Function):
         W2 = weights.reshape(-1, weights.shape[-1])
         gW, gz, gscal = confidence_cuda_ext().confidence_bwd(
             go.contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-            nap, eps, n, knobs.bwd_threads, knobs.rows_per_cta, knobs.vec, knobs.vec_atomics,
-            knobs.l2_hint, knobs.l2_window, knobs.l2_window_target)
+            nap, eps, n, knobs.bwd_threads, knobs.rows_per_cta, knobs.vec, knobs.vec_atomics)
         g = gscal.sum(0)
         g_tau = g[2] if n == 2 else None
         return (gz, gW.view_as(weights), g[0], g[1], g_tau, None, None, None, None, None, None, None, None)
