@@ -228,7 +228,7 @@ def test_bf16_vector_widths_agree(vec):
         assert _rel(a, b) < 1e-2
 
 
-def test_auto_picks_cuda_in_training_and_keeps_the_eval_paths():
+def test_auto_picks_cuda_in_training_and_in_eval():
     spec = _spec("mid")
     x = torch.randn(64, spec.h_in, spec.d_in, device="cuda")
     big = torch.randn(SOFT._LARGE_BATCH, spec.h_in, spec.d_in, device="cuda")
@@ -239,18 +239,44 @@ def test_auto_picks_cuda_in_training_and_keeps_the_eval_paths():
     assert s.last_backend == "cuda"                    # training: cuda at large batch too (replaces tier1 there)
     h.eval(), s.eval()
     with torch.no_grad():
-        h(x)
-        assert h.last_backend == "pure_eval"
-        s(x)
-        assert s.last_backend == "pure"
-        s(big)
-        assert s.last_backend == "tier1"
+        for m in (h, s):
+            for inp in (x, big):                       # eval: cuda at every batch size (replaces pure / tier1)
+                m(inp)
+                assert m.last_backend == "cuda"
+
+
+def test_eval_non_cuda_inputs_keep_the_old_eval_paths_quietly(recwarn):
+    """A legitimate non-cuda case in eval (an fp16 table has no kernel; a CPU input) falls through to the previous
+    eval choice without any fallback warning."""
+    spec = _spec("mid")
+    h = HARD(spec).cuda().eval().half()
+    s = SOFT(spec).cuda().eval().half()
+    with torch.no_grad():
+        h(torch.randn(64, spec.h_in, spec.d_in, device="cuda").half())
+        s(torch.randn(64, spec.h_in, spec.d_in, device="cuda").half())
+        hc, sc = HARD(spec).eval(), SOFT(spec).eval()
+        hc(torch.randn(8, spec.h_in, spec.d_in))
+        sc(torch.randn(8, spec.h_in, spec.d_in))
+    assert (h.last_backend, s.last_backend, hc.last_backend, sc.last_backend) == ("pure_eval", "pure", "pure_eval", "pure")
+    assert not [w for w in recwarn if "FAST CUDA PATH" in str(w.message)]
+
+
+def test_wide_d_out_is_not_a_cuda_case():
+    """A d_out one CTA cannot cover (> 1024 threads at the widest legal vector) is not a cuda case: 'auto' falls back
+    instead of failing at launch, and an explicit 'cuda' says why."""
+    spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=2, d_in=4, d_out=4100, anchor_mode="pairs")
+    x = torch.randn(4, 1, 4, device="cuda")
+    m = HARD(spec).cuda().train()
+    m(x).sum().backward()
+    assert m.last_backend != "cuda"
+    with pytest.raises(RuntimeError, match="d_out 4100 needs"):
+        HARD(spec, backend="cuda").cuda().train()(x)
 
 
 def test_explicit_cuda_backend_errors_off_cuda():
     spec = _spec("small")
     m = HARD(spec, backend="cuda")
-    with pytest.raises(RuntimeError, match="backend='cuda' needs a CUDA input"):
+    with pytest.raises(RuntimeError, match="backend='cuda' cannot run this input: the input is on cpu"):
         m(torch.randn(4, spec.h_in, spec.d_in))
 
 
@@ -282,6 +308,17 @@ def test_missing_extension_is_reported_then_auto_moves_on(monkeypatch):
     monkeypatch.delenv(_fallback.STRICT_ENV)
     with pytest.raises(_fallback.NativeUnavailableError, match="lutorch_ex_fused_manifesto"):
         HARD(spec, backend="cuda").cuda().train()(x)
+    # eval: the same loud fallback (to the previous eval path), and a hard error under the strict flag
+    _fallback._reset_for_tests()
+    _fallback.record_build_failure(fmc.EXT_NAME, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
+    e = SOFT(spec).cuda().eval()
+    with torch.no_grad():
+        with pytest.warns(RuntimeWarning, match="lutorch_ex_fused_manifesto"):
+            e(x)
+        assert e.last_backend == "pure"
+        monkeypatch.setenv(_fallback.STRICT_ENV, "1")
+        with pytest.raises(_fallback.NativeUnavailableError, match="setuptools_missing"):
+            HARD(spec).cuda().eval()(x)
     _fallback._reset_for_tests()
 
 

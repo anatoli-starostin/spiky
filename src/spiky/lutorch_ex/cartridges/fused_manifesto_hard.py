@@ -66,7 +66,9 @@ class FusedManifestoHardLUT(ManifestoLUT):
 
     def _pick(self, x: torch.Tensor) -> str:
         if not self.training:
-            return "pure_eval"                        # eval: compiled gather read wins
+            # eval: the 'cuda' forward kernel when it can run (fastest at every batch measured, both GPUs); else the
+            # compiled gather read. A missing extension is reported loudly; a non-cuda input falls through quietly.
+            return "cuda" if auto_wants_cuda(self, x, "pure_eval") else "pure_eval"
         has_native = native_available(x.device)
         if auto_wants_cuda(self, x, "native" if has_native else "tier1"):
             return "cuda"                             # train: one fused forward + one fused backward kernel

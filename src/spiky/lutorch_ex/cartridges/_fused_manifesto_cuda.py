@@ -74,12 +74,38 @@ def fused_manifesto_ext():
     return _EXT
 
 
+def _row_launch(knobs, d_out: int, table_dtype: torch.dtype):
+    """(vec, threads needed to cover one table row): the vector width is halved until it divides d_out (an odd d_out
+    reads one element per load); one row needs d_out / vec threads, rounded up to a warp."""
+    vec = knobs.vec if table_dtype == torch.float32 else knobs.vec_bf16
+    while vec > 1 and d_out % vec:
+        vec //= 2
+    return vec, -(-(d_out // vec) // 32) * 32
+
+
+def ineligible_reason(module, x: torch.Tensor):
+    """Why this input / configuration is NOT a case the kernels cover (None when it is). These are deliberate
+    fallbacks (there is no kernel for that case), not a broken fast path: no CUDA device or a CPU input, an fp64
+    input, an fp16 / fp64 table, nap > 16, d_in beyond int16 anchors, or a d_out one CTA cannot cover."""
+    if not x.is_cuda:
+        return "no CUDA device on this machine" if not torch.cuda.is_available() else f"the input is on {x.device}"
+    if x.dtype not in CUDA_INPUT_DTYPES:
+        return f"input dtype {x.dtype} has no kernel (fp32 / bf16 / fp16 only)"
+    if module.weights.dtype not in CUDA_TABLE_DTYPES:
+        return f"table dtype {module.weights.dtype} has no kernel (fp32 / bf16 only)"
+    if module.spec.nap > MAX_NAP:
+        return f"nap {module.spec.nap} > {MAX_NAP}"
+    if module.spec.d_in > torch.iinfo(torch.int16).max:
+        return f"d_in {module.spec.d_in} exceeds the int16 anchors"
+    vec, need = _row_launch(module.knobs, module.spec.d_out, module.weights.dtype)
+    if need > 1024:
+        return f"d_out {module.spec.d_out} needs {need} threads per CTA (> 1024) at vec {vec}"
+    return None
+
+
 def shape_ok(module, x: torch.Tensor) -> bool:
-    """Everything the kernels need EXCEPT the extension itself: a CUDA input (fp32 / bf16 / fp16), an fp32 or bf16
-    table, nap <= 16 and d_in within int16 anchors. Failing this is a deliberate fallback (no kernel for that case),
-    not a broken fast path."""
-    return (x.is_cuda and x.dtype in CUDA_INPUT_DTYPES and module.weights.dtype in CUDA_TABLE_DTYPES
-            and module.spec.nap <= MAX_NAP and module.spec.d_in <= torch.iinfo(torch.int16).max)
+    """Everything the kernels need EXCEPT the extension itself (see ineligible_reason)."""
+    return ineligible_reason(module, x) is None
 
 
 def cuda_ok(module, x: torch.Tensor) -> bool:
@@ -87,41 +113,42 @@ def cuda_ok(module, x: torch.Tensor) -> bool:
 
 
 def auto_wants_cuda(module, x: torch.Tensor, next_backend: str) -> bool:
-    """'auto' in training: True when the 'cuda' backend can run. When only the extension is missing for a case the
-    kernels cover, report it (warn once / raise under SPIKY_LUTORCH_REQUIRE_NATIVE=1) before 'auto' moves on to
-    ``next_backend``; a case without a kernel (CPU, fp64, fp16 table, nap > 16) moves on quietly."""
-    if cuda_ok(module, x):
-        return True
-    if shape_ok(module, x):
+    """'auto' (train and eval): True when the 'cuda' backend can run for this input. Otherwise 'auto' moves on to
+    ``next_backend``, and the three reasons are kept apart:
+    - the extension is missing / failed to build for a case the kernels cover: reported loudly with its classified
+      cause (once per process), or NativeUnavailableError under SPIKY_LUTORCH_REQUIRE_NATIVE=1;
+    - not a case the kernels cover (CPU input, fp64, fp16 table, nap > 16, ...): quiet, a debug log line only;
+    - no CUDA device on this machine: quiet, a debug log line only."""
+    reason = ineligible_reason(module, x)
+    if reason is None:
+        if fused_manifesto_ext() is not None:
+            return True
         _fallback.report_involuntary_fallback(type(module).__name__, EXT_NAME, "auto", next_backend)
+        return False
+    _fallback.log.debug("%s: auto -> %s, not 'cuda': %s", type(module).__name__, next_backend, reason)
     return False
 
 
 def require_cuda(module, x: torch.Tensor) -> None:
     """backend='cuda' was requested explicitly: raise (with the classified cause when only the extension is missing)
     rather than silently run something else."""
-    if cuda_ok(module, x):
+    reason = ineligible_reason(module, x)
+    if reason is None and fused_manifesto_ext() is not None:
         return
     name = type(module).__name__
-    if shape_ok(module, x):
+    if reason is None:
         cause = _fallback.recorded(EXT_NAME) or _fallback.Cause(
             "unclassified", "the extension loader did not record a cause", remedy=_fallback.CAUSES["unclassified"][1])
         raise _fallback.NativeUnavailableError(
             _fallback.banner(name, EXT_NAME, "cuda", "(none: explicit request)", cause))
-    raise RuntimeError(
-        f"{name}: backend='cuda' needs a CUDA input (fp32/bf16/fp16), an fp32 or bf16 table, nap <= {MAX_NAP} and "
-        f"d_in <= 32767; got input {x.dtype} on {x.device}, table {module.weights.dtype}, nap {module.spec.nap}, "
-        f"d_in {module.spec.d_in}")
+    raise RuntimeError(f"{name}: backend='cuda' cannot run this input: {reason}")
 
 
 def _launch(knobs, d_out: int, table_dtype: torch.dtype):
-    """The knobs, made legal for this d_out: the vector width is halved until it divides d_out (an odd d_out reads
-    one element per load), and each thread count is raised to cover one table row (d_out / vec threads, rounded up to
-    a warp). At the canonical d_out 48 the defaults pass through unchanged."""
-    vec = knobs.vec if table_dtype == torch.float32 else knobs.vec_bf16
-    while vec > 1 and d_out % vec:
-        vec //= 2
-    need = -(-(d_out // vec) // 32) * 32
+    """The knobs, made legal for this d_out (see _row_launch): each thread count is raised to cover one table row. At
+    the canonical d_out 48 the defaults pass through unchanged. ineligible_reason keeps 'auto' away from a d_out that
+    needs more than 1024 threads; an explicit request for one fails here."""
+    vec, need = _row_launch(knobs, d_out, table_dtype)
     if need > 1024:
         raise RuntimeError(f"fused_manifesto: d_out {d_out} needs {need} threads per CTA (> 1024) at vec {vec}")
     return max(knobs.fwd_threads, need), max(knobs.bwd_threads, need), vec

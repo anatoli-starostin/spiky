@@ -72,12 +72,15 @@ class FusedManifestoSoftLUT(ManifestoLUT):
 
     def _pick(self, x: torch.Tensor) -> str:
         large = x.is_cuda and x.shape[0] >= self._LARGE_BATCH
+        # Train and eval: the fused 'cuda' kernels at every batch size when they can run (measured fastest against
+        # tier1, native and pure at 64 ... 32,768 vectors, both GPUs). Without them, the heuristic below as before: a
+        # missing extension is reported loudly, a non-cuda input falls through quietly.
         if self.training:
-            # Train: the fused 'cuda' kernels at every batch size (measured faster than tier1 and native at the
-            # canonical h16 d48 tph64 nap8, 32,768 vectors). Without them, the heuristic below as before.
             nxt = "tier1" if large else ("native" if native_available(x.device) else ("tier1" if x.is_cuda else "pure"))
-            if auto_wants_cuda(self, x, nxt):
-                return "cuda"
+        else:
+            nxt = "tier1" if large else "pure"
+        if auto_wants_cuda(self, x, nxt):
+            return "cuda"
         if large:
             return "tier1"                                   # embedding_bag wins at large batch
         if not self.training:
