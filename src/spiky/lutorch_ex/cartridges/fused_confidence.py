@@ -1,4 +1,4 @@
-"""ConfidenceLUTCuda — ConfidenceLUT with its forward and backward in hand-written CUDA (``csrc/confidence_cuda.cu``).
+"""FusedConfidenceLUT — ConfidenceLUT with its forward and backward in hand-written CUDA (``csrc/fused_confidence.cu``).
 
 Same parameters, numerics and interface as :class:`ConfidenceLUT` (read_top_n 1 and 2, pairs and single anchors,
 table dropout, learnable or frozen β / γ / τ); only the implementation differs. Instead of torch.compile + Inductor
@@ -37,7 +37,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass
 class CudaKnobs:
-    """Launch configuration for the CUDA kernels (all explicit; sweep them with ``bench_confidence_cuda.py``)."""
+    """Launch configuration for the CUDA kernels (all explicit; sweep them with ``bench_fused_confidence.py``)."""
     # Defaults = the sweep winner on both the RTX 5090 (sm_120) and the H100 (sm_90) at the d24 geometry.
     fwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_FWD_THREADS", 64))
     bwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_BWD_THREADS", 64))
@@ -50,8 +50,8 @@ _EXT = None
 _TRIED = False
 
 
-def confidence_cuda_ext():
-    """Build/load the ``lutorch_ex_confidence_cuda`` JIT extension; None if unavailable (never raises)."""
+def fused_confidence_ext():
+    """Build/load the ``lutorch_ex_fused_confidence`` JIT extension; None if unavailable (never raises)."""
     global _EXT, _TRIED
     if _TRIED:
         return _EXT
@@ -61,19 +61,19 @@ def confidence_cuda_ext():
     try:
         from torch.utils.cpp_extension import load
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        _EXT = load(name="lutorch_ex_confidence_cuda", sources=[os.path.join(_CSRC, "confidence_cuda.cu")],
+        _EXT = load(name="lutorch_ex_fused_confidence", sources=[os.path.join(_CSRC, "fused_confidence.cu")],
                     extra_cflags=[f"-std={std}", "-O3"], extra_cuda_cflags=[f"-std={std}", "-O3"], verbose=False)
     except Exception as e:
-        warnings.warn(f"lutorch_ex: the confidence_cuda extension could not be built/loaded; ConfidenceLUTCuda uses "
+        warnings.warn(f"lutorch_ex: the fused_confidence extension could not be built/loaded; FusedConfidenceLUT uses "
                       f"the ConfidenceLUT path instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
         _EXT = None
     return _EXT
 
 
-class _ConfidenceCuda(torch.autograd.Function):
+class _FusedConfidence(torch.autograd.Function):
     @staticmethod
     def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, eps, n, knobs):
-        ext = confidence_cuda_ext()
+        ext = fused_confidence_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
                                  nap, eps, n, knobs.fwd_threads, knobs.rows_per_cta, knobs.vec)
@@ -86,7 +86,7 @@ class _ConfidenceCuda(torch.autograd.Function):
         z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
         keep_scale, nap, eps, n, knobs = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
-        gW, gz, gscal = confidence_cuda_ext().confidence_bwd(
+        gW, gz, gscal = fused_confidence_ext().confidence_bwd(
             go.contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
             nap, eps, n, knobs.bwd_threads, knobs.rows_per_cta, knobs.vec, knobs.vec_atomics)
         g = gscal.sum(0)
@@ -94,7 +94,7 @@ class _ConfidenceCuda(torch.autograd.Function):
         return (gz, gW.view_as(weights), g[0], g[1], g_tau, None, None, None, None, None, None, None, None)
 
 
-class ConfidenceLUTCuda(ConfidenceLUT):
+class FusedConfidenceLUT(ConfidenceLUT):
     """:class:`ConfidenceLUT` with a hand-written CUDA forward/backward; see the module docstring.
 
     Args: those of :class:`ConfidenceLUT`, plus ``knobs`` (a :class:`CudaKnobs`; default from the environment).
@@ -106,7 +106,7 @@ class ConfidenceLUTCuda(ConfidenceLUT):
         super().__init__(spec, **kw)
         self.knobs = knobs if knobs is not None else CudaKnobs()
         if spec.d_in > torch.iinfo(torch.int16).max:
-            raise ValueError(f"ConfidenceLUTCuda needs d_in <= 32767, got {spec.d_in}")
+            raise ValueError(f"FusedConfidenceLUT needs d_in <= 32767, got {spec.d_in}")
         # int16 copies of the anchors for the kernels (the int64 buffers stay for the fallback path and state_dict).
         self.register_buffer("_anc_a16", self.anchor_a.to(torch.int16).contiguous(), persistent=False)
         if self.anchor_b is not None:
@@ -116,7 +116,7 @@ class ConfidenceLUTCuda(ConfidenceLUT):
 
     def _cuda_ok(self, x: torch.Tensor) -> bool:
         return (x.is_cuda and x.dtype == torch.float32 and self.weights.dtype == torch.float32
-                and self.spec.nap <= 16 and confidence_cuda_ext() is not None)
+                and self.spec.nap <= 16 and fused_confidence_ext() is not None)
 
     def _keep_flags(self, B: int, device):
         """Table-dropout keep flags ``[B, G, tph]`` bool (TRAIN + grad only, else None); kernels scale by 1/keep."""
@@ -132,7 +132,7 @@ class ConfidenceLUTCuda(ConfidenceLUT):
         keep = self._keep_flags(x.shape[0], x.device)
         keep_scale = 1.0 / (1.0 - self.table_dropout_rate)
         log_tau = self.log_read_tau if self.read_top_n == 2 else self.confidence_log_beta
-        grp = _ConfidenceCuda.apply(z, self.weights, self.confidence_log_beta, self.confidence_log_gamma, log_tau,
+        grp = _FusedConfidence.apply(z, self.weights, self.confidence_log_beta, self.confidence_log_gamma, log_tau,
                                     self._anc_a16, self._anc_b16, keep, keep_scale, self.spec.nap, self.cmp_eps,
                                     self.read_top_n, self.knobs)
         return self._route(grp, x)

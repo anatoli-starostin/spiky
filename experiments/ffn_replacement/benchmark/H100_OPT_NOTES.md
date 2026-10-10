@@ -63,7 +63,8 @@ routing reference.
   cuda-fp32, 1.8× slower than Triton — the 6–12 MB table is already implicitly L2-resident,
   so pinning only steals L2 from the streaming index/output.
   - **Refinement (2026-10-10): pin the accumulation target, not the table.** Context: the
-    hand-written ConfidenceLUT CUDA twin (training fwd+bwd, d24 geometry, 32k tokens), H100
+    hand-written ConfidenceLUT CUDA twin `FusedConfidenceLUT` (formerly `ConfidenceLUTCuda`;
+    training fwd+bwd, d24 geometry, 32k tokens), H100
     SM 9.0, 50 MiB L2 of which ≤ 31.2 MiB persistable; the table W is 48 MiB. Baselines
     8.6 ms (read_top_n 1) / 16.1 ms (read_top_n 2); clean runs with an L2 reset
     (`cudaCtxResetPersistingL2Cache` + carve-out 0) before every config.
@@ -87,7 +88,9 @@ routing reference.
     shows this backward on the critical path. **Code:** the `l2_hint` / `l2_window` /
     `l2_window_target` knobs, `l2_reset` and `l2_info` live in commit `0d8a66d5` on branch
     `quant-path-optimisation` (PR #157, `src/spiky/lutorch_ex/cartridges/csrc/confidence_cuda.cu`
-    and `bench_confidence_cuda.py --l2-sweep`); the following commit on that branch removed them.
+    and `bench_confidence_cuda.py --l2-sweep`, paths as of that commit, since renamed to
+    `csrc/fused_confidence.cu` / `bench_fused_confidence.py`); the following commit on that
+    branch removed them.
 - **cp.async double-buffered gather**: 1.37–1.53× slower than Triton — the gather is pure
   memory latency with no compute to overlap and no row reuse.
 - **Tensor-core GEMM** (one-hot selection @ table, dense bf16): **14–22× slower**; sparse

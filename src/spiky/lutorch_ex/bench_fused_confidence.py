@@ -1,8 +1,8 @@
-"""Benchmark ConfidenceLUTCuda against the compiled ConfidenceLUT (default and fused read), cartridge only, train
+"""Benchmark FusedConfidenceLUT against the compiled ConfidenceLUT (default and fused read), cartridge only, train
 fwd+bwd, at the d24 LUT-FFN geometry (h 16, d 48, tph 64, nap 8, table dropout 0.2). Also reports each path's
 error against an fp64 eager reference (same keep mask), and optionally sweeps the CUDA launch knobs.
 
-    python -m spiky.lutorch_ex.bench_confidence_cuda [--tokens 32768] [--n 1 2] [--sweep]
+    python -m spiky.lutorch_ex.bench_fused_confidence [--tokens 32768] [--n 1 2] [--sweep]
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import statistics
 import torch
 
 from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
-from spiky.lutorch_ex.cartridges.confidence_cuda import ConfidenceLUTCuda, CudaKnobs
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
 SPEC = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
@@ -23,7 +23,7 @@ KW = dict(seed=1, table_dropout_rate=0.2)
 def build(kind, n, knobs=None):
     spec = LUTSpec(**SPEC)
     if kind == "cuda":
-        return ConfidenceLUTCuda(spec, read_top_n=n, knobs=knobs, **KW).cuda().train()
+        return FusedConfidenceLUT(spec, read_top_n=n, knobs=knobs, **KW).cuda().train()
     return ConfidenceLUT(spec, read_top_n=n, fused_read=(kind == "compiled-fused"), index_dtype=torch.int32,
                          **KW).cuda().train()
 

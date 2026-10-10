@@ -1,4 +1,4 @@
-// ConfidenceLUTCuda: hand-written CUDA forward + backward for the ConfidenceLUT read (read_top_n 1 and 2).
+// FusedConfidenceLUT: hand-written CUDA forward + backward for the ConfidenceLUT read (read_top_n 1 and 2).
 //
 // One CTA owns one group g and `rows_per_cta` consecutive samples b of it. Per (b, g) row the CTA
 //   phase A  (thread per table)   margins u_j from the z row in shared memory, the MSB-first address c, the
@@ -10,7 +10,7 @@
 // Nothing per-table goes through global memory: the address, score, mask and margins live in registers / shared
 // memory, and the backward recomputes them from z instead of saving them.
 //
-// Launch knobs (host side, see confidence_cuda.py): threads per CTA (forward and backward separately), rows per
+// Launch knobs (host side, see fused_confidence.py): threads per CTA (forward and backward separately), rows per
 // CTA, vector width VEC (1, 2, 4) and whether the weight-gradient scatter uses vector atomics (sm_90+).
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>

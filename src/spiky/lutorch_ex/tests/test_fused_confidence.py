@@ -1,14 +1,14 @@
-"""ConfidenceLUTCuda (hand-written CUDA) vs ConfidenceLUT: forward value and every gradient, both read_top_n, both
+"""FusedConfidenceLUT (hand-written CUDA) vs ConfidenceLUT: forward value and every gradient, both read_top_n, both
 anchor modes, with and without table dropout, across the launch knobs."""
 import pytest
 import torch
 
 from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
-from spiky.lutorch_ex.cartridges.confidence_cuda import ConfidenceLUTCuda, CudaKnobs, confidence_cuda_ext
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs, fused_confidence_ext
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or confidence_cuda_ext() is None,
-                                reason="needs CUDA and the confidence_cuda extension")
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or fused_confidence_ext() is None,
+                                reason="needs CUDA and the fused_confidence extension")
 
 
 def _pair(n, anchor_mode="pairs", rate=0.0, h_in=4, h_out=4, tph=16, nap=6, d=24, knobs=None):
@@ -16,7 +16,7 @@ def _pair(n, anchor_mode="pairs", rate=0.0, h_in=4, h_out=4, tph=16, nap=6, d=24
     kw = dict(seed=3, read_top_n=n, table_dropout_rate=rate, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
               read_tau_init=0.6)
     ref = ConfidenceLUT(spec, **kw).cuda().train()
-    cud = ConfidenceLUTCuda(spec, knobs=knobs, **kw).cuda().train()
+    cud = FusedConfidenceLUT(spec, knobs=knobs, **kw).cuda().train()
     cud.load_state_dict(ref.state_dict())
     return ref, cud
 
@@ -96,7 +96,7 @@ def test_fan_in_and_d24_geometry():
 
 def test_falls_back_off_cuda_fp32():
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
-    cud = ConfidenceLUTCuda(spec, seed=0).double()
+    cud = FusedConfidenceLUT(spec, seed=0).double()
     ref = ConfidenceLUT(spec, seed=0).double()
     x = torch.randn(5, 2, 8, dtype=torch.float64)
     torch.testing.assert_close(cud.eval()(x), ref.eval()(x))
