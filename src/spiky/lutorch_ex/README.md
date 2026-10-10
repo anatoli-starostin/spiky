@@ -215,24 +215,19 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
-| `table_dtype` | `None` | `ConfidenceLUT` only. `None` uses the `embedding_bag` read. `torch.float32` uses a fused gather read on the fp32 master. `torch.bfloat16` or `torch.float8_e4m3fn` use the same fused read on a narrow copy of the table, cast once per optimizer step (see below) |
+| `fused_read` | `False` | `ConfidenceLUT` only. `False` uses the `embedding_bag` read. `True` uses the fused gather read on the fp32 table (see below) |
 
-`table_dtype` replaces `embedding_bag`'s forward and score-gradient kernels with a gather, upcast and
-score-weighted fp32 sum, and a re-gather for the score gradient. The table gradient still calls
-`aten._embedding_bag_dense_backward`, to the fp32 master, which stays the trained parameter; so it keeps
-that op's [size limit](#pytorchs-embedding_bag-backward-size-limit). The read and the score gradient are fused into
-single kernels only when Inductor compiles the cartridge forward (CUDA). Eager runs them as separate ops.
+`fused_read=True` replaces `embedding_bag`'s forward and score-gradient kernels with a gather and
+score-weighted sum, and a re-gather of the same rows for the score gradient. It reads the fp32 table
+itself (the trained parameter; no copy). The table gradient still calls `aten._embedding_bag_dense_backward`,
+so it keeps that op's [size limit](#pytorchs-embedding_bag-backward-size-limit). The read and the score
+gradient are fused into single kernels only when Inductor compiles the cartridge forward (CUDA). Eager runs
+them as separate ops.
 
-- **Correctness:** the table gradient is bit-identical to the default path. With `torch.float32`, outputs
-  agree to fp32 re-association. A bf16 copy adds about 1.6e-3 relative output error, and fp8 (tensorwise
-  e4m3) about 2.6e-2.
-- **When the narrow copy is recast:** after every optimizer `step()` (a global step hook covers fused
-  optimizers, which do not bump the version counter), and whenever the master is changed in place. Writes
-  through `param.data` are invisible to both: call `invalidate_narrow_tables(module)` after them.
-- **Which `table_dtype` to pick depends on the hardware.** Measured on one consumer card (h=16, tph=64,
-  nap=8, 32k tokens), the ranking was `torch.float32` fastest: the gain comes from the fused score
-  gradient, and the narrow copies did not help there, because the fp32 table already fit the card's L2.
-  On a GPU whose L2 cannot hold the fp32 table, the narrow copies may help; measure before choosing.
+- **Correctness:** the table gradient is bit-identical to the default path; outputs and the other gradients
+  agree to fp32 re-association.
+- **Where the win comes from:** the score gradient. At h=16, tph=64, nap=8 and 32k tokens, PyTorch's
+  per-sample-weight backward kernel dominates the default read, and the fused re-gather replaces it.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
@@ -257,7 +252,7 @@ This is a known upstream constraint. lutorch_ex documents it but doesn't enforce
   tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
   (~10× and ~5× headroom).
 - **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
-  ConfidenceLUT n=1/n=2, QuantisedConfidenceLUT, the fused narrow read's table gradient (`table_dtype`),
+  ConfidenceLUT n=1/n=2, QuantisedConfidenceLUT, the fused read's table gradient (`fused_read=True`),
   SoftSignHard/Smooth, and the fused twins' `tier1` reads.
 - **Not exposed:** the native backends, `FusedHardSTE`, and every eval / `no_grad` path.
 - **Workaround:** reduce the micro-batch size and raise gradient accumulation.

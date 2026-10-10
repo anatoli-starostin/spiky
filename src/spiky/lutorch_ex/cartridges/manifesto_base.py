@@ -312,25 +312,17 @@ class ManifestoLUT(MultiHeadLUT):
         # eager is fastest, so training stays eager. CPU is always plain eager (keeps CPU tests
         # eager / bit-identical). Eval and train use separate compiled objects (each traces its own
         # branch of _forward_impl).
-        # Tensors a cartridge computes OUTSIDE the compiled region and hands to _forward_impl as arguments (e.g. the
-        # ConfidenceLUT narrow-table copy, refreshed per optimizer step): passing them as inputs, not attributes,
-        # keeps a refresh from triggering a recompile. Empty for every cartridge by default.
-        extra = self._forward_extra_args()
         if _COMPILE_ENABLED and x.is_cuda:
             if not self.training:
                 if self._compiled is None:
                     self._compiled = torch.compile(self._forward_impl, dynamic=True)
-                return self._compiled(x, *extra)
+                return self._compiled(x)
             if self._COMPILE_TRAIN:
                 if self._compiled_train is None:
                     self._compiled_train = torch.compile(self._forward_impl,
                                                          dynamic=self._COMPILE_TRAIN_DYNAMIC)
-                return self._compiled_train(x, *extra)
-        return self._forward_impl(x, *extra)
-
-    def _forward_extra_args(self) -> tuple:
-        """Extra tensor arguments for :meth:`_forward_impl` (see :meth:`forward`); none by default."""
-        return ()
+                return self._compiled_train(x)
+        return self._forward_impl(x)
 
     def _addr(self, x: torch.Tensor):
         """Addressing for the native TRAIN path. Identical result to :meth:`_addresses`, but

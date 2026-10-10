@@ -50,9 +50,9 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
         # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the
         # only one deployment supports. read_top_n=1 stays constructible and trainable, just not exportable.
-        if kw.get("table_dtype") is not None:
-            raise ValueError("QuantisedConfidenceLUT has its own fake-quant table read; table_dtype is a ConfidenceLUT "
-                             "option (narrow-table storage) and cannot be combined with it")
+        if kw.get("fused_read"):
+            raise ValueError("QuantisedConfidenceLUT has its own fake-quant table read; fused_read is a ConfidenceLUT "
+                             "option and cannot be combined with it")
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
         if self._quant is None:
