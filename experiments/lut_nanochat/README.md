@@ -42,7 +42,7 @@ Numbers are marked *(code)* when they were confirmed from code or by instantiati
   - The only learned parts are the tables, the two projections, and (Gen-2/3) 2–3 scalars.
 - **Gradient through the discrete step** (`ManifestoHardLUT` / `FusedManifestoHardLUT`): the value is the hard read. The input gradient is a straight-through surrogate through a two-cell blend with the neighbour that flips the least-confident bit, weighted by `U = 0.5/(1+|u*|)`. Only the addressed cell receives a table gradient, and the index is stop-gradient ([`cartridges/manifesto_hard.py` L49–57](../../src/spiky/lutorch_ex/cartridges/manifesto_hard.py#L49-L57)).
   - The Gen-3 `ConfidenceLUT` instead returns a score-weighted read, and differentiates that value directly ([`README.md` L120–166](../../src/spiky/lutorch_ex/README.md#L120-L166)).
-- **Parameter count** *(code, verified by instantiation)*: `P = r·(2·1536 + 1 + tph·2^nap) + 1536` for 1536 → r → 1536 with `r = h·d`, plus 0 scalars for the Manifesto cartridges and 3 for Gen-3.
+- **Parameter count** *(code, verified by instantiation)*: `P = r·(2·1536 + 1 + tph·2^nap) + 1536` for 1536 → r → 1536 with `r = h·d`, plus the cartridge's learned scalars: 0 for the Manifesto cartridges, 2 for Gen-3 `ConfidenceLUT` at `read_top_n` 1 (β, γ) and 3 at `read_top_n` 2 (plus τ), 2 for Gen-2 (two temperatures). Re-checked 2026-10-10 by instantiating `ProjectionMHL` around every family at h8/tph64/nap8 and h8/tph16/nap8 (r = 64): the table and projection count is identical for all families, so restricting the work to Manifesto + Confidence changes none of the numbers below.
   - The tables (`h·tph·2^nap·d`) dominate.
   - With the library's reference geometry h = 8, tph = 64, nap = 8 ([`README.md` L38](../../src/spiky/lutorch_ex/README.md#L38); there `r` = 384 = the model width, i.e. no bottleneck):
 
@@ -60,8 +60,44 @@ Numbers are marked *(code)* when they were confirmed from code or by instantiati
   - `compress=False` lets one external down-projection feed several cartridges.
   - A fan-out spec (`h_in = 1`) feeds one input to many heads ([`lut_spec.py` L1–30](../../src/spiky/lutorch_ex/lut_spec.py#L1-L30)).
   - Addresses are recomputed every forward; nothing caches them.
-- **dtype.** The plain and Gen-3 cartridges are fp32/fp64 only and **raise on bf16** ([`cartridges/manifesto_base.py` L259–270](../../src/spiky/lutorch_ex/cartridges/manifesto_base.py#L259-L270)). The `Fused…` twins accept bf16, with fp32 addressing and fp32-accumulated reads.
-- **torch.compile.** Cartridges lazily compile their own forward on CUDA (eval always; train only for Gen-3). The native lprojection kernels are not registered as `torch.library` ops, so behaviour inside nanochat's whole-model `torch.compile` is **untested** (UNCERTAIN). `LUTORCH_EX_NO_CUDA_EXT=1` forces the pure-torch path.
+- **dtype.** The plain and Gen-3 cartridges are fp32/fp64 only and **raise on bf16** ([`cartridges/manifesto_base.py` L259–270](../../src/spiky/lutorch_ex/cartridges/manifesto_base.py#L259-L270)). The `Fused…` twins accept bf16, with fp32 addressing and fp32-accumulated reads. See the scope decision below for what this means per family, and for the version caveat.
+- **torch.compile.** Cartridges lazily compile their own forward on CUDA (eval always; train only for Gen-3). The native lprojection kernels are not registered as `torch.library` ops. Measured 2026-10-10 under a whole-model `torch.compile(model, dynamic=False)`: no hard failures, but the CUDA-extension paths graph-break (details below). `LUTORCH_EX_NO_CUDA_EXT=1` forces the pure-torch path.
+
+**Scope decision (2026-10-10): which cartridge families get the bf16 + compile work.**
+
+| family | classes (`src/spiky/lutorch_ex/cartridges/`) | decision |
+|---|---|---|
+| **Gen-1 Manifesto** (the Spiking Manifesto paper's mechanism, the citable baseline) | `ManifestoHardLUT` (`manifesto_hard.py`), `ManifestoSoftLUT` (`manifesto_soft.py`), `FusedManifestoHardLUT` (`fused_manifesto_hard.py`), `FusedManifestoSoftLUT` (`fused_manifesto_soft.py`) | **in scope** for bf16 + whole-model compile |
+| **Gen-3 Confidence** (best performing) | `ConfidenceLUT` (`confidence.py`), `QuantisedConfidenceLUT` / `DeployedQuantisedConfidenceLUT` (`quantised_confidence.py`), and on `main` only `FusedConfidenceLUT` (`fused_confidence.py`, PR #157) | **in scope** for bf16 + whole-model compile |
+| **Gen-2 soft-sign** | `SoftSignHardLUT` (`softsign_hard.py`), `SoftSignSmoothLUT` (`softsign_smooth.py`), `FusedSoftSignHardLUT` / `FusedSoftSignSmoothLUT` (`fused_softsign.py`), base `SoftSignLUT` (`softsign_base.py`) | **out of scope**: left exactly as it is, unoptimised |
+
+"Soft-sign" and "Gen 2" are the **same** family *(code: `softsign_base.py` L1, "Shared structure for the Gen-2 'soft-sign' cartridge family")*. All three families derive from the abstract base `ManifestoLUT` (`manifesto_base.py`), which is where the bf16 check lives.
+
+What the code and a measurement say for the two in-scope families:
+- **Where bf16 is refused** *(code)*: an explicit check in `ManifestoLUT.forward` raises `TypeError` unless the class overrides `_supports_low_precision()` to return True. It is a Python check, not a kernel's dtype dispatch.
+  - `FusedManifestoHardLUT` / `FusedManifestoSoftLUT` override it. Their native lprojection kernels dispatch on the weight dtype (bf16 included), with fp32 addressing and fp32-accumulated reads.
+  - `ConfidenceLUT` and `QuantisedConfidenceLUT` do not override it, so they raise on bf16.
+  - `FusedConfidenceLUT` (main, #157) overrides it. Its CUDA kernels read a bf16 table and accumulate in fp32 (grad W in an fp32 buffer), and its `backend="pure"` path runs `ConfidenceLUT`'s math in fp32 on an fp32 view of the parameters.
+- **What it would take to make each bf16-clean** *(code for the mechanism; estimate for the effort)*:
+  - Manifesto: already done in the `Fused…` twins. Making the plain classes bf16-clean is a dispatch/cast wrapper (fp32 addressing, `x.float()`, fp32-accumulated reads, one cast back), the same idiom the twins use. No kernel change.
+  - Confidence: `FusedConfidenceLUT` is already bf16-clean on main. For plain `ConfidenceLUT` the wrapper exists as `FusedConfidenceLUT(backend="pure")`. `QuantisedConfidenceLUT` would need the same cast wrapper around its fp32 pow2/STE math, not a kernel change. Its numerics under that wrapper have not been checked.
+- **VERSION CAVEAT, important** *(code)*: `runs/setup_unified_env.sh` (L18–20) installs `lutorch_ex` editable from **this branch's** `src/spiky/lutorch_ex`. That copy predates PRs #154, #155 and #157, so **on this branch there is no `FusedConfidenceLUT`**: the best-performing family has no bf16 path in the code nanochat would load. Getting it needs `main` merged into this branch. A dry-run merge (2026-10-10) shows no conflicts; this branch is 36 commits behind `main`.
+- **torch.library** *(code)*: exactly one lutorch_ex op is registered as a custom op, `lutorch_ex::p2_scalars` (`_pow2_int8.py` L124, used by the quantised cartridge). The lprojection kernels and the `FusedConfidenceLUT` kernels are plain pybind extensions called from `autograd.Function`s.
+- **Whole-model torch.compile** *(measured, RTX 5090, main's lutorch_ex; a small stand-in block with each cartridge inside `ProjectionMHL`, `torch.compile(model, dynamic=False)` like `base_train.py` L337, one compiled train step plus `torch._dynamo.explain`)*:
+
+  | cartridge | fp32 | bf16 |
+  |---|---|---|
+  | `ManifestoHardLUT`, `ManifestoSoftLUT`, `ConfidenceLUT` n=1, `QuantisedConfidenceLUT` n=2 | OK, **1 graph, 0 breaks** | `TypeError` (the dtype check) |
+  | `FusedManifestoHardLUT` | OK, 6 graph breaks | OK, 6 graph breaks |
+  | `FusedManifestoSoftLUT` | OK, 7 graph breaks | OK, 7 graph breaks |
+  | `FusedConfidenceLUT` n=1 | OK, 6 graph breaks | OK, 6 graph breaks |
+
+  - **No hard failure anywhere.** The pybind calls graph-break ("Attempted to call function marked as skipped", "Unsupported method call"), which nanochat's non-`fullgraph` compile tolerates.
+  - The cost of those breaks on the real d24 step is **not measured**.
+  - `fullgraph=True` would fail on the `Fused…` paths *(estimate: follows from the breaks)*.
+  - Registering the kernels as `torch.library` custom ops is the fix if the breaks turn out to cost time.
+- **`ProjectionMHL` has no default cartridge** *(code: the cartridge is a required argument)*. The nanochat LUT-FFN passes `ConfidenceLUT` (`nanochat/nanochat/lut_ffn.py` L55), which is in scope. Stage 2a will pick its own.
+- **The FLOPs estimate above** is for the Manifesto hard read. `ConfidenceLUT` adds the per-table score, roughly `G·tph·nap` log-sigmoid terms plus `G·tph` exponentials (≈ 4,096 + 512 at the reference geometry), and `read_top_n` 2 doubles the read *(arithmetic)*. The projections still dominate.
 
 **The approach ladder**, cheapest to most expressive:
 1. **One shared table plus the per-layer gate:** 50,331,648 params instead of 603,979,776 (12×) *(code)*.
