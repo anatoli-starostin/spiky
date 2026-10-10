@@ -24,7 +24,7 @@ the table fits, on a lutorch_ex with index_dtype; int64 on one without).
   FusedManifestoSoft fms-pure  fms-tier1  fms-native              (+ -bf16)   auto -> tier1
   FusedSoftSignHard  fsh-tier1  fsh-native  fsh-native-eager      (+ -bf16)   auto -> native
   FusedSoftSignSmooth fss-tier1  fss-native  fss-native-eager     (+ -bf16)   auto -> tier1
-  ConfidenceLUT      conf-n1  conf-n2  conf-n1-fused  conf-n2-fused (fused = table_dtype=fp32, the fused read)
+  ConfidenceLUT      conf-n1  conf-n2  conf-n1-fused  conf-n2-fused (fused = fused_read=True,the fused read)
                      conf-n1-i64  conf-n1-fused-i64                (int64 index tie-in controls)
   Quantised          quant-n1  quant-n2                            (p2_int8)
   Deploy             deploy-n2   DeployedQuantisedConfidenceLUT from quant-n2.to_deployment()   [eval only]
@@ -34,7 +34,7 @@ records what it resolved to (train / eval), including whether a soft-sign native
 IN-PROCESS (--softsign-tail overrides both). LUTORCH_EX_NO_CUDA_EXT=1 cannot be used for that: it also disables the
 lprojection extension the native backward needs.
 
-An arm whose feature the profiled library lacks (table_dtype, index_dtype, a soft-sign kernel that does not build) is
+An arm whose feature the profiled library lacks (the fused read, index_dtype, a soft-sign kernel that does not build) is
 recorded as {"status": "n/a", "reason": ...} - never run on a substitute path. An OOM (or other error) in one arm is
 recorded and the session continues.
 
@@ -98,14 +98,14 @@ def _arms() -> dict:
         a[f"conf-n{n}"] = dict(cls="ConfidenceLUT", kw=dict(read_top_n=n, **CONF), dtype="float32", tail=None,
                                eval_only=False, needs=[], value_cells=n, weighted=True)
     for n in (1, 2):
-        a[f"conf-n{n}-fused"] = dict(cls="ConfidenceLUT", kw=dict(read_top_n=n, table_dtype="float32", **CONF),
-                                     dtype="float32", tail=None, eval_only=False, needs=["table_dtype"],
+        a[f"conf-n{n}-fused"] = dict(cls="ConfidenceLUT", kw=dict(read_top_n=n, fused_read=True, **CONF),
+                                     dtype="float32", tail=None, eval_only=False, needs=["fused_read"],
                                      value_cells=n, weighted=True)
     a["conf-n1-i64"] = dict(cls="ConfidenceLUT", kw=dict(read_top_n=1, index_dtype="int64", **CONF), dtype="float32",
                             tail=None, eval_only=False, needs=["index_dtype"], value_cells=1, weighted=True)
     a["conf-n1-fused-i64"] = dict(cls="ConfidenceLUT", kw=dict(read_top_n=1, index_dtype="int64",
-                                                               table_dtype="float32", **CONF),
-                                  dtype="float32", tail=None, eval_only=False, needs=["index_dtype", "table_dtype"],
+                                                               fused_read=True, **CONF),
+                                  dtype="float32", tail=None, eval_only=False, needs=["index_dtype", "fused_read"],
                                   value_cells=1, weighted=True)
     for n in (1, 2):
         a[f"quant-n{n}"] = dict(cls="QuantisedConfidenceLUT", kw=dict(read_top_n=n, quant_mode="p2_int8", **CONF),
@@ -134,7 +134,9 @@ def lib_features() -> dict:
     import spiky.lutorch_ex as lx
     from spiky.lutorch_ex.cartridges import _native_softsign as ns
     import warnings
-    _FEATURES["table_dtype"] = "table_dtype" in inspect.signature(lx.ConfidenceLUT.__init__).parameters
+    conf_params = inspect.signature(lx.ConfidenceLUT.__init__).parameters
+    # the fp32 fused read: ConfidenceLUT(fused_read=True), or table_dtype=float32 in the lutorch_ex that had narrow tables
+    _FEATURES["fused_read"] = "fused_read" in conf_params or "table_dtype" in conf_params
     _FEATURES["index_dtype"] = "index_dtype" in inspect.signature(lx.ManifestoLUT.__init__).parameters
     with warnings.catch_warnings(record=True) as wl:
         warnings.simplefilter("always")
@@ -149,7 +151,7 @@ def unmet(name: str) -> str | None:
     miss = [n for n in ARMS[name]["needs"] if not f.get(n)]
     if not miss:
         return None
-    why = {"table_dtype": "this lutorch_ex has no ConfidenceLUT(table_dtype=...) (no fused read)",
+    why = {"fused_read": "this lutorch_ex has no ConfidenceLUT fused read (neither fused_read= nor table_dtype=)",
            "index_dtype": "this lutorch_ex has no index_dtype option (every row is int64 there)",
            "ss_kernel": "the softsign_surrogate_grad CUDA kernel does not build/load in this lutorch_ex "
                         "(it falls back to the eager tail: see the -native-eager arm)"}
@@ -173,7 +175,10 @@ def build(name: str):
     import spiky.lutorch_ex as lx
     a = ARMS[name]
     _set_tail(name)
-    kw = {k: (_DT[v] if k in ("table_dtype", "index_dtype") else v) for k, v in a["kw"].items()}
+    kw = {k: (_DT[v] if k == "index_dtype" else v) for k, v in a["kw"].items()}
+    if kw.get("fused_read") and "fused_read" not in inspect.signature(lx.ConfidenceLUT.__init__).parameters:
+        del kw["fused_read"]
+        kw["table_dtype"] = torch.float32       # the same fp32 fused read in the lutorch_ex that had narrow tables
     if a["cls"] == "DeployedQuantisedConfidenceLUT":
         from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
         q = lx.QuantisedConfidenceLUT(spec(), quant_mode="p2_int8", read_top_n=2, **COMMON).cuda().train()
