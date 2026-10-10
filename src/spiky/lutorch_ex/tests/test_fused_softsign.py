@@ -151,7 +151,8 @@ def test_fused_defaults_and_backend_kwarg():
 
 
 # ---- backend validation: every accepted name runs; a wrong-but-plausible name raises ----------------
-from spiky.lutorch_ex.cartridges._native_ops import native_available  # noqa: E402
+from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_available  # noqa: E402
+from spiky.lutorch_ex.tests._native_required import require_extension  # noqa: E402
 
 _TRAINABLE = {"auto", "tier1", "native"}               # 'pure_eval' is the eval-only read
 
@@ -159,8 +160,8 @@ _TRAINABLE = {"auto", "tier1", "native"}               # 'pure_eval' is the eval
 @pytest.mark.parametrize("FusedCls,backend",
                          [(C, b) for C in (FusedSoftSignHardLUT, FusedSoftSignSmoothLUT) for b in C._BACKENDS])
 def test_every_accepted_backend_runs(FusedCls, backend):
-    if backend == "native" and not (torch.cuda.is_available() and native_available(torch.device("cuda"))):
-        pytest.skip("native lutorch_cuda ops not available")
+    if backend == "native":       # no CUDA device: skip; extension unavailable: skip, or fail when strict
+        require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     dev = "cuda" if backend == "native" else "cpu"
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).to(dev)

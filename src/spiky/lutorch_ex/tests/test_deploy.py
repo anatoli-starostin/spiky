@@ -5,7 +5,6 @@ CPU + fp32: the int8 read (_pow2.int_blend_read) and the quant eval fake-quant p
 torch, so this needs no CUDA / no JIT kernel."""
 import json
 
-import pytest
 import torch
 import torch.nn as nn
 
@@ -127,8 +126,8 @@ def test_torch_format_file_loads_with_or_without_safetensors(tmp_path):
 
 def test_save_falls_back_when_safetensors_cannot_write(tmp_path, monkeypatch):
     """safetensors importable but unable to write (e.g. numpy missing: ModuleNotFoundError inside save_file):
-    the payload is written with torch.save and loads back unchanged."""
-    st = pytest.importorskip("safetensors.torch")
+    the payload is written with torch.save and loads back unchanged. Needs the [test] extra (safetensors, numpy)."""
+    import safetensors.torch as st
     from spiky.lutorch_ex.deploy import _load_payload, _save_payload, _ZIP_MAGIC
 
     def no_numpy(*a, **k):

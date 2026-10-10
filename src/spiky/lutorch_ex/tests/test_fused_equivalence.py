@@ -80,15 +80,21 @@ def test_fused_equiv_cuda_f32(PureCls, FusedCls, name, h_in, h_out, B, backend, 
 
 
 # ---- backend validation: every accepted name runs; a wrong-but-plausible name raises ----------------
-from spiky.lutorch_ex.cartridges._native_ops import native_available  # noqa: E402
+from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import EXT_NAME as FUSED_MANIFESTO_EXT_NAME  # noqa: E402
+from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import fused_manifesto_ext  # noqa: E402
+from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_available  # noqa: E402
+from spiky.lutorch_ex.tests._native_required import require_extension  # noqa: E402
 
 _TRAINABLE = {"auto", "tier1", "native", "pure"}       # 'pure_eval' is the eval-only read
 
 
 def _run_backend(FusedCls, backend):
-    if backend == "native" and not (torch.cuda.is_available() and native_available(torch.device("cuda"))):
-        pytest.skip("native lutorch_cuda ops not available")
-    dev = "cuda" if backend == "native" else "cpu"
+    # No CUDA device: skip. A CUDA device without the extension: skip, or fail under SPIKY_LUTORCH_REQUIRE_NATIVE=1.
+    if backend == "native":
+        require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
+    if backend == "cuda":
+        require_extension(fused_manifesto_ext() is not None, FUSED_MANIFESTO_EXT_NAME)
+    dev = "cuda" if backend in ("native", "cuda") else "cpu"
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).to(dev)
     x = torch.randn(8, 2, 6, device=dev, requires_grad=True)

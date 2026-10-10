@@ -7,8 +7,16 @@ from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
 from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs, fused_confidence_ext
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or fused_confidence_ext() is None,
-                                reason="needs CUDA and the fused_confidence extension")
+from spiky.lutorch_ex.cartridges.fused_confidence import EXT_NAME
+from spiky.lutorch_ex.tests._native_required import require_extension
+
+# No CUDA device: skip. A CUDA device without the extension: skip, or fail under SPIKY_LUTORCH_REQUIRE_NATIVE=1.
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+
+
+@pytest.fixture(autouse=True)
+def _needs_fused_confidence_ext():
+    require_extension(fused_confidence_ext() is not None, EXT_NAME)
 
 
 def _pair(n, anchor_mode="pairs", rate=0.0, h_in=4, h_out=4, tph=16, nap=6, d=24, knobs=None):

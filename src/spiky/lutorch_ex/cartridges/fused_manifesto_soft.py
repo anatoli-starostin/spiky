@@ -5,16 +5,23 @@ numerically equivalent to the pure ManifestoSoftLUT oracle:
 
 * ``pure``   — base two-cell read + blend (the compiled read; best for small-batch eval);
 * ``tier1``  — one F.embedding_bag with per_sample_weights=[1-U, U] (fuses read+scale+sum);
-* ``native`` — the native lprojection_forward_smooth + its na1-smooth backward.
+* ``native`` — the native lprojection_forward_smooth + its na1-smooth backward;
+* ``cuda``   — hand-written kernels (``csrc/fused_manifesto.cu``): one forward and one backward
+  kernel, nothing per table in global memory.
 
-``backend`` forces a path ('pure'/'tier1'/'native'/'auto'); 'auto' is the hybrid.
+``backend`` forces a path ('pure'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid. In
+training 'auto' takes 'cuda' whenever it can run, at every batch size; otherwise (and in eval)
+the batch-size heuristic below applies unchanged. ``knobs`` (a :class:`ManifestoCudaKnobs`) sets
+the 'cuda' kernels' launch configuration.
 """
 from __future__ import annotations
 
 import torch
 
+from ._fused_manifesto_cuda import (MODE_SOFT, auto_wants_cuda, init_cuda_backend, manifesto_cuda_forward,
+                                    require_cuda, shape_ok)
 from ._fused_ops import fused_blend_read, _acc_dtype, validate_backend
-from ._native_ops import NativeSoft, native_available
+from ._native_ops import NativeSoft, native_available, raise_if_forced_native_unavailable, require_native_or_report
 from .manifesto_base import ManifestoLUT
 from .uncertainty import rational_uncertainty
 
@@ -24,12 +31,13 @@ _LOW_PREC = (torch.bfloat16, torch.float16)
 class FusedManifestoSoftLUT(ManifestoLUT):
     #: Every backend _forward_impl dispatches on ('auto' picks one of the others per call). The pure path is
     #: called 'pure' here (not 'pure_eval' as in the other twins): auto also uses it for CPU training.
-    _BACKENDS = ("auto", "pure", "tier1", "native")
+    _BACKENDS = ("auto", "pure", "tier1", "native", "cuda")
 
-    def __init__(self, spec, *, backend: str = "auto", **kw):
+    def __init__(self, spec, *, backend: str = "auto", knobs=None, **kw):
         validate_backend(type(self).__name__, backend, self._BACKENDS)
         super().__init__(spec, **kw)
         self.backend = backend
+        init_cuda_backend(self, knobs)
 
     def _supports_low_precision(self) -> bool:
         return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1)
@@ -64,13 +72,36 @@ class FusedManifestoSoftLUT(ManifestoLUT):
 
     def _pick(self, x: torch.Tensor) -> str:
         large = x.is_cuda and x.shape[0] >= self._LARGE_BATCH
+        # Train and eval: the fused 'cuda' kernels at every batch size when they can run (measured fastest against
+        # tier1, native and pure at 64 ... 32,768 vectors, both GPUs). Without them, the heuristic below as before: a
+        # missing extension is reported loudly, a non-cuda input falls through quietly.
+        if self.training:
+            nxt = "tier1" if large else ("native" if native_available(x.device) else ("tier1" if x.is_cuda else "pure"))
+        else:
+            nxt = "tier1" if large else "pure"
+        if auto_wants_cuda(self, x, nxt):
+            return "cuda"
         if large:
             return "tier1"                                   # embedding_bag wins at large batch
         if not self.training:
             return "pure"                                    # eval small/mid: compiled read wins
         if native_available(x.device):
             return "native"                                  # train small/mid: native step wins (fp32/bf16/fp16)
+        # Here native was the choice and is unavailable: on a CUDA input that is an involuntary fallback (reported
+        # once per process, or raised under SPIKY_LUTORCH_REQUIRE_NATIVE=1). The large-batch tier1 above is a
+        # deliberate heuristic and stays quiet. Already reported above when the 'cuda' kernels were the first choice
+        # for this input (one banner per fallback).
+        if not shape_ok(self, x):
+            require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1" if x.is_cuda else "pure"
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # The 'cuda' backend is one fused kernel per direction: dispatch it directly, like FusedConfidenceLUT, instead
+        # of through ManifestoLUT.forward's torch.compile(_forward_impl), which only graph-breaks at the extension call
+        # and costs ~0.1 ms of host time per eval call. Every other backend keeps the base forward unchanged.
+        if self.backend == "cuda" or (self.backend == "auto" and self._pick(x) == "cuda"):
+            return self._forward_impl(x)
+        return super().forward(x)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # bf16/fp16 support lives here (not in the pure base). fp32 addressing; fp32-accumulated
@@ -78,6 +109,13 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         low = x.dtype in _LOW_PREC
         xa = x.float() if low else x
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if self.backend == "native":
+            raise_if_forced_native_unavailable(type(self).__name__, x)
+        if self.backend == "cuda":
+            require_cuda(self, x)
+        self.last_backend = be                               # provenance for benchmarks (what actually ran)
+        if be == "cuda":                                     # addressing, read and backward all inside the kernels
+            return manifesto_cuda_forward(self, x, MODE_SOFT)
         # Every TRAIN path uses the compiled addressing (fuses the eager [B,G,tph,nap] materialization),
         # including the large-batch tier-1 (embedding_bag) route this cartridge picks at scale. Eval
         # keeps plain _addresses — it is already compiled whole by the base forward, so gating on

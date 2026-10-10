@@ -12,13 +12,26 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import os
 import statistics
 
 import torch
 
-from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs
-from spiky.lutorch_ex.lut_spec import LUTSpec
+# A timing run must never silently measure a slow fallback: an involuntary fallback is a hard error here
+# (cartridges/_fallback.py), unless the caller explicitly set the variable.
+os.environ.setdefault("SPIKY_LUTORCH_REQUIRE_NATIVE", "1")
+
+from spiky.lutorch_ex.cartridges._fallback import backend_of  # noqa: E402
+from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT  # noqa: E402
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs  # noqa: E402
+from spiky.lutorch_ex.lut_spec import LUTSpec  # noqa: E402
+
+
+def provenance(mod) -> str:
+    """The backend that actually ran, for the row label; raises if it cannot be determined (never report blind)."""
+    if isinstance(mod, FusedConfidenceLUT):
+        return backend_of(mod)
+    return "compiled ConfidenceLUT, " + ("fused read" if mod.fused_read else "default read")
 
 SPEC = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
 KW = dict(seed=1, table_dropout_rate=0.2)
@@ -113,7 +126,10 @@ def sweep(kind, n, x, go):
         mk = lambda ft, bt, r, v: CudaKnobs(fwd_threads=ft, bwd_threads=bt, rows_per_cta=r, vec_bf16=v)
     for ft, bt, r, v in grid:
         k = mk(ft, bt, r, v)
-        ms, _ = time_step(build(kind, n, k), x, go, iters=10, reps=1)
+        mod = build(kind, n, k)
+        ms, _ = time_step(mod, x, go, iters=10, reps=1)
+        if provenance(mod) != "cuda":
+            raise RuntimeError(f"sweep row ran backend {provenance(mod)!r}, not 'cuda'; refusing to report")
         rows.append((ms, k))
     for ms, k in sorted(rows, key=lambda t: t[0])[:8]:
         print(f"    {ms:8.3f} ms  {k}")
@@ -136,7 +152,8 @@ def main():
             mod = build(kind, n)
             fwd, _ = time_step(mod, x, go, fwd_only=True)
             ms, peak = time_step(mod, x, go)
-            print(f"  {kind:15s} fwd {fwd:7.3f} ms   fwd+bwd {ms:7.3f} ms  {peak:6.2f} GiB")
+            print(f"  {kind:15s} fwd {fwd:7.3f} ms   fwd+bwd {ms:7.3f} ms  {peak:6.2f} GiB   "
+                  f"[backend: {provenance(mod)}]")
             torch._dynamo.reset()
         if a.sweep:
             print("  sweep, fp32 table (fwd_threads, bwd_threads, rows_per_cta, vec):")
