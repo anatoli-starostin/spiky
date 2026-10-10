@@ -12,11 +12,17 @@ import spiky.lutorch_ex as lx
 from spiky.lutorch_ex.cartridges import _fallback
 from spiky.lutorch_ex.cartridges import _fused_manifesto_cuda as fmc
 from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import ManifestoCudaKnobs, fused_manifesto_ext
-from spiky.lutorch_ex.cartridges._native_ops import native_available
+from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_available
 from spiky.lutorch_ex.lut_spec import LUTSpec
+from spiky.lutorch_ex.tests._native_required import optional_extension, require_extension
 
-pytestmark = pytest.mark.skipif(not torch.cuda.is_available() or fused_manifesto_ext() is None,
-                                reason="needs CUDA and the lutorch_ex_fused_manifesto extension")
+# No CUDA device: skip. A CUDA device without the extension: skip, or fail under SPIKY_LUTORCH_REQUIRE_NATIVE=1.
+pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+
+
+@pytest.fixture(autouse=True)
+def _needs_fused_manifesto_ext():
+    require_extension(fused_manifesto_ext() is not None, fmc.EXT_NAME)
 
 HARD, SOFT = lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT
 # (h_in, h_out, d, tph, nap): two small geometries, a fan-in one and the canonical one.
@@ -60,7 +66,8 @@ def _inputs(spec, B, dtype=torch.float32, seed=0):
 
 
 def _refs(cls):
-    refs = ["tier1"] + (["native"] if native_available(torch.device("cuda")) else [])
+    refs = ["tier1"] + (["native"] if optional_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
+                        else [])
     return refs + (["pure"] if cls is SOFT else [])
 
 
@@ -111,8 +118,8 @@ def test_soft_oracle_gradient_is_the_true_derivative_gradcheck():
 @pytest.mark.parametrize("ref", ["tier1", "native"])
 def test_projection_gradients_match(cls, ref):
     """Inside ProjectionMHL: the compress / decompress weight and bias gradients and the input gradient."""
-    if ref == "native" and not native_available(torch.device("cuda")):
-        pytest.skip("native lprojection extension unavailable")
+    if ref == "native":
+        require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     spec = _spec("mid")
     res = {}
     for be in ("cuda", ref):
@@ -152,8 +159,7 @@ def test_cuda_bf16_matches_fp32_math_on_the_bf16_values(cls, geom, anchor_mode):
 
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 def test_cuda_bf16_matches_native_bf16(cls):
-    if not native_available(torch.device("cuda")):
-        pytest.skip("native lprojection extension unavailable")
+    require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     spec = _spec("canonical")
     x, go = _inputs(spec, 256, dtype=torch.bfloat16)
     got = _run(_make(cls, spec, "cuda", rate=0.2, dtype=torch.bfloat16), x, go)
