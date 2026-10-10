@@ -37,7 +37,8 @@ constexpr int HARD = 0;
 constexpr int SOFT = 1;
 
 struct Params {
-    const float* z;          // [B, G, d_in]
+    const float* z;          // [B, G, d_in], fp32 input (nullptr when the input is bf16)
+    const __nv_bfloat16* zb; // the same, bf16 input, upconverted when staged (nullptr when fp32)
     const int16_t* anc_a;    // [G, tph, nap]
     const int16_t* anc_b;    // [G, tph, nap], nullptr in single-anchor mode
     const float* W;          // [G * tph * K, d_out], fp32 table (nullptr when the table is bf16)
@@ -102,6 +103,12 @@ __device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
             v[2 * k + 1] = f.y;
         }
     }
+}
+
+// The input row is staged once per row into fp32 shared memory; a bf16 input is upconverted there (no fp32 copy of
+// the input in global memory). The branch is uniform across the CTA.
+__device__ inline float load_z(const Params& p, size_t i) {
+    return p.zb ? __bfloat162float(p.zb[i]) : p.z[i];
 }
 
 template <typename T> __device__ inline const T* table(const Params& p);
@@ -194,7 +201,7 @@ __global__ void manifesto_fwd_kernel(Params p, float* __restrict__ out) {
         const int b = b0 + r;
         if (b >= p.B) break;                              // uniform across the CTA
         const size_t row = (size_t)b * p.G + g;
-        for (int i = tid; i < p.d_in; i += bd) zs[i] = p.z[row * p.d_in + i];
+        for (int i = tid; i < p.d_in; i += bd) zs[i] = load_z(p, row * p.d_in + i);
         __syncthreads();
         for (int t = tid; t < p.tph; t += bd)
             address_table<MODE>(p, g, b, t, zs, sa, sb, cs, cas, w1, w2, nullptr, nullptr, nullptr);
@@ -265,7 +272,7 @@ __global__ void manifesto_bwd_kernel(Params p, const float* __restrict__ go, flo
         const int b = b0 + r;
         if (b >= p.B) break;
         const size_t row = (size_t)b * p.G + g;
-        for (int i = tid; i < p.d_in; i += bd) { zs[i] = p.z[row * p.d_in + i]; gzs[i] = 0.f; }
+        for (int i = tid; i < p.d_in; i += bd) { zs[i] = load_z(p, row * p.d_in + i); gzs[i] = 0.f; }
         for (int i = tid; i < p.d_out; i += bd) gos[i] = go[row * p.d_out + i];
         __syncthreads();
         for (int t = tid; t < p.tph; t += bd) {
@@ -319,7 +326,8 @@ __global__ void manifesto_bwd_kernel(Params p, const float* __restrict__ go, flo
 Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
                    const torch::Tensor& W, const c10::optional<torch::Tensor>& mask,
                    int nap, double eps, int rows_per_cta) {
-    TORCH_CHECK(z.is_cuda() && z.scalar_type() == torch::kFloat32 && z.is_contiguous() && z.dim() == 3, "z: contiguous fp32 CUDA [B, G, d_in]");
+    TORCH_CHECK(z.is_cuda() && (z.scalar_type() == torch::kFloat32 || z.scalar_type() == torch::kBFloat16) && z.is_contiguous()
+                && z.dim() == 3, "z: contiguous fp32 or bf16 CUDA [B, G, d_in]");
     TORCH_CHECK((W.scalar_type() == torch::kFloat32 || W.scalar_type() == torch::kBFloat16) && W.is_contiguous() && W.dim() == 2,
                 "W: contiguous fp32 or bf16 [rows, d_out]");
     TORCH_CHECK(anc_a.scalar_type() == torch::kInt16 && anc_a.is_contiguous() && anc_a.dim() == 3, "anchors: contiguous int16 [G, tph, nap]");
@@ -329,7 +337,9 @@ Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10
     TORCH_CHECK(nap >= 1 && nap <= MAX_NAP, "nap must be in [1, 16]");
     TORCH_CHECK(rows_per_cta >= 1, "rows_per_cta must be >= 1");
     Params p{};
-    p.z = z.data_ptr<float>();
+    const bool zbf16 = z.scalar_type() == torch::kBFloat16;
+    p.z = zbf16 ? nullptr : z.data_ptr<float>();
+    p.zb = zbf16 ? reinterpret_cast<const __nv_bfloat16*>(z.data_ptr()) : nullptr;
     p.anc_a = anc_a.data_ptr<int16_t>();
     p.anc_b = anc_b.has_value() ? anc_b->data_ptr<int16_t>() : nullptr;
     const bool bf16 = W.scalar_type() == torch::kBFloat16;
@@ -385,7 +395,7 @@ torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, mask, nap, eps, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
-    auto out = torch::empty({p.B, p.G, p.d_out}, z.options());   // fp32 for either table dtype
+    auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(torch::kFloat32));   // fp32 for any table / input dtype
     if (p.B == 0) return out;
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, false);
@@ -419,7 +429,7 @@ std::vector<torch::Tensor> manifesto_bwd(torch::Tensor go, torch::Tensor z, torc
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
     auto gW = torch::zeros(W.sizes(), W.options().dtype(torch::kFloat32));
-    auto gz = torch::empty_like(z);
+    auto gz = torch::empty(z.sizes(), z.options().dtype(torch::kFloat32));   // fp32 for either input dtype
     if (p.B == 0) return {gW, gz};
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, true);

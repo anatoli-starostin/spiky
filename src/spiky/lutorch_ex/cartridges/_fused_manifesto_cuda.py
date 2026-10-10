@@ -148,7 +148,8 @@ class _FusedManifesto(torch.autograd.Function):
             go.float().contiguous(), z, anc_a, anc_b, W2, mask, nap, eps, mode,
             bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         # gW accumulates in fp32 whatever the table dtype; cast once to the parameter's dtype.
-        return gz, gW.view_as(weights).to(weights.dtype), None, None, None, None, None, None, None
+        # gz is fp32; a bf16 z receives one cast (the same single rounding the input cast's backward used to do).
+        return gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), None, None, None, None, None, None, None
 
 
 def init_cuda_backend(module, knobs) -> None:
@@ -169,7 +170,9 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     # Group g reads input head g % h_in. When h_in == n_groups that map is the identity, so x already IS the per-group
     # input: skip the gather (eager it is a full extra pass + intermediate, which the compiled path used to fuse away).
     zin = x if module.spec.h_in == module.spec.n_groups else x[:, module.in_head, :]
-    z = zin.float().contiguous()                                     # fp32 addressing; grad flows back via the cast
+    # A bf16 input goes to the kernels as is: they upconvert it while staging each row (fp32 addressing, no fp32 copy of
+    # the input in global memory). fp16 / fp64 are cast to fp32 here as before.
+    z = (zin if zin.dtype in (torch.float32, torch.bfloat16) else zin.float()).contiguous()
     # Table dropout: the cartridge's own mask (one source of truth with the other backends: same draw, and an
     # overridden _table_dropout_mask is honoured), fp32, applied per table to the value and every gradient.
     mask = module._table_dropout_mask(x.shape[0], x.device, torch.float32)
