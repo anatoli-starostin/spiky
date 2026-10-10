@@ -905,13 +905,44 @@ async def main():
         # Periodically /compact any live thread whose context has grown past the
         # threshold — proactive summarize-and-continue so long DMs/threads stay lean
         # rather than waiting for the SDK's last-second automatic compaction.
+        # Manual trigger: `touch compact_now` (next to app.py) compacts every live thread once,
+        # regardless of size. Threads busy mid-reply are retried on each 15 s pass; the flag is
+        # removed once every live thread has been handled.
+        force_flag = HERE / "compact_now"
+        # Threads already handled in the current manual episode. Without this, a thread that stays
+        # busy keeps the flag alive and every idle thread is re-compacted every 15 s (summary of a
+        # summary). Each thread is compacted once per episode; the flag clears once all are covered.
+        forced: set[str] = set()
+        n = 0
         while True:
-            await asyncio.sleep(90)
+            await asyncio.sleep(15)
+            n += 1
+            force = force_flag.exists()
+            if not force:
+                forced.clear()
+                if n % 6:                    # the size-threshold check stays every ~90 s
+                    continue
             for thread in list(mind._threads.keys()):
                 try:
-                    await mind.maybe_compact(thread, COMPACT_AT_TOKENS)
+                    if not force:
+                        await mind.maybe_compact(thread, COMPACT_AT_TOKENS)
+                        continue
+                    rec = mind._threads.get(thread)
+                    if thread in forced or rec is None or rec[1].locked():
+                        continue             # done this episode / reaped / mid-reply: retry next pass
+                    done = await mind.maybe_compact(thread, 0)
+                    if done or not rec[1].locked():
+                        forced.add(thread)   # compacted (or nothing to do); a lost lock race retries
+                    if done:
+                        log.info("manual compact of thread %s done", thread)
                 except Exception:
                     log.exception("compactor failed for thread %s", thread)
+                    if force:
+                        forced.add(thread)   # don't hammer a failing thread every 15 s
+            if force and set(mind._threads) <= forced:
+                force_flag.unlink(missing_ok=True)
+                log.info("manual compact pass complete (%d thread(s))", len(forced))
+                forced.clear()
 
     async def heartbeat():
         # Touch a file so the body's transport_slack.available() knows the face is up
