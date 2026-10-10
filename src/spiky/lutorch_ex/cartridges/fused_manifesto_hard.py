@@ -79,6 +79,14 @@ class FusedManifestoHardLUT(ManifestoLUT):
             require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1"
 
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # The 'cuda' backend is one fused kernel per direction: dispatch it directly, like FusedConfidenceLUT, instead
+        # of through ManifestoLUT.forward's torch.compile(_forward_impl), which only graph-breaks at the extension call
+        # and costs ~0.1 ms of host time per eval call. Every other backend keeps the base forward unchanged.
+        if self.backend == "cuda" or (self.backend == "auto" and self._pick(x) == "cuda"):
+            return self._forward_impl(x)
+        return super().forward(x)
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         # bf16/fp16 support lives here (not in the pure base). Addressing runs in fp32 so the
         # discrete bit decisions don't flip vs fp32; every read/reduction accumulates in fp32
