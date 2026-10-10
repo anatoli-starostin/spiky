@@ -142,7 +142,7 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
 
     const int tid = threadIdx.x, bd = blockDim.x;
     const int g = blockIdx.x % p.G;
-    const int b0 = (blockIdx.x / p.G) * p.rows_per_cta;
+    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
     const int an = p.tph * p.nap;
     for (int i = tid; i < an; i += bd) {                 // this group's anchors, once per CTA
         sa[i] = p.anc_a[(size_t)g * an + i];
@@ -224,7 +224,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
 
     const int tid = threadIdx.x, bd = blockDim.x;
     const int g = blockIdx.x % p.G;
-    const int b0 = (blockIdx.x / p.G) * p.rows_per_cta;
+    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
     const int an = p.tph * p.nap, nap = p.nap;
     for (int i = tid; i < an; i += bd) {
         sa[i] = p.anc_a[(size_t)g * an + i];
@@ -328,9 +328,9 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
     float s1 = block_sum(g_lgamma, red);
     float s2 = block_sum(g_ltau, red);
     if (tid == 0) {
-        gscal[blockIdx.x * 3 + 0] = s0;
-        gscal[blockIdx.x * 3 + 1] = s1;
-        gscal[blockIdx.x * 3 + 2] = s2;
+        gscal[static_cast<int64_t>(blockIdx.x) * 3 + 0] = s0;
+        gscal[static_cast<int64_t>(blockIdx.x) * 3 + 1] = s1;
+        gscal[static_cast<int64_t>(blockIdx.x) * 3 + 2] = s2;
     }
 }
 
