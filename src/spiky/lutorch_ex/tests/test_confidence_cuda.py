@@ -67,6 +67,9 @@ def test_matches_confidence_lut(n, anchor_mode, rate):
     CudaKnobs(fwd_threads=32, bwd_threads=32, rows_per_cta=1, vec=1, vec_atomics=False),
     CudaKnobs(fwd_threads=64, bwd_threads=96, rows_per_cta=3, vec=2, vec_atomics=True),
     CudaKnobs(fwd_threads=256, bwd_threads=512, rows_per_cta=7, vec=4, vec_atomics=True),
+    CudaKnobs(fwd_threads=64, bwd_threads=64, rows_per_cta=4, vec=4, l2_hint=1),
+    CudaKnobs(fwd_threads=64, bwd_threads=64, rows_per_cta=4, vec=2, l2_hint=2),
+    CudaKnobs(fwd_threads=64, bwd_threads=64, rows_per_cta=4, vec=1, l2_hint=1),
 ])
 @pytest.mark.parametrize("n", [1, 2])
 def test_knobs_do_not_change_the_result(knobs, n):
@@ -92,6 +95,20 @@ def test_fan_in_and_d24_geometry():
         _close(o["cuda"][1], o["ref"][1], f"d24 n={n} grad x")
         for k in o["ref"][2]:
             _close(o["cuda"][2][k], o["ref"][2][k], f"d24 n={n} grad {k}")
+
+
+@pytest.mark.parametrize("target", [0, 1])
+def test_l2_window_does_not_change_the_result(target):
+    """The persisting access-policy window is a cache policy only; skipped where the device has none."""
+    _, max_persist, max_win = confidence_cuda_ext().l2_info()
+    if max_persist <= 0 or max_win <= 0:
+        pytest.skip("device has no persisting L2 / access-policy window")
+    ref, cud = _pair(2, knobs=CudaKnobs(l2_window=0.75, l2_window_target=target))
+    o = _run(ref, cud)
+    _close(o["cuda"][0], o["ref"][0], "forward")
+    _close(o["cuda"][1], o["ref"][1], "grad x")
+    for k in o["ref"][2]:
+        _close(o["cuda"][2][k], o["ref"][2][k], f"grad {k}")
 
 
 def test_falls_back_off_cuda_fp32():

@@ -74,6 +74,38 @@ __device__ inline void load_vec(const float* p, float (&v)[VEC]) {
     for (int k = 0; k < VEC; ++k) v[k] = f[k];
 }
 
+// L2 eviction-priority policy for the W reads (knob l2_hint): 0 none, 1 evict_last, 2 evict_first. Built once per
+// CTA with createpolicy (sm_80+), then passed to ld.global.nc.L2::cache_hint -- the same mechanism Triton emits for
+// eviction_policy='evict_last'.
+template <int HINT>
+__device__ inline uint64_t make_l2_policy() {
+    uint64_t pol = 0;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    if constexpr (HINT == 1) asm volatile("createpolicy.fractional.L2::evict_last.b64 %0, 1.0;" : "=l"(pol));
+    if constexpr (HINT == 2) asm volatile("createpolicy.fractional.L2::evict_first.b64 %0, 1.0;" : "=l"(pol));
+#endif
+    return pol;
+}
+
+template <int VEC, int HINT>
+__device__ inline void load_w(const float* p, float (&v)[VEC], uint64_t pol) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    if constexpr (HINT != 0) {
+        if constexpr (VEC == 4) {
+            asm volatile("ld.global.nc.L2::cache_hint.v4.f32 {%0, %1, %2, %3}, [%4], %5;"
+                         : "=f"(v[0]), "=f"(v[1]), "=f"(v[2]), "=f"(v[3]) : "l"(p), "l"(pol));
+        } else if constexpr (VEC == 2) {
+            asm volatile("ld.global.nc.L2::cache_hint.v2.f32 {%0, %1}, [%2], %3;"
+                         : "=f"(v[0]), "=f"(v[1]) : "l"(p), "l"(pol));
+        } else {
+            asm volatile("ld.global.nc.L2::cache_hint.f32 %0, [%1], %2;" : "=f"(v[0]) : "l"(p), "l"(pol));
+        }
+        return;
+    }
+#endif
+    load_vec<VEC>(p, v);
+}
+
 // log(sigmoid(x)), the same formula Inductor emits: min(0, x) - log1p(exp(-|x|)).
 __device__ inline float log_sigmoid(float x) { return fminf(0.f, x) - log1pf(expf(-fabsf(x))); }
 
@@ -125,7 +157,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
     }
 }
 
-template <int N, int VEC>
+template <int N, int VEC, int HINT>
 __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
     const int nchunk = p.d_out / VEC;
@@ -151,6 +183,7 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
     const float beta = expf(*p.log_beta), gamma = expf(*p.log_gamma);
     const float tau = (N == 2) ? expf(*p.log_tau) : 1.f;
     const int stripe = tid / nchunk, chunk = tid % nchunk;
+    const uint64_t pol = make_l2_policy<HINT>();
 
     for (int r = 0; r < p.rows_per_cta; ++r) {
         const int b = b0 + r;
@@ -165,12 +198,12 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
             float acc[VEC] = {};
             for (int t = stripe; t < p.tph; t += nstripe) {
                 float v[VEC];
-                load_vec<VEC>(p.W + (size_t)cs[t] * p.d_out + chunk * VEC, v);
+                load_w<VEC, HINT>(p.W + (size_t)cs[t] * p.d_out + chunk * VEC, v, pol);
                 const float a = w1[t];
 #pragma unroll
                 for (int k = 0; k < VEC; ++k) acc[k] = fmaf(a, v[k], acc[k]);
                 if constexpr (N == 2) {
-                    load_vec<VEC>(p.W + (size_t)cas[t] * p.d_out + chunk * VEC, v);
+                    load_w<VEC, HINT>(p.W + (size_t)cas[t] * p.d_out + chunk * VEC, v, pol);
                     const float a2 = w2[t];
 #pragma unroll
                     for (int k = 0; k < VEC; ++k) acc[k] = fmaf(a2, v[k], acc[k]);
@@ -201,7 +234,7 @@ __device__ inline float block_sum(float v, float* red) {
     return s;                                             // valid in thread 0
 }
 
-template <int N, int VEC>
+template <int N, int VEC, int HINT>
 __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, float* __restrict__ gW,
                                       float* __restrict__ gz, float* __restrict__ gscal, bool vec_atomics) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
@@ -234,6 +267,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
     const float tau = (N == 2) ? expf(*p.log_tau) : 1.f;
     const int stripe = tid / nchunk, chunk = tid % nchunk;
     float g_lbeta = 0.f, g_lgamma = 0.f, g_ltau = 0.f;   // this thread's share of the scalar gradients
+    const uint64_t pol = make_l2_policy<HINT>();
 
     for (int r = 0; r < p.rows_per_cta; ++r) {
         const int b = b0 + r;
@@ -256,7 +290,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
             for (int t = stripe; t < p.tph; t += nstripe) {
                 float v[VEC], d[VEC];
                 const size_t off = (size_t)cs[t] * p.d_out + chunk * VEC;
-                load_vec<VEC>(p.W + off, v);
+                load_w<VEC, HINT>(p.W + off, v, pol);
                 float dot = 0.f;
 #pragma unroll
                 for (int k = 0; k < VEC; ++k) { dot = fmaf(v[k], gv[k], dot); d[k] = w1[t] * gv[k]; }
@@ -264,7 +298,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
                 atomicAdd(&rc[t], dot);
                 if constexpr (N == 2) {
                     const size_t off2 = (size_t)cas[t] * p.d_out + chunk * VEC;
-                    load_vec<VEC>(p.W + off2, v);
+                    load_w<VEC, HINT>(p.W + off2, v, pol);
                     float dot2 = 0.f;
 #pragma unroll
                     for (int k = 0; k < VEC; ++k) { dot2 = fmaf(v[k], gv[k], dot2); d[k] = w2[t] * gv[k]; }
@@ -383,13 +417,74 @@ void check_launch(int threads, int vec, int d_out) {
         else TORCH_CHECK(false, "read_top_n must be 1 or 2");                             \
     }()
 
+#define DISPATCH_HINT(H, ...)                                                             \
+    [&] {                                                                                 \
+        if (H == 0) { constexpr int kH = 0; __VA_ARGS__(); }                              \
+        else if (H == 1) { constexpr int kH = 1; __VA_ARGS__(); }                         \
+        else if (H == 2) { constexpr int kH = 2; __VA_ARGS__(); }                         \
+        else TORCH_CHECK(false, "l2_hint must be 0 (none), 1 (evict_last) or 2 (evict_first)"); \
+    }()
+
+// Persisting-L2 access-policy window over [base, base + bytes) on `stream` for the lifetime of this object (knob
+// l2_window = hitRatio; <= 0 = off). The persisting carve-out (a device-wide limit) is set to min(bytes, the device
+// maximum) and left in place; the stream's window is cleared again on destruction so other kernels on the stream
+// are not affected.
+struct L2Window {
+    cudaStream_t stream;
+    bool on = false;
+    L2Window(cudaStream_t s, const void* base, size_t bytes, double ratio) : stream(s) {
+        if (ratio <= 0.0) return;
+        TORCH_CHECK(ratio <= 1.0, "l2_window (hitRatio) must be in (0, 1]");
+        int dev = 0, max_persist = 0, max_win = 0;
+        C10_CUDA_CHECK(cudaGetDevice(&dev));
+        C10_CUDA_CHECK(cudaDeviceGetAttribute(&max_persist, cudaDevAttrMaxPersistingL2CacheSize, dev));
+        C10_CUDA_CHECK(cudaDeviceGetAttribute(&max_win, cudaDevAttrMaxAccessPolicyWindowSize, dev));
+        TORCH_CHECK(max_persist > 0 && max_win > 0, "l2_window: this device has no persisting L2 / access-policy window");
+        const size_t want = std::min(bytes, (size_t)max_persist);
+        size_t cur = 0;
+        C10_CUDA_CHECK(cudaDeviceGetLimit(&cur, cudaLimitPersistingL2CacheSize));
+        if (cur != want) C10_CUDA_CHECK(cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, want));
+        cudaStreamAttrValue a{};
+        a.accessPolicyWindow.base_ptr = const_cast<void*>(base);
+        a.accessPolicyWindow.num_bytes = std::min(bytes, (size_t)max_win);
+        a.accessPolicyWindow.hitRatio = float(ratio);
+        a.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
+        a.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
+        C10_CUDA_CHECK(cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &a));
+        on = true;
+    }
+    ~L2Window() {
+        if (!on) return;
+        cudaStreamAttrValue a{};
+        a.accessPolicyWindow.num_bytes = 0;
+        cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &a);
+    }
+};
+
 }  // namespace
+
+std::vector<int64_t> l2_info() {
+    int dev = 0, l2 = 0, max_persist = 0, max_win = 0;
+    C10_CUDA_CHECK(cudaGetDevice(&dev));
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&l2, cudaDevAttrL2CacheSize, dev));
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&max_persist, cudaDevAttrMaxPersistingL2CacheSize, dev));
+    C10_CUDA_CHECK(cudaDeviceGetAttribute(&max_win, cudaDevAttrMaxAccessPolicyWindowSize, dev));
+    return {l2, max_persist, max_win};
+}
+
+// Undo everything an l2_window leaves behind: persisting lines stay resident (and the carve-out stays reserved)
+// after the stream window is cleared, shrinking the normal L2 for every later kernel. Synchronises the device.
+void l2_reset() {
+    C10_CUDA_CHECK(cudaDeviceSynchronize());
+    C10_CUDA_CHECK(cudaCtxResetPersistingL2Cache());
+    C10_CUDA_CHECK(cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, 0));
+}
 
 torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<torch::Tensor> anc_b,
                              torch::Tensor W, c10::optional<torch::Tensor> keep, double keep_scale,
                              torch::Tensor log_beta, torch::Tensor log_gamma, torch::Tensor log_tau,
                              int64_t nap, double eps, int64_t read_top_n,
-                             int64_t threads, int64_t rows_per_cta, int64_t vec) {
+                             int64_t threads, int64_t rows_per_cta, int64_t vec, int64_t l2_hint, double l2_window) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
     check_launch(threads, vec, p.d_out);
@@ -399,10 +494,13 @@ torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, false);
     const int grid = p.G * ((p.B + rows_per_cta - 1) / rows_per_cta);
     auto stream = at::cuda::getCurrentCUDAStream();
-    DISPATCH_N_VEC(read_top_n, vec, [&] {
-        auto k = confidence_fwd_kernel<kN, kV>;
-        if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-        k<<<grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+    const L2Window win(stream, W.data_ptr(), W.nbytes(), l2_window);
+    DISPATCH_HINT(l2_hint, [&] {
+        DISPATCH_N_VEC(read_top_n, vec, [&] {
+            auto k = confidence_fwd_kernel<kN, kV, kH>;
+            if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
+            k<<<grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+        });
     });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return out;
@@ -413,12 +511,14 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
                                           c10::optional<torch::Tensor> keep, double keep_scale,
                                           torch::Tensor log_beta, torch::Tensor log_gamma, torch::Tensor log_tau,
                                           int64_t nap, double eps, int64_t read_top_n,
-                                          int64_t threads, int64_t rows_per_cta, int64_t vec, bool vec_atomics) {
+                                          int64_t threads, int64_t rows_per_cta, int64_t vec, bool vec_atomics,
+                                          int64_t l2_hint, double l2_window, int64_t l2_window_target) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
     check_launch(threads, vec, p.d_out);
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
+    TORCH_CHECK(l2_window_target == 0 || l2_window_target == 1, "l2_window_target must be 0 (W) or 1 (grad W)");
     auto gW = torch::zeros_like(W);
     auto gz = torch::empty_like(z);
     const int grid = p.G * ((p.B + rows_per_cta - 1) / rows_per_cta);
@@ -427,11 +527,14 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, true);
     auto stream = at::cuda::getCurrentCUDAStream();
-    DISPATCH_N_VEC(read_top_n, vec, [&] {
-        auto k = confidence_bwd_kernel<kN, kV>;
-        if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-        k<<<grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(), gz.data_ptr<float>(),
-                                              gscal.data_ptr<float>(), vec_atomics);
+    const L2Window win(stream, l2_window_target == 0 ? W.data_ptr() : gW.data_ptr(), W.nbytes(), l2_window);
+    DISPATCH_HINT(l2_hint, [&] {
+        DISPATCH_N_VEC(read_top_n, vec, [&] {
+            auto k = confidence_bwd_kernel<kN, kV, kH>;
+            if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
+            k<<<grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(), gz.data_ptr<float>(),
+                                                  gscal.data_ptr<float>(), vec_atomics);
+        });
     });
     C10_CUDA_KERNEL_LAUNCH_CHECK();
     return {gW, gz, gscal};
@@ -440,4 +543,6 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("confidence_fwd", &confidence_fwd, "ConfidenceLUT fused forward (CUDA)");
     m.def("confidence_bwd", &confidence_bwd, "ConfidenceLUT fused backward (CUDA)");
+    m.def("l2_reset", &l2_reset, "sync, reset persisting L2 lines, set the persisting carve-out to 0");
+    m.def("l2_info", &l2_info, "[L2 bytes, max persisting L2 bytes, max access-policy window bytes]");
 }

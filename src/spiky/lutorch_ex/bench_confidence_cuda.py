@@ -84,13 +84,53 @@ def errors_vs_fp64(n, B=4096):
     return res
 
 
+L2_CONFIGS = [  # (l2_hint, l2_window, l2_window_target)
+    (0, 0.0, 0), (1, 0.0, 0), (2, 0.0, 0),
+    (0, 0.5, 0), (0, 0.75, 0), (0, 1.0, 0),
+    (0, 0.5, 1), (0, 1.0, 1),
+    (1, 0.75, 0), (1, 1.0, 0),
+]
+
+
+def l2_sweep(n, x, go, rounds=3):
+    """CUDA twin at the default knobs under each L2 configuration; configs interleaved, median over rounds."""
+    from spiky.lutorch_ex.cartridges.confidence_cuda import confidence_cuda_ext
+    ext = confidence_cuda_ext()
+    l2, persist, win = ext.l2_info()
+    print(f"  L2 {l2 / 2**20:.1f} MiB, max persisting {persist / 2**20:.1f} MiB, max window {win / 2**20:.1f} MiB; "
+          f"W {build('cuda', n).weights.numel() * 4 / 2**20:.1f} MiB")
+    times = {c: [] for c in L2_CONFIGS}
+    for _ in range(rounds):
+        for c in L2_CONFIGS:
+            if c[1] > 0 and (persist <= 0 or win <= 0):
+                continue
+            k = CudaKnobs(l2_hint=c[0], l2_window=c[1], l2_window_target=c[2])
+            ext.l2_reset()        # a window leaves persisting lines + the carve-out behind: start every config clean
+            times[c].append(time_step(build("cuda", n, k), x, go)[0])
+    ext.l2_reset()
+    base = statistics.median(times[(0, 0.0, 0)])
+    for c, ts in times.items():
+        if ts:
+            m = statistics.median(ts)
+            print(f"    hint={c[0]} window={c[1]:.2f} target={'W' if c[2] == 0 else 'gW'}  {m:8.3f} ms  "
+                  f"({100 * (m / base - 1):+.1f}%)  [{', '.join(f'{t:.3f}' for t in ts)}]")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tokens", type=int, default=32768)
     ap.add_argument("--n", type=int, nargs="+", default=[1, 2])
     ap.add_argument("--sweep", action="store_true")
+    ap.add_argument("--l2-sweep", action="store_true", help="only the CUDA twin, across the L2 knobs")
     a = ap.parse_args()
     print(f"device {torch.cuda.get_device_name()}  torch {torch.__version__}  tokens {a.tokens}")
+    if a.l2_sweep:
+        x = torch.randn(a.tokens, 16, 48, device="cuda", requires_grad=True)
+        go = torch.randn(a.tokens, 16, 48, device="cuda")
+        for n in a.n:
+            print(f"\n== read_top_n={n}: CUDA twin, L2 knobs (median of 3 interleaved rounds x 3 x 20 iters)")
+            l2_sweep(n, x, go)
+        return
     x = torch.randn(a.tokens, 16, 48, device="cuda", requires_grad=True)
     go = torch.randn(a.tokens, 16, 48, device="cuda")
     for n in a.n:
