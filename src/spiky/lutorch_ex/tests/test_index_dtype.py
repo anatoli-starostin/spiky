@@ -9,8 +9,8 @@ parameters, ProjectionMHL compress/decompress, input), measured 2026-10-09:
   * The fused twins on their tier1 (embedding_bag) path. Their NATIVE CUDA kernels read int32 indices directly
     (templated on the index type) and are nondeterministic in their own baseline (custom-kernel atomics), so there
     only closeness within that baseline noise is asserted; exact per-kernel parity is in test_native_index_dtype.py.
-  * EVAL: bit-identical, CPU and CUDA (one compiled CUDA case is asserted with a tolerance for an Inductor
-    autotuning reason, not an index-dtype one -- see test_eval_int32_vs_int64).
+  * EVAL: bit-identical, CPU and CUDA, every cartridge. The compiled CUDA comparison is built with Inductor's
+    pointwise autotuning off, so both sides get the same kernel configs -- see test_eval_int32_vs_int64.
 """
 import contextlib
 
@@ -108,21 +108,22 @@ def test_fused_native_close_within_baseline_noise(name):
 @pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("name,kw", CARTRIDGES, ids=[n + str(kw.get("read_top_n", "")) for n, kw in CARTRIDGES])
 def test_eval_int32_vs_int64(device, name, kw):
+    # The eval forward is torch.compiled on CUDA, and the int64 and int32 models are two separate compilations. With
+    # pointwise autotuning on, Inductor BENCHMARKS candidate kernel configs (block size, warps) for each and keeps the
+    # fastest, so timing noise can give the two sides different configs -> a different fp32 summation order -> a
+    # sub-ulp difference that has nothing to do with the index dtype, and differs from run to run. Autotuning off
+    # makes the config choice deterministic and identical for both sides, so the comparison isolates the index dtype.
+    import torch._inductor.config as inductor_config
     spec = LUTSpec(**GEOM)
     outs = []
-    for dt in (torch.int64, torch.int32):
-        torch.manual_seed(0)
-        m = getattr(lx, name)(spec, seed=1, index_dtype=dt, **kw).to(device).eval()
-        with torch.no_grad():
-            outs.append(m(torch.randn(128, spec.h_in, spec.d_in, generator=torch.Generator().manual_seed(2)).to(device)))
-    if name == "ConfidenceLUT" and kw.get("read_top_n") == 1 and device == "cuda":
-        # Not an index-dtype issue: Inductor's autotuner may pick different XBLOCK / num_warps winners for the int32-
-        # and int64-indexed eval kernels, which changes the fp32 summation order (<= 1 ulp of the output scale at this
-        # geometry). Bit-identical with triton.autotune_pointwise=False or under use_deterministic_algorithms(True),
-        # and zero at the production geometry (h=16, tph=64, nap=8, d=48).
-        torch.testing.assert_close(outs[1], outs[0], rtol=1e-6, atol=1e-7)
-    else:
-        assert torch.equal(*outs)
+    with inductor_config.patch({"triton.autotune_pointwise": False}):
+        for dt in (torch.int64, torch.int32):
+            torch.manual_seed(0)
+            m = getattr(lx, name)(spec, seed=1, index_dtype=dt, **kw).to(device).eval()
+            with torch.no_grad():
+                outs.append(m(torch.randn(128, spec.h_in, spec.d_in,
+                                          generator=torch.Generator().manual_seed(2)).to(device)))
+    assert torch.equal(*outs)
 
 
 @pytest.mark.parametrize("device", DEVICES)
