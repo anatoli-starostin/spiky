@@ -52,6 +52,39 @@ _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasat
 
 _LOW_PRECISION = (torch.bfloat16, torch.float16)
 
+# Cell-index dtypes (``index_dtype``, every cartridge). The index the reads consume is the FLAT row index into the
+# [n_groups * tph * 2**nap, d_out] table, up to n_groups * tph * 2**nap - 1 (262,143 at h=16, tph=64, nap=8), not the
+# within-table cell id < 2**nap; and torch's index ops (embedding_bag, index_select, index_add_, indexing) accept
+# only int32 / int64. So int32 is the only narrowing; int16/int8 cannot represent the flat index and are rejected.
+INDEX_DTYPES = (torch.int64, torch.int32)
+
+
+def check_index_dtype(index_dtype, spec) -> torch.dtype:
+    if index_dtype not in INDEX_DTYPES:
+        raise ValueError(f"index_dtype must be one of {INDEX_DTYPES}, got {index_dtype!r}")
+    max_flat = spec.n_groups * spec.tph * spec.n_cells - 1
+    if max_flat > torch.iinfo(index_dtype).max:
+        raise ValueError(f"index_dtype={index_dtype} cannot hold the flat cell index (max {max_flat})")
+    return index_dtype
+
+
+def resolve_index_dtype(index_dtype: Optional[torch.dtype], spec) -> torch.dtype:
+    """``None`` (the default) -> int32 when the flat cell index fits it, else int64. An explicit dtype is honoured
+    exactly (an explicit int32 that does not fit raises, from :func:`check_index_dtype`). Only the STORED cell-index
+    tensors use this dtype; offset arithmetic and the powers buffer stay int64."""
+    if index_dtype is None:
+        fits = spec.n_groups * spec.tph * spec.n_cells - 1 <= torch.iinfo(torch.int32).max
+        return torch.int32 if fits else torch.int64
+    return check_index_dtype(index_dtype, spec)
+
+
+# Auto mode also widens per call: some PyTorch kernels use the index dtype for POSITIONS, not just values -- the CUDA
+# embedding_bag forward device-asserts above 2**31 - 1 index entries with int32 (measured, torch 2.9.1), so an
+# auto-int32 cartridge reads in int64 for a call whose read could exceed it (B * n_groups * tph * 2 entries, 2 = the
+# most cells any read takes per table). The separate, much lower embedding_bag BACKWARD size limit is a documented
+# upstream constraint, not enforced here (README: "PyTorch's embedding_bag backward size limit").
+_INT32_MAX_ENTRIES = torch.iinfo(torch.int32).max
+
 
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
@@ -94,12 +127,15 @@ class ManifestoLUT(MultiHeadLUT):
         cmp_eps: float = 0.0,
         table_dropout_rate: float = 0.0,
         device: Optional[torch.device] = None,
+        index_dtype: Optional[torch.dtype] = None,
         **unused,
     ):
         super().__init__(spec)
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
+        self.index_dtype = resolve_index_dtype(index_dtype, spec)
+        self._index_dtype_auto = index_dtype is None     # auto may widen per call (see _INT32_MAX_ENTRIES)
         # Table-level (whole-table) inverted dropout rate; 0 = off (default, every existing cartridge
         # byte-identical). See :meth:`_table_dropout_mask` / :meth:`_drop_tables`.
         self.table_dropout_rate = float(table_dropout_rate)
@@ -326,9 +362,17 @@ class ManifestoLUT(MultiHeadLUT):
             idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
             z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
             u = z_a - z_b
-        c = ((u > self.cmp_eps).to(torch.long) * self.powers).sum(dim=-1)  # MSB-first, stop-grad
+        # The one place every cartridge's cell index is produced: in index_dtype (int32 by default when the table fits,
+        # else int64; or an explicit choice), so every downstream read (_global_cells keeps c's dtype), the native
+        # kernels and the saved tensors use it. powers stays an int64 buffer; only the stored indices narrow.
+        dt = self.index_dtype
+        if dt == torch.int32 and getattr(self, "_index_dtype_auto", False) and \
+                B * G * tph * 2 > _INT32_MAX_ENTRIES:            # auto: widen a call too large for int32 positions
+            dt = torch.int64
+        powers = self.powers.to(dt)
+        c = ((u > self.cmp_eps).to(dt) * powers).sum(dim=-1, dtype=dt)     # MSB-first, stop-grad
         u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
-        c_alt = c ^ self.powers[j_star]
+        c_alt = c ^ powers[j_star]
         return z, u, c, j_star, u_abs_star, c_alt
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:

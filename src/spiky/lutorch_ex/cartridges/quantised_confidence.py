@@ -35,7 +35,7 @@ from ..lut_spec import LUTSpec
 from . import _pow2, _pow2_int8
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
-from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION
+from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION, resolve_index_dtype
 
 
 class QuantisedConfidenceLUT(ConfidenceLUT):
@@ -50,6 +50,9 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
         # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the
         # only one deployment supports. read_top_n=1 stays constructible and trainable, just not exportable.
+        if kw.get("fused_read"):
+            raise ValueError("QuantisedConfidenceLUT has its own fake-quant table read; fused_read is a ConfidenceLUT "
+                             "option and cannot be combined with it")
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
         if self._quant is None:
@@ -172,9 +175,14 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         W = _pow2.ste_tables(self.weights.reshape(G * tph, K, d_out), n_heads=G,
                              bits=cfg["bits"], offset=cfg["offset"])
         flat_q = W.reshape(-1, d_out)
-        toff = (torch.arange(G * tph, device=x.device, dtype=torch.long) * K).view(1, G, tph, 1)
-        flat_idx = (idx + toff).reshape(-1)
-        offsets = torch.arange(B * G, device=x.device, dtype=torch.long) * (2 * tph)
+        # embedding_bag wants indices and offsets of one dtype; int32 offsets reach B*G*2*tph, so fall back to int64
+        # for batches where that would not fit.
+        dt = self.index_dtype
+        if dt == torch.int32 and B * G * 2 * tph > torch.iinfo(torch.int32).max:
+            dt = torch.long
+        toff = (torch.arange(G * tph, device=x.device, dtype=dt) * K).view(1, G, tph, 1)
+        flat_idx = (idx.to(dt) + toff).reshape(-1)
+        offsets = torch.arange(B * G, device=x.device, dtype=dt) * (2 * tph)
         grp_out = F.embedding_bag(flat_idx, flat_q, offsets=offsets, mode="sum",
                                   per_sample_weights=psw.reshape(-1).to(flat_q.dtype)).view(B, G, d_out)
         # Apply the routing invariant: a no-op passthrough for the per-head/fan-out case (h_out == G,
@@ -319,9 +327,12 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     holds no cartridge-specific knowledge; it is reached only via the format-tag registry (see
     :meth:`QuantisedConfidenceLUT.from_deployment`)."""
 
-    def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None):
+    def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None,
+                 index_dtype: Optional[torch.dtype] = None):
         nn.Module.__init__(self)   # skip the fp32-weight-allocating ManifestoLUT.__init__
         self.spec = spec
+        self.index_dtype = resolve_index_dtype(index_dtype, spec)   # what ManifestoLUT.__init__ would set
+        self._index_dtype_auto = index_dtype is None
         self.read_top_n = int(meta["read_top_n"])
         if self.read_top_n != 2:
             raise NotImplementedError("DeployedQuantisedConfidenceLUT supports read_top_n==2 only")

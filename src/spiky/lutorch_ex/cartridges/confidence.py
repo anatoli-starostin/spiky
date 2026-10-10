@@ -31,6 +31,7 @@ Read path mirrors the pure SoftSign cartridges: the train read is one ``F.embedd
 the per-table gather + the score-scaled tph-sum, no ``[B,G,tph,d_out]`` tensor), eval reads the
 plain gather, and torch.compile wraps the eval forward on CUDA only (inherited from the base).
 Backward is plain autograd — ``s_t`` / ``v`` (and their temperatures) are fully differentiable.
+``fused_read=True`` replaces both reads with the fused gather read (``cartridges/_fused_read.py``).
 """
 from __future__ import annotations
 
@@ -41,6 +42,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ._fused_ops import _global_cells
+from ._fused_read import fused_scored_read
 from .manifesto_base import ManifestoLUT
 
 
@@ -53,6 +55,8 @@ class ConfidenceLUT(ManifestoLUT):
         read_tau_init: initial τ for read_top_n=2 (champion 0.5).
         read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer.
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
+        fused_read: read via the fused gather -> x score -> sum (cartridges/_fused_read.py) instead of the
+            default embedding_bag read; replaces embedding_bag's forward and score-gradient kernels (default False).
     """
 
     # Compile the TRAIN forward too (not just eval): the score/blend read-out folds into a handful
@@ -71,9 +75,13 @@ class ConfidenceLUT(ManifestoLUT):
         read_tau_init: float = 0.5,
         read_tau_learnable: bool = True,
         learnable_score: bool = True,
+        fused_read: bool = False,
         **kw,
     ):
         super().__init__(spec, **kw)
+        # Fused read (see cartridges/_fused_read.py): gather -> x score -> sum from the fp32 master, replacing
+        # embedding_bag's forward and score-gradient kernels. False (default) = the unchanged embedding_bag read.
+        self.fused_read = bool(fused_read)
         if read_top_n not in (1, 2):
             raise ValueError(f"read_top_n must be 1 or 2, got {read_top_n}")
         if not (beta_init > 0 and gamma_init > 0 and read_tau_init > 0):
@@ -144,6 +152,19 @@ class ConfidenceLUT(ManifestoLUT):
     def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
         raise NotImplementedError
 
+    def _fused_read(self, c, c_alt, s, v) -> torch.Tensor:
+        """Score-weighted read via :func:`fused_scored_read` from the master table (``fused_read=True``)."""
+        G, tph, K, d_out = self.weights.shape
+        B = c.shape[0]
+        W2 = self.weights.reshape(G * tph * K, d_out)
+        if self.read_top_n == 1:
+            idx = _global_cells(c, G, tph, K).reshape(B * G, tph)
+            psw = s.reshape(B * G, tph)
+        else:
+            idx = torch.cat([_global_cells(c, G, tph, K), _global_cells(c_alt, G, tph, K)], dim=2).reshape(B * G, 2 * tph)
+            psw = torch.cat([s * (1.0 - v), s * v], dim=2).reshape(B * G, 2 * tph)
+        return fused_scored_read(idx, psw.to(W2.dtype), W2).reshape(B, G, d_out)
+
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         s = self._score(u)                                    # [B, G, tph]
@@ -152,6 +173,9 @@ class ConfidenceLUT(ManifestoLUT):
         mask = self._table_dropout_mask(s.shape[0], s.device, s.dtype)
         if mask is not None:
             s = s * mask
+        if self.fused_read:
+            v = self._blend_v(u_abs_star) if self.read_top_n == 2 else None
+            return self._route(self._fused_read(c, c_alt, s, v), x)
         if self.read_top_n == 1:
             if self.training:
                 grp_out = self._scored_read(c, s)

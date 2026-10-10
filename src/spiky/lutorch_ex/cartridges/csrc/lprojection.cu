@@ -681,15 +681,18 @@ __global__ void wta_lookup_backward_kernel(
     atomicAdd(x_grad_flat_ptr + idx_alt,    -du);
 }
 
-template <typename scalar_t, typename acc_t = at::acc_type<scalar_t, true>>
+// Cell-index kernels (index_t = int32_t or int64_t): only the STORED index tensors are index_t. Every index is
+// loaded into an int64_t local and all offset arithmetic -- (table * n_entries + entry) * n_outputs + o -- stays
+// int64, because rows * d_out can exceed 2^31 even when every stored index fits int32.
+template <typename scalar_t, typename index_t = int64_t, typename acc_t = at::acc_type<scalar_t, true>>
 __global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
     int64_t total_bt,
     int64_t n_tables,
     int64_t n_outputs,
     int64_t n_entries,
     const scalar_t* grad_output_ptr,
-    const int64_t* table_indices_flat_ptr,
-    const int64_t* lookup_indices_flat_ptr,
+    const index_t* table_indices_flat_ptr,
+    const index_t* lookup_indices_flat_ptr,
     int64_t grad_output_stride0,
     int64_t grad_output_stride1,
     int64_t grad_output_stride2,
@@ -705,8 +708,8 @@ __global__ void lprojection_backward_na1_nonsmooth_weights_kernel(
     int64_t b = bt / n_tables;
     int64_t t = bt - b * n_tables;
     scalar_t g = grad_output_ptr[b * grad_output_stride0 + t * grad_output_stride1 + o * grad_output_stride2];
-    int64_t table = table_indices_flat_ptr[bt];
-    int64_t entry = lookup_indices_flat_ptr[bt];
+    int64_t table = static_cast<int64_t>(table_indices_flat_ptr[bt]);
+    int64_t entry = static_cast<int64_t>(lookup_indices_flat_ptr[bt]);
     int64_t widx = (table * n_entries + entry) * n_outputs + o;
     atomicAdd(weights_grad_ptr + widx, static_cast<acc_t>(g));  // fp32 accumulation for bf16/fp16
 }
@@ -742,7 +745,7 @@ __global__ void lprojection_forward_smooth_weights_kernel(
     main_weight_ptr[bt] = static_cast<scalar_t>(static_cast<acc_t>(1.0) - uncertainty_sum * inv_n_alt);
 }
 
-template <typename scalar_t>
+template <typename scalar_t, typename index_t = int64_t>
 __global__ void lprojection_forward_smooth_output_kernel(
     int64_t total_bt,
     int64_t n_tables,
@@ -750,10 +753,10 @@ __global__ void lprojection_forward_smooth_output_kernel(
     int64_t n_entries,
     int64_t n_alternatives,
     const scalar_t* weights_ptr,                 // [T,E,O] contiguous
-    const int64_t* table_indices_flat_ptr,       // [B*T]
-    const int64_t* lookup_indices_flat_ptr,      // [B*T]
-    const int64_t* table_indices_alt_flat_ptr,   // [B*T*A]
-    const int64_t* lookup_alt_indices_flat_ptr,  // [B*T*A]
+    const index_t* table_indices_flat_ptr,       // [B*T]
+    const index_t* lookup_indices_flat_ptr,      // [B*T]
+    const index_t* table_indices_alt_flat_ptr,   // [B*T*A]
+    const index_t* lookup_alt_indices_flat_ptr,  // [B*T*A]
     const scalar_t* main_weight_ptr,             // [B*T]
     const scalar_t* alt_weight_ptr,              // [B*T*A]
     scalar_t* output_ptr                         // [B,T,O] contiguous
@@ -786,17 +789,17 @@ __global__ void lprojection_forward_smooth_output_kernel(
     output_ptr[(b * n_tables + t) * n_outputs + o] = static_cast<scalar_t>(acc);
 }
 
-template <typename scalar_t, typename acc_t = at::acc_type<scalar_t, true>>
+template <typename scalar_t, typename index_t = int64_t, typename acc_t = at::acc_type<scalar_t, true>>
 __global__ void lprojection_backward_na1_smooth_weights_kernel(
     int64_t total_bt,
     int64_t n_tables,
     int64_t n_outputs,
     int64_t n_entries,
     const scalar_t* grad_output_ptr,
-    const int64_t* table_indices_flat_ptr,
-    const int64_t* lookup_indices_flat_ptr,
-    const int64_t* table_indices_alt_flat_ptr,
-    const int64_t* lookup_alt_indices_flat_ptr,
+    const index_t* table_indices_flat_ptr,
+    const index_t* lookup_indices_flat_ptr,
+    const index_t* table_indices_alt_flat_ptr,
+    const index_t* lookup_alt_indices_flat_ptr,
     const scalar_t* main_weight_flat_ptr,
     const scalar_t* alt_weight_flat_ptr,
     int64_t grad_output_stride0,
@@ -828,7 +831,7 @@ __global__ void lprojection_backward_na1_smooth_weights_kernel(
     atomicAdd(weights_grad_ptr + widx_alt, g_alt);
 }
 
-template <typename scalar_t>
+template <typename scalar_t, typename index_t = int64_t>
 __global__ void lprojection_backward_na1_carriers_kernel(
     int64_t total_bt,
     int64_t n_tables,
@@ -836,10 +839,10 @@ __global__ void lprojection_backward_na1_carriers_kernel(
     int64_t n_entries,
     const scalar_t* grad_output_ptr,
     const scalar_t* weights_ptr,
-    const int64_t* table_indices_flat_ptr,
-    const int64_t* lookup_indices_flat_ptr,
-    const int64_t* table_indices_alt_flat_ptr,
-    const int64_t* lookup_alt_indices_flat_ptr,
+    const index_t* table_indices_flat_ptr,
+    const index_t* lookup_indices_flat_ptr,
+    const index_t* table_indices_alt_flat_ptr,
+    const index_t* lookup_alt_indices_flat_ptr,
     int64_t grad_output_stride0,
     int64_t grad_output_stride1,
     int64_t grad_output_stride2,
@@ -981,6 +984,18 @@ __global__ void lprojection_backward_smooth_weights_kernel(
     }
 }
 #endif
+
+// The stored cell-index tensors of the entry points lutorch_ex calls (lprojection_forward_smooth,
+// lprojection_backward_na1_nonsmooth, lprojection_backward_na1_smooth): int32 or int64, all four the same dtype (one
+// index_t per launch). The kernels read them through data_ptr<index_t>(), which re-checks the dtype.
+static void check_cell_index_dtypes(const torch::Tensor& lookup_indices, const torch::Tensor& lookup_alt_indices,
+                                    const torch::Tensor& table_indices_flat, const torch::Tensor& table_indices_alt_flat) {
+    auto dt = lookup_indices.scalar_type();
+    if ((dt != torch::kInt32 && dt != torch::kInt64) || lookup_alt_indices.scalar_type() != dt ||
+        table_indices_flat.scalar_type() != dt || table_indices_alt_flat.scalar_type() != dt) {
+        throw py::value_error("indices tensors must all be int32 or all be int64");
+    }
+}
 
 class SPIKY_HIDDEN LUTorchManager {
 public:
@@ -1646,10 +1661,7 @@ public:
         if (!weights.is_floating_point() || lookup_alt_deltas.dtype() != weights.dtype()) {
             throw py::value_error("weights/lookup_alt_deltas must be floating with same dtype");
         }
-        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64 ||
-            table_indices_flat.dtype() != torch::kInt64 || table_indices_alt_flat.dtype() != torch::kInt64) {
-            throw py::value_error("indices tensors must be int64");
-        }
+        check_cell_index_dtypes(lookup_indices, lookup_alt_indices, table_indices_flat, table_indices_alt_flat);
         if (weights.dim() != 3 || lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 3 || lookup_alt_deltas.dim() != 3) {
             throw py::value_error("weights [T,E,O], lookup_indices [B,T], lookup_alt_indices/deltas [B,T,A] required");
         }
@@ -1698,21 +1710,23 @@ public:
                 reinterpret_cast<scalar_t*>(main_weight.data_ptr()),
                 reinterpret_cast<scalar_t*>(alt_weight.data_ptr())
             );
-            lprojection_forward_smooth_output_kernel<scalar_t><<<blocks_out, threads>>>(
-                total_bt,
-                n_tables,
-                n_outputs,
-                n_entries,
-                n_alternatives,
-                reinterpret_cast<const scalar_t*>(weights.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
-                reinterpret_cast<const scalar_t*>(main_weight.data_ptr()),
-                reinterpret_cast<const scalar_t*>(alt_weight.data_ptr()),
-                reinterpret_cast<scalar_t*>(output.data_ptr())
-            );
+            AT_DISPATCH_INDEX_TYPES(lookup_indices.scalar_type(), "lprojection_forward_smooth_index", [&] {
+                lprojection_forward_smooth_output_kernel<scalar_t, index_t><<<blocks_out, threads>>>(
+                    total_bt,
+                    n_tables,
+                    n_outputs,
+                    n_entries,
+                    n_alternatives,
+                    reinterpret_cast<const scalar_t*>(weights.data_ptr()),
+                    table_indices_flat.data_ptr<index_t>(),
+                    lookup_indices.data_ptr<index_t>(),
+                    table_indices_alt_flat.data_ptr<index_t>(),
+                    lookup_alt_indices.data_ptr<index_t>(),
+                    reinterpret_cast<const scalar_t*>(main_weight.data_ptr()),
+                    reinterpret_cast<const scalar_t*>(alt_weight.data_ptr()),
+                    reinterpret_cast<scalar_t*>(output.data_ptr())
+                );
+            });
         });
         CU_CHECK(cudaGetLastError());
 
@@ -2048,10 +2062,7 @@ public:
         if (!grad_output.is_floating_point()) {
             throw py::value_error("grad_output/weights must be floating point");
         }
-        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64 ||
-            table_indices_flat.dtype() != torch::kInt64 || table_indices_alt_flat.dtype() != torch::kInt64) {
-            throw py::value_error("indices tensors must be int64");
-        }
+        check_cell_index_dtypes(lookup_indices, lookup_alt_indices, table_indices_flat, table_indices_alt_flat);
         if (lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 3 || lookup_alt_indices.size(2) != 1) {
             throw py::value_error("lookup_indices must be [B,T], lookup_alt_indices must be [B,T,1]");
         }
@@ -2104,32 +2115,34 @@ public:
 
         AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
                                         weights.scalar_type(), "lprojection_backward_na1_nonsmooth", [&] {
-            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+          AT_DISPATCH_INDEX_TYPES(lookup_indices.scalar_type(), "lprojection_backward_na1_nonsmooth_index", [&] {
+            lprojection_backward_na1_nonsmooth_weights_kernel<scalar_t, index_t><<<blocks_w, threads>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
                 n_entries,
                 reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
+                table_indices_flat.data_ptr<index_t>(),
+                lookup_indices.data_ptr<index_t>(),
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<at::acc_type<scalar_t, true>*>(weights_grad.data_ptr())
             );
-            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
+            lprojection_backward_na1_carriers_kernel<scalar_t, index_t><<<blocks_c, threads>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
                 n_entries,
                 reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
                 reinterpret_cast<const scalar_t*>(weights.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                table_indices_flat.data_ptr<index_t>(),
+                lookup_indices.data_ptr<index_t>(),
+                table_indices_alt_flat.data_ptr<index_t>(),
+                lookup_alt_indices.data_ptr<index_t>(),
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(lookup_indices_grad_c_grad.data_ptr()),
                 reinterpret_cast<scalar_t*>(lookup_alt_indices_grad_c_grad.data_ptr())
             );
+          });
         });
         CU_CHECK(cudaGetLastError());
         PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);
@@ -2173,10 +2186,7 @@ public:
         if (!grad_output.is_floating_point()) {
             throw py::value_error("grad_output/weights must be floating point");
         }
-        if (lookup_indices.dtype() != torch::kInt64 || lookup_alt_indices.dtype() != torch::kInt64 ||
-            table_indices_flat.dtype() != torch::kInt64 || table_indices_alt_flat.dtype() != torch::kInt64) {
-            throw py::value_error("indices tensors must be int64");
-        }
+        check_cell_index_dtypes(lookup_indices, lookup_alt_indices, table_indices_flat, table_indices_alt_flat);
         if (lookup_indices.dim() != 2 || lookup_alt_indices.dim() != 3 || lookup_alt_indices.size(2) != 1) {
             throw py::value_error("lookup_indices must be [B,T], lookup_alt_indices must be [B,T,1]");
         }
@@ -2224,36 +2234,38 @@ public:
         c10::cuda::CUDAGuard guard(device);
         AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
                                         weights.scalar_type(), "lprojection_backward_na1_smooth_weights", [&] {
-            lprojection_backward_na1_smooth_weights_kernel<scalar_t><<<blocks_w, threads>>>(
+          AT_DISPATCH_INDEX_TYPES(lookup_indices.scalar_type(), "lprojection_backward_na1_smooth_index", [&] {
+            lprojection_backward_na1_smooth_weights_kernel<scalar_t, index_t><<<blocks_w, threads>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
                 n_entries,
                 reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                table_indices_flat.data_ptr<index_t>(),
+                lookup_indices.data_ptr<index_t>(),
+                table_indices_alt_flat.data_ptr<index_t>(),
+                lookup_alt_indices.data_ptr<index_t>(),
                 reinterpret_cast<const scalar_t*>(main_weight.data_ptr()),
                 reinterpret_cast<const scalar_t*>(alt_weight.data_ptr()),
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<at::acc_type<scalar_t, true>*>(weights_grad.data_ptr())
             );
-            lprojection_backward_na1_carriers_kernel<scalar_t><<<blocks_c, threads>>>(
+            lprojection_backward_na1_carriers_kernel<scalar_t, index_t><<<blocks_c, threads>>>(
                 total_bt,
                 n_tables,
                 n_outputs,
                 n_entries,
                 reinterpret_cast<const scalar_t*>(grad_output.data_ptr()),
                 reinterpret_cast<const scalar_t*>(weights.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_indices.data_ptr()),
-                reinterpret_cast<const int64_t*>(table_indices_alt_flat.data_ptr()),
-                reinterpret_cast<const int64_t*>(lookup_alt_indices.data_ptr()),
+                table_indices_flat.data_ptr<index_t>(),
+                lookup_indices.data_ptr<index_t>(),
+                table_indices_alt_flat.data_ptr<index_t>(),
+                lookup_alt_indices.data_ptr<index_t>(),
                 go_s0, go_s1, go_s2,
                 reinterpret_cast<scalar_t*>(lookup_indices_grad_c_grad.data_ptr()),
                 reinterpret_cast<scalar_t*>(lookup_alt_indices_grad_c_grad.data_ptr())
             );
+          });
         });
         CU_CHECK(cudaGetLastError());
         PROF_END(LUTORCH_MANAGER_LPROJECTION_BACKWARD_PROFILER_OP);

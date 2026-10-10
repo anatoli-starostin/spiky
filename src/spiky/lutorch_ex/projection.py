@@ -33,13 +33,23 @@ class.
 """
 from __future__ import annotations
 
-from typing import Optional, Protocol, runtime_checkable
+from typing import Optional, Protocol, Sequence, runtime_checkable
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .fp8 import FP8_PROJECTIONS, fp8_available, fp8_linear
 from .lut_base import MultiHeadLUT
+
+PROJECTION_DTYPES = (None, torch.bfloat16, torch.float32)
+
+
+def _linear_in(x: torch.Tensor, linear: nn.Linear, dtype: torch.dtype, weight: Optional[torch.Tensor] = None):
+    """``linear(x)`` with the GEMM in ``dtype``, cast from the (fp32 master) parameters per call."""
+    w = linear.weight if weight is None else weight
+    b = linear.bias.to(dtype) if linear.bias is not None else None
+    return F.linear(x.to(dtype), w.to(dtype), b)
 
 
 @runtime_checkable
@@ -70,6 +80,22 @@ class ProjectionMHL(nn.Module):
             module docstring for the width requirements that then apply.
         bias: bias on both projections.
         device: device (``"meta"`` builds an allocation-free skeleton).
+        fp8_projections: which projections run their GEMM in fp8 (keyword-only; a subset of
+            ``("compress", "decompress")``; default ``()`` = none, the unchanged fp32 path). See
+            :mod:`spiky.lutorch_ex.fp8`: the fp32 master weights stay ``nn.Linear`` parameters (same
+            state_dict); only the GEMM operands are cast to fp8 per call, with an fp32 accumulator. The
+            cartridge (addressing, scoring, gather) is untouched. Needs a CUDA device that runs
+            ``torch._scaled_mm``; anything else raises at forward.
+        compress_fp8_out_dtype: dtype the fp8 compress GEMM returns before it is handed (as fp32) to the
+            cartridge's addressing - ``torch.float32`` (default) or ``torch.bfloat16``. Only used when
+            ``"compress"`` is in ``fp8_projections``.
+        projection_dtype: dtype of the compress / decompress GEMMs that are NOT in ``fp8_projections``
+            (keyword-only): ``None`` (default) = the unchanged path, the ``nn.Linear`` in its own (parameter)
+            dtype; ``torch.bfloat16`` or ``torch.float32`` = the GEMM runs in that dtype from the fp32
+            master weights (same state_dict). Composes with ``fp8_projections`` per projection: a projection
+            listed there runs in fp8, the other in ``projection_dtype``. Either way the compress output is
+            cast back to fp32 (fp64 for fp64 input) before the cartridge, so addressing, scoring and the
+            gather stay full precision; the output is returned in the input's dtype.
     """
 
     def __init__(
@@ -83,9 +109,26 @@ class ProjectionMHL(nn.Module):
         decompress: bool = True,
         bias: bool = True,
         device: Optional[torch.device] = None,
+        fp8_projections: Sequence[str] = (),
+        compress_fp8_out_dtype: torch.dtype = torch.float32,
+        projection_dtype: Optional[torch.dtype] = None,
     ):
         super().__init__()
+        if projection_dtype not in PROJECTION_DTYPES:
+            raise ValueError(f"projection_dtype must be one of {PROJECTION_DTYPES}, got {projection_dtype!r}")
+        self.projection_dtype = projection_dtype
         input_dim, output_dim = self._resolve_dims(d_model, input_dim, output_dim)
+        fp8_projections = tuple(fp8_projections)
+        bad = [p for p in fp8_projections if p not in FP8_PROJECTIONS]
+        if bad:
+            raise ValueError(f"fp8_projections must be a subset of {FP8_PROJECTIONS}, got {fp8_projections}")
+        for p, on in (("compress", compress), ("decompress", decompress)):
+            if p in fp8_projections and not on:
+                raise ValueError(f"fp8_projections includes {p!r} but {p}=False (there is no {p} GEMM)")
+        if compress_fp8_out_dtype not in (torch.float32, torch.bfloat16):
+            raise ValueError(f"compress_fp8_out_dtype must be torch.float32 or torch.bfloat16, got {compress_fp8_out_dtype}")
+        self.fp8_projections = frozenset(fp8_projections)
+        self.compress_fp8_out_dtype = compress_fp8_out_dtype
         if not compress and not decompress:
             raise ValueError(
                 "ProjectionMHL requires at least one of compress/decompress: with both switched "
@@ -158,8 +201,20 @@ class ProjectionMHL(nn.Module):
         return self.input_dim
 
     def extra_repr(self) -> str:
-        return (f"input_dim={self.input_dim}, output_dim={self.output_dim}, "
-                f"compress={self.has_compress}, decompress={self.has_decompress}")
+        s = (f"input_dim={self.input_dim}, output_dim={self.output_dim}, "
+             f"compress={self.has_compress}, decompress={self.has_decompress}")
+        if self.fp8_projections:
+            s += f", fp8_projections={tuple(p for p in FP8_PROJECTIONS if p in self.fp8_projections)}"
+            if "compress" in self.fp8_projections:
+                s += f", compress_fp8_out_dtype={self.compress_fp8_out_dtype}"
+        if self.projection_dtype is not None:
+            s += f", projection_dtype={self.projection_dtype}"
+        return s
+
+    def _check_fp8(self, x: torch.Tensor) -> None:
+        ok, why = fp8_available(x.device)
+        if not ok:
+            raise RuntimeError(f"ProjectionMHL fp8_projections={sorted(self.fp8_projections)} cannot run here: {why}")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """``[B, input_dim] -> [B, output_dim]``."""
@@ -167,8 +222,20 @@ class ProjectionMHL(nn.Module):
             raise ValueError(f"expected input [B, {self.input_dim}], got {tuple(x.shape)}")
         spec = self.cartridge.spec
         B = x.shape[0]
+        if self.fp8_projections and not torch.compiler.is_compiling():
+            self._check_fp8(x)        # eager only: inside a compiled region _scaled_mm raises its own error
 
-        z = self.compress(x).reshape(B, spec.h_in, spec.d_in)  # [B, h_in, d_in]
+        if "compress" in self.fp8_projections:
+            # fp8 operands, fp32 accumulator; the result (fp32 or bf16-rounded) goes to the cartridge in x's dtype.
+            z = fp8_linear(x, self.compress, self.compress_fp8_out_dtype).to(x.dtype)
+        elif self.projection_dtype is not None and self.has_compress:
+            # GEMM in projection_dtype; cast back up BEFORE the cartridge so the addressing margins are compared in
+            # full precision (fp32, or fp64 for fp64 input).
+            full = torch.float64 if x.dtype == torch.float64 else torch.float32
+            z = _linear_in(x, self.compress, self.projection_dtype).to(full)
+        else:
+            z = self.compress(x)
+        z = z.reshape(B, spec.h_in, spec.d_in)                 # [B, h_in, d_in]
         y = self.cartridge(z)                                  # [B, h_out, d_out]
         y = y.reshape(B, spec.out_features)                    # [B, h_out*d_out]
 
@@ -182,12 +249,22 @@ class ProjectionMHL(nn.Module):
                     f"{spec.out_features}, got shape {tuple(scale.shape)}"
                 )
 
+        fp8_dec = "decompress" in self.fp8_projections
+        dt_dec = self.projection_dtype if (self.projection_dtype is not None and not fp8_dec) else None
         if self.has_decompress and scale is not None:
             # Fold the per-output-channel scale into the decompress matrix: scaling column
             # k of W is exactly scaling cartridge output channel k, with no extra op.
             weight = self.decompress.weight * scale.reshape(1, -1)
+            if fp8_dec:
+                return fp8_linear(y, self.decompress, y.dtype, weight=weight)
+            if dt_dec is not None:
+                return _linear_in(y, self.decompress, dt_dec, weight=weight).to(x.dtype)
             return F.linear(y, weight, self.decompress.bias)
         if scale is not None:
             # No decompress matrix to fold into -> apply the scale directly.
             y = y * scale.reshape(1, -1)
+        if fp8_dec:
+            return fp8_linear(y, self.decompress, y.dtype)
+        if dt_dec is not None and self.has_decompress:
+            return _linear_in(y, self.decompress, dt_dec).to(x.dtype)
         return self.decompress(y)

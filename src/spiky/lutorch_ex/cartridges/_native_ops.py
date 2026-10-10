@@ -29,6 +29,7 @@ batch. If that kernel cannot be built/loaded, the eager body is used (identical 
 from __future__ import annotations
 
 import os
+import warnings
 
 import torch
 
@@ -122,8 +123,18 @@ def _single_ig_ext():
         from torch.utils.cpp_extension import load
 
         src = os.path.join(_CSRC, "single_anchor_input_grad.cu")
-        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src], verbose=False)
-    except Exception:
+        # Same standard as _lprojection_ext: torch's default -std=c++17 does not compile its own headers here
+        # (ATen/core/List_inl.h).
+        std = os.environ.get("SPIKY_CXX_STD", "c++20")
+        cpp = [f"-std={std}", "-O3"]
+        cuda = [f"-std={std}", "-O3"]
+        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src],
+                              extra_cflags=cpp, extra_cuda_cflags=cuda, verbose=False)
+    except Exception as e:
+        # Still never raises (the eager body gives the same result), but say so once: _SINGLE_IG_TRIED makes this
+        # run once.
+        warnings.warn(f"lutorch_ex: the single_anchor_input_grad CUDA extension could not be built/loaded; using the "
+                      f"eager input-grad body instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
         _SINGLE_IG_EXT = None
     return _SINGLE_IG_EXT
 
@@ -149,8 +160,9 @@ def native_available(device: torch.device) -> bool:
     return device.type == "cuda" and native_manager() is not None
 
 
-def _table_indices(B: int, nt: int, device) -> torch.Tensor:
-    return torch.arange(nt, device=device).view(1, nt).expand(B, nt).reshape(-1).contiguous()
+def _table_indices(B: int, nt: int, device, dtype: torch.dtype) -> torch.Tensor:
+    """Per-(b, table) table id, flat [B*nt], in the cell indices' dtype (the kernels take one index_t for all)."""
+    return torch.arange(nt, device=device, dtype=dtype).view(1, nt).expand(B, nt).reshape(-1).contiguous()
 
 
 def _single_ig_body(gm, ga, d, ag, width):
@@ -202,6 +214,8 @@ def _flatten(weights, c, c_alt, u_signed_star):
     B = c.shape[0]
     nt = G * tph
     W = weights.reshape(nt, K, d_out).contiguous()
+    # Stored cell indices go to the kernels in their own dtype (int32 or int64; the kernels template on it and the
+    # host rejects anything else), so no int64 copy is made. Offset arithmetic inside the kernels is int64.
     li = c.reshape(B, nt).contiguous()
     lai = c_alt.reshape(B, nt, 1).contiguous()
     lad = u_signed_star.reshape(B, nt, 1).to(weights.dtype).contiguous()
@@ -216,7 +230,7 @@ class NativeSoft(torch.autograd.Function):
         mgr = native_manager()
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
-        tif = _table_indices(B, nt, z.device)
+        tif = _table_indices(B, nt, z.device, li.dtype)
         out, mw, aw = mgr.lprojection_forward_smooth(W, li, lai, lad, tif, tif, True, _THREADS)
         out_pt = out.reshape(B, G, tph, d_out)
         if drop_mask is not None:                 # table dropout: scale each table's blend by its keep
@@ -264,7 +278,7 @@ class NativeHard(torch.autograd.Function):
         mgr = native_manager()
         W, li, lai, lad, nt, B, G, tph, K, d_out = _flatten(weights, c, c_alt, u_signed_star)
         d_in = z.shape[2]
-        tif = _table_indices(B, nt, z.device)
+        tif = _table_indices(B, nt, z.device, li.dtype)
         # Hard value: sum_t W[c_t]. The native kernels have no nonsmooth forward, so fuse the per-table
         # gather + tph-sum with embedding_bag (fp32-accumulated for bf16/fp16, cast back to the
         # weight dtype) instead of the eager W[tif,li].sum(2), which materialized the full

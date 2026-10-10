@@ -37,7 +37,7 @@ __global__ void softsign_surrogate_grad_kernel(
     scalar_t* __restrict__ grad_z,     // [B, width], pre-zeroed
     scalar_t* __restrict__ dts_buf,    // [B, nt]
     scalar_t* __restrict__ dtl_buf) {  // [B, nt]
-    int64_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= total_bt) return;
     // a_glob/b_glob are already FLAT indices into grad_z [B*width] (= batch_row*width + coord),
     // so the atomicAdd lands in the right batch row with no row arithmetic here.

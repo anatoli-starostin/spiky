@@ -38,6 +38,7 @@ the pure cartridge on CPU or when the native extension is unavailable (handled b
 from __future__ import annotations
 
 import os
+import warnings
 
 import torch
 
@@ -63,8 +64,17 @@ def _ss_ext():
 
         _csrc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
         src = os.path.join(_csrc, "softsign_surrogate_grad.cu")
-        _SS_EXT = load(name="lutorch_ex_softsign_surrogate_grad", sources=[src], verbose=False)
-    except Exception:
+        # Same standard as _native_ops._lprojection_ext: torch's default -std=c++17 does not compile its own
+        # headers here (ATen/core/List_inl.h).
+        std = os.environ.get("SPIKY_CXX_STD", "c++20")
+        cpp = [f"-std={std}", "-O3"]
+        cuda = [f"-std={std}", "-O3"]
+        _SS_EXT = load(name="lutorch_ex_softsign_surrogate_grad", sources=[src],
+                       extra_cflags=cpp, extra_cuda_cflags=cuda, verbose=False)
+    except Exception as e:
+        # Still never raises (the eager tail gives the same result), but say so once: _SS_TRIED makes this run once.
+        warnings.warn(f"lutorch_ex: the softsign_surrogate_grad CUDA extension could not be built/loaded; using the "
+                      f"eager surrogate tail instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
         _SS_EXT = None
     return _SS_EXT
 
@@ -119,9 +129,11 @@ def _prep(weights, c, c_alt, z):
     nt = G * tph
     d_in = z.shape[2]
     W = weights.reshape(nt, K, d_out).contiguous()
+    # Stored cell indices go to the kernels in their own dtype (int32 or int64; the kernels template on it and the
+    # host rejects anything else), so no int64 copy is made. Offset arithmetic inside the kernels is int64.
     li = c.reshape(B, nt).contiguous()
     lai = c_alt.reshape(B, nt, 1).contiguous()
-    tif = _table_indices(B, nt, z.device)
+    tif = _table_indices(B, nt, z.device, li.dtype)
     return W, li, lai, tif, (G, tph, K, d_out, B, d_in, nt)
 
 

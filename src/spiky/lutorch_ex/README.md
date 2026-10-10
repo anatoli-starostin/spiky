@@ -177,6 +177,26 @@ arguments are shared by all of them:
 | `cmp_eps` | `0.0` | the threshold `eps` in the bit test `u > eps` |
 | `table_dropout_rate` | `0.0` | whole-table dropout, see [Regularisers](#regularisers) |
 | `device` | `None` | where to build parameters and buffers |
+| `index_dtype` | `None` | dtype of the **stored** cell-index tensors, produced once in the shared addressing. `None` picks `torch.int32` when the table fits it, else `torch.int64`; an explicit `torch.int32` or `torch.int64` is honoured (see below) |
+
+The cell index is stored as int32 by default. The index the reads use is the flat row index into the
+`[n_groups·tph·2^nap, d_out]` table, up to `n_groups·tph·2^nap − 1` (262,143 at h=16, tph=64, nap=8).
+That needs at least int32. torch's index ops (`embedding_bag`, `index_select`, `index_add_`, indexing) accept
+only int32 and int64, so int16 and int8 are rejected.
+
+- **The rule:** `index_dtype=None` (the default) uses int32 when `n_groups·tph·2^nap − 1` fits it and int64
+  otherwise. An explicit `torch.int32` that doesn't fit raises; an explicit `torch.int64` is always accepted.
+- **Only storage narrows.** Offset arithmetic (inside the native kernels too), the bit-powers buffer and bag
+  offsets stay int64, and the state_dict is unchanged.
+- **Large eval calls widen automatically:** in auto mode, a call whose read could exceed 2^31 − 1 index
+  entries uses int64, because PyTorch's CUDA `embedding_bag` forward fails above that with int32.
+
+What int32 gives you:
+- It halves the stored index tensors, including those saved for the backward.
+- It narrows the radix-sort keys in `embedding_bag`'s weight gradient.
+- The fused twins' native CUDA kernels read int32 directly (they template on the index type) and create no
+  int64 copy. Their host functions reject any other index dtype.
+- Training gradients are bit-identical to int64 under `torch.use_deterministic_algorithms(True)`.
 
 SoftSign (`SoftSignHardLUT`, `SoftSignSmoothLUT` and their fused twins):
 
@@ -195,11 +215,49 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
+| `fused_read` | `False` | `ConfidenceLUT` only. `False` uses the `embedding_bag` read. `True` uses the fused gather read on the fp32 table (see below) |
+
+`fused_read=True` replaces `embedding_bag`'s forward and score-gradient kernels with a gather and
+score-weighted sum, and a re-gather of the same rows for the score gradient. It reads the fp32 table
+itself (the trained parameter; no copy). The table gradient still calls `aten._embedding_bag_dense_backward`,
+so it keeps that op's [size limit](#pytorchs-embedding_bag-backward-size-limit). The read and the score
+gradient are fused into single kernels only when Inductor compiles the cartridge forward (CUDA). Eager runs
+them as separate ops.
+
+- **Correctness:** the table gradient is bit-identical to the default path; outputs and the other gradients
+  agree to fp32 re-association.
+- **Where the win comes from:** the score gradient. At h=16, tph=64, nap=8 and 32k tokens, PyTorch's
+  per-sample-weight backward kernel dominates the default read, and the fused re-gather replaces it.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
 `read_top_n` defaults to `2`, the only form deployment supports. `read_top_n=1` still trains and evaluates,
 but `export_deployment` refuses it with a clear error.
+
+### PyTorch's embedding_bag backward size limit
+
+This is a known upstream constraint. lutorch_ex documents it but doesn't enforce it.
+
+- **Symptom:** a training step crashes with an opaque `CUDA error: an illegal memory access was encountered`.
+  It is not a readable error, and stray reads could in principle return wrong gradients instead of crashing.
+- **Cause:** PyTorch's CUDA `aten::_embedding_bag_dense_backward` (kernel `compute_grad_weight_bags`) indexes
+  its launch threads in 32 bits. It fails when
+  `(floor(numel/10) + min(numel, num_weights)) * 32 * ceil(d_out/32) > 2^31`, where:
+  - `numel` is the index-tensor element count of one call;
+  - `num_weights` is the table rows;
+  - `d_out` is the row width.
+- **Dtype-independent:** it reproduces identically for int32 and int64 indices.
+- **Where it bites:** far below 2^31 entries. At h=16, tph=64, nap=8, d_out=48 (262,144 rows) the cliff is at
+  ~2^28.3 entries (measured: 332,922,889 OK, 332,922,890 crashes; torch 2.9.1, RTX 5090). That's ~325k
+  tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
+  (~10× and ~5× headroom).
+- **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
+  ConfidenceLUT n=1/n=2, QuantisedConfidenceLUT, the fused read's table gradient (`fused_read=True`),
+  SoftSignHard/Smooth, and the fused twins' `tier1` reads.
+- **Not exposed:** the native backends, `FusedHardSTE`, and every eval / `no_grad` path.
+- **Workaround:** reduce the micro-batch size and raise gradient accumulation.
+- **Future fix:** an `index_add_` table gradient (a later PR) avoids this op. It was verified correct to 819M
+  entries, where memory ran out first.
 
 ## Reference and fused cartridges
 
@@ -235,7 +293,8 @@ a bit; reads and reductions accumulate in fp32; and the output is cast back once
 
 ```python
 ProjectionMHL(cartridge, d_model=None, *, input_dim=None, output_dim=None,
-              compress=True, decompress=True, bias=True, device=None)
+              compress=True, decompress=True, bias=True, device=None,
+              fp8_projections=(), compress_fp8_out_dtype=torch.float32, projection_dtype=None)
 ```
 
 The wrapper puts a linear map on each side of the cartridge:
@@ -248,6 +307,24 @@ The wrapper puts a linear map on each side of the cartridge:
   drop-in into a pretrained residual stream. The bias stays a trainable parameter.
 - Either projection may be switched off (`compress=False` or `decompress=False`, which makes that side
   an identity), provided the widths already match. Switching off both is refused.
+- `projection_dtype` (opt-in, default `None`: unchanged) runs the compress and decompress GEMMs in
+  `torch.bfloat16` (or `torch.float32`). The weights stay fp32 `nn.Linear` parameters with the same
+  state_dict. The compress output is cast back to fp32 before the cartridge, so addressing, scoring and
+  the gather stay fp32; the output comes back in the input's dtype. This is the narrowed fp32 island. Do
+  not call `.half()` or `.bfloat16()` on the whole wrapper, which would drag the cartridge into low
+  precision. At h=16, tph=64, nap=8, bf16 compress flips ~0.6% of the cells (token × table) against an
+  exact-fp32 compress. `fp8_projections` takes precedence per projection, so for example
+  `projection_dtype=torch.bfloat16, fp8_projections=("decompress",)` runs compress in bf16 and
+  decompress in fp8.
+- `fp8_projections` (opt-in, default `()`) runs the GEMM of `"compress"` and/or `"decompress"` in fp8
+  (`fp8.py`). The weights stay fp32 `nn.Linear` parameters with the same state_dict. Each call casts both
+  operands to e4m3 with one amax scale per tensor, multiplies with `torch._scaled_mm` into an fp32
+  accumulator, and runs the backward GEMMs with e5m2 gradients. The cartridge itself stays fp32. This
+  needs a CUDA GPU that runs `torch._scaled_mm`; anything else raises at forward.
+- **fp8 `"compress"` changes the model.** With fp8 compress operands, ~9% of the cells (token × table)
+  read a different cell at h=16, tph=64, nap=8, measured against an exact-fp32 compress. These flips come
+  from the e4m3 operands, so `compress_fp8_out_dtype` (fp32 or bf16 handed to the addressing) does not
+  reduce them. fp8 `"decompress"` alone leaves the addresses bit-identical.
 
 ```python
 ffn = ProjectionMHL(ConfidenceLUT(spec, seed=1), input_dim=384, output_dim=256)
@@ -414,6 +491,7 @@ lutorch_ex/
 ├── addressing.py        MSB-first sign-bit packing
 ├── anchors.py           canonical full-coverage anchor sampling (pairs and singles)
 ├── projection.py        ProjectionMHL
+├── fp8.py               opt-in fp8 GEMMs for ProjectionMHL's projections (tensorwise e4m3/e5m2, fp32 master)
 ├── deploy.py            export_deployment / load_deployment
 ├── deploy_registry.py   format tag -> rebuilder registry
 ├── bench.py             the benchmark harness
