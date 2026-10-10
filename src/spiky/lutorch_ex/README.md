@@ -217,17 +217,23 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
 | `fused_read` | `False` | `ConfidenceLUT` only. `False` uses the `embedding_bag` read. `True` uses the fused gather read on the fp32 table (see below) |
 
-`fused_read=True` replaces `embedding_bag`'s forward and score-gradient kernels with a gather and
-score-weighted sum, and a re-gather of the same rows for the score gradient. It reads the fp32 table
-itself (the trained parameter; no copy). The table gradient still calls `aten._embedding_bag_dense_backward`,
-so it keeps that op's [size limit](#pytorchs-embedding_bag-backward-size-limit). The read and the score
-gradient are fused into single kernels only when Inductor compiles the cartridge forward (CUDA). Eager runs
-them as separate ops.
+`fused_read=True` replaces all of `embedding_bag`'s kernels: a gather and score-weighted sum forward, a
+re-gather of the same rows for the score gradient, and an `index_add_` of the score-weighted rows for the
+table gradient. It reads the fp32 table itself (the trained parameter; no copy). These fuse into a few
+kernels only when Inductor compiles the cartridge forward (CUDA, the default).
 
-- **Correctness:** the table gradient is bit-identical to the default path; outputs and the other gradients
-  agree to fp32 re-association.
-- **Where the win comes from:** the score gradient. At h=16, tph=64, nap=8 and 32k tokens, PyTorch's
-  per-sample-weight backward kernel dominates the default read, and the fused re-gather replaces it.
+- **Correctness:** outputs and the score/input gradients agree with the default read to fp32 re-association.
+  The `index_add_` table gradient uses atomic adds, so it agrees to fp32 re-association too (1.1e-7) but is not
+  bit-reproducible run to run, like the rest of the CUDA training step.
+- **Where the win comes from:** fusion. At h=16, tph=64, nap=8 and 32k tokens the default read's backward is
+  dominated by PyTorch's per-sample-weight kernel and the sort-based table gradient; compiled, the re-gather and
+  the weighted-row scatter fuse into Inductor kernels instead.
+- **No embedding_bag size limit:** the fused read no longer calls `_embedding_bag_dense_backward` (see below).
+- **Table-gradient switch:** `LUTORCH_EX_TABLE_GRAD=index_add` (default) `| scatter_add | embedding_bag`, read at
+  import. `embedding_bag` restores the bit-identical-to-default table gradient, with that op's size limit.
+- **Eager caveat:** without `torch.compile` nothing fuses, and the backward materialises the gathered and
+  weighted `[tokens * groups * tph * read_top_n, d_out]` fp32 rows (about 6 GiB each at 32k tokens). An eager CUDA
+  backward above `LUTORCH_EX_EAGER_ROWS_WARN_GIB` (default 1) warns once.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
@@ -252,12 +258,13 @@ This is a known upstream constraint. lutorch_ex documents it but doesn't enforce
   tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
   (~10× and ~5× headroom).
 - **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
-  ConfidenceLUT n=1/n=2, QuantisedConfidenceLUT, the fused read's table gradient (`fused_read=True`),
-  SoftSignHard/Smooth, and the fused twins' `tier1` reads.
-- **Not exposed:** the native backends, `FusedHardSTE`, and every eval / `no_grad` path.
-- **Workaround:** reduce the micro-batch size and raise gradient accumulation.
-- **Future fix:** an `index_add_` table gradient (a later PR) avoids this op. It was verified correct to 819M
-  entries, where memory ran out first.
+  ConfidenceLUT n=1/n=2 (the default read), QuantisedConfidenceLUT, SoftSignHard/Smooth, and the fused twins'
+  `tier1` reads.
+- **Not exposed:** the fused read (`fused_read=True`, whose table gradient is an `index_add_`; verified correct on
+  the compiled n=2 path past the cliff, to 819M entries where memory ran out first), the native backends,
+  `FusedHardSTE`, and every eval / `no_grad` path. With `LUTORCH_EX_TABLE_GRAD=embedding_bag` the fused read is
+  exposed again.
+- **Workaround:** use `fused_read=True`, or reduce the micro-batch size and raise gradient accumulation.
 
 ## Reference and fused cartridges
 
