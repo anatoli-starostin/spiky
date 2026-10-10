@@ -42,19 +42,22 @@ Numbers are marked *(code)* when they were confirmed from code or by instantiati
   - The only learned parts are the tables, the two projections, and (Gen-2/3) 2–3 scalars.
 - **Gradient through the discrete step** (`ManifestoHardLUT` / `FusedManifestoHardLUT`): the value is the hard read. The input gradient is a straight-through surrogate through a two-cell blend with the neighbour that flips the least-confident bit, weighted by `U = 0.5/(1+|u*|)`. Only the addressed cell receives a table gradient, and the index is stop-gradient ([`cartridges/manifesto_hard.py` L49–57](../../src/spiky/lutorch_ex/cartridges/manifesto_hard.py#L49-L57)).
   - The Gen-3 `ConfidenceLUT` instead returns a score-weighted read, and differentiates that value directly ([`README.md` L120–166](../../src/spiky/lutorch_ex/README.md#L120-L166)).
-- **Parameter count** *(code, verified by instantiation)*: `P = r·(2·1536 + 1 + tph·2^nap) + 1536` for 1536 → r → 1536 with `r = h·d`, plus the cartridge's learned scalars: 0 for the Manifesto cartridges, 2 for Gen-3 `ConfidenceLUT` at `read_top_n` 1 (β, γ) and 3 at `read_top_n` 2 (plus τ), 2 for Gen-2 (two temperatures). Re-checked 2026-10-10 by instantiating `ProjectionMHL` around every family at h8/tph64/nap8 and h8/tph16/nap8 (r = 64): the table and projection count is identical for all families, so restricting the work to Manifesto + Confidence changes none of the numbers below.
-  - The tables (`h·tph·2^nap·d`) dominate.
-  - With the library's reference geometry h = 8, tph = 64, nap = 8 ([`README.md` L38](../../src/spiky/lutorch_ex/README.md#L38); there `r` = 384 = the model width, i.e. no bottleneck):
+- **Parameter count** *(code, verified by instantiation)*: `P = r·(2·1536 + 1 + tph·2^nap) + 1536` for 1536 → r → 1536 with `r = h·d`, plus the cartridge's learned scalars: 0 for the Manifesto cartridges, 2 for Gen-3 `ConfidenceLUT` at `read_top_n` 1 (β, γ) and 3 at `read_top_n` 2 (plus τ), 2 for Gen-2 (two temperatures). Re-checked 2026-10-10 by instantiating `ProjectionMHL` around every family, at h8 tph64/tph16 nap8 (r = 64) and at the h16 points in the table: the table and projection count is identical for all families, so restricting the work to Manifesto + Confidence changes none of the numbers below.
+  - The tables (`h·tph·2^nap·d` = `r·tph·2^nap`) dominate. Note that `P` depends on `r`, `tph` and `nap` only, **not on `h`** *(arithmetic)*: changing h at fixed r does not change the parameter count. What `h` changes is which `r` is valid. Pairs addressing needs `C(d, 2) ≥ nap` anchor pairs per table with `d = r/h`, so nap 8 needs `d ≥ 5` ([`anchors.py` L124–151](../../src/spiky/lutorch_ex/anchors.py#L124-L151)).
+  - **Current reference geometry: h = 16, tph = 64, nap = 8, batch 32,768 vectors** (2026-10-10, matching the current nanochat experiments). The earlier h = 8 reference is **superseded**.
+  - **h16 / tph64 / nap8 at r = 64 is not constructible.** With `d = 64/16 = 4`, construction fails with "nap=8 exceeds the number of distinct coordinate pairs C(d_in, 2) = C(4, 2) = 6" *(code, by instantiation)*. At h16 the smallest valid r for nap 8 is 80 (d 5). Every row below was instantiated as `ProjectionMHL(cartridge, d_model=1536)`. The counts are for Manifesto; Confidence adds 2 (n=1) or 3 (n=2) parameters per instance *(code)*.
 
 | r | geometry | per instance | ×12 independent | vs 603,979,776 |
 |---|---|---|---|---|
-| 32 | h8 tph64 nap8 is **refused** (`nap` > C(4,2) anchor pairs, [`anchors.py` L124–151](../../src/spiky/lutorch_ex/anchors.py#L124-L151)); h4 tph64 nap8 d8 | 624,160 | 7,489,920 | 81× |
-| 32 | h8 tph64 nap6 d4 | 230,944 | 2,771,328 | 218× |
-| 64 | h8 tph64 nap8 d8 | 1,246,784 | 14,961,408 | **40×** |
-| 128 | h8 tph64 nap8 d16 | 2,492,032 | 29,904,384 | 20× |
-| 256 | h8 tph64 nap8 d32 | 4,982,528 | 59,790,336 | 10× |
+| 64 | **h16 tph64 nap8 d4: refused** (C(4,2) = 6 < 8) | – | – | – |
+| 64 | h16 tph64 nap6 d4 | 460,352 | 5,524,224 | 109× |
+| 64 | h16 tph16 nap6 d4 | 263,744 | 3,164,928 | 191× |
+| **128** | **h16 tph64 nap8 d8** (smallest standard r valid at h16 nap8) | **2,492,032** | **29,904,384** | **20×** |
+| 128 | h16 tph16 nap8 d8 | 919,168 | 11,030,016 | 55× |
+| 768 | h16 tph64 nap8 d48 (the nanochat LUT-FFN width) | 14,944,512 | 179,334,144 | 3.4× |
+| 64 | *superseded:* h8 tph64 nap8 d8 | 1,246,784 | 14,961,408 | 40× |
 
-- **FLOPs per input vector** *(estimate from the code path, r = 64)*: compress + decompress 2·(2·1536·64) ≈ 393k. Addressing is a subtract, compare and pack over `G·tph·nap` = 4,096 bits, ≈ 12k ops. The hard read is `G·tph·d` = 4,096 adds. Total ≈ 0.41 MFLOP forward, 96% of it in the projections.
+- **FLOPs per input vector** *(arithmetic from the code path)*: at h16 tph64 nap8 r = 128, compress + decompress 2·(2·1536·128) ≈ 786k. Addressing is a subtract, compare and pack over `G·tph·nap` = 8,192 bits, ≈ 25k ops. The hard read is `G·tph·d` = 8,192 adds. Total ≈ 0.82 MFLOP forward, ≈ 96% in the projections. At r = 768 the projections are ≈ 99% (4.72M of ≈ 4.78M). The superseded h8 r = 64 point was ≈ 0.41 MFLOP, 96%. **The projections still dominate at every h16 point.**
 - **Sharing and caching.** There is no dedicated API.
   - Instances are ordinary modules and can be shared by reference.
   - `compress=False` lets one external down-projection feed several cartridges.
@@ -81,7 +84,11 @@ What the code and a measurement say for the two in-scope families:
 - **What it would take to make each bf16-clean** *(code for the mechanism; estimate for the effort)*:
   - Manifesto: already done in the `Fused…` twins. Making the plain classes bf16-clean is a dispatch/cast wrapper (fp32 addressing, `x.float()`, fp32-accumulated reads, one cast back), the same idiom the twins use. No kernel change.
   - Confidence: `FusedConfidenceLUT` is already bf16-clean on main. For plain `ConfidenceLUT` the wrapper exists as `FusedConfidenceLUT(backend="pure")`. `QuantisedConfidenceLUT` would need the same cast wrapper around its fp32 pow2/STE math, not a kernel change. Its numerics under that wrapper have not been checked.
-- **VERSION CAVEAT, important** *(code)*: `runs/setup_unified_env.sh` (L18–20) installs `lutorch_ex` editable from **this branch's** `src/spiky/lutorch_ex`. That copy predates PRs #154, #155 and #157, so **on this branch there is no `FusedConfidenceLUT`**: the best-performing family has no bf16 path in the code nanochat would load. Getting it needs `main` merged into this branch. A dry-run merge (2026-10-10) shows no conflicts; this branch is 36 commits behind `main`.
+- **Version note** *(code)*: `runs/setup_unified_env.sh` installs `lutorch_ex` editable from **this branch's** `src/spiky/lutorch_ex`.
+  - The old `research/lut_nanochat` predated PRs #154 / #155 / #157, so it had no `FusedConfidenceLUT`.
+  - This branch, `research/lut_nanochat_v2`, was forked from `main` after #157 on 2026-10-10, so `FusedConfidenceLUT` is here.
+  - Verified in the unified env on the RTX 5090: torch 2.9.1+cu128, extension built, finite bf16 forward + backward.
+  - The unified env needs `setuptools` for the CUDA extensions to JIT-build. Without it they silently fall back to the pure-torch paths. `setup_unified_env.sh` now installs it and checks that the build works.
 - **torch.library** *(code)*: exactly one lutorch_ex op is registered as a custom op, `lutorch_ex::p2_scalars` (`_pow2_int8.py` L124, used by the quantised cartridge). The lprojection kernels and the `FusedConfidenceLUT` kernels are plain pybind extensions called from `autograd.Function`s.
 - **Whole-model torch.compile** *(measured, RTX 5090, main's lutorch_ex; a small stand-in block with each cartridge inside `ProjectionMHL`, `torch.compile(model, dynamic=False)` like `base_train.py` L337, one compiled train step plus `torch._dynamo.explain`)*:
 
@@ -97,7 +104,7 @@ What the code and a measurement say for the two in-scope families:
   - `fullgraph=True` would fail on the `Fused…` paths *(estimate: follows from the breaks)*.
   - Registering the kernels as `torch.library` custom ops is the fix if the breaks turn out to cost time.
 - **`ProjectionMHL` has no default cartridge** *(code: the cartridge is a required argument)*. The nanochat LUT-FFN passes `ConfidenceLUT` (`nanochat/nanochat/lut_ffn.py` L55), which is in scope. Stage 2a will pick its own.
-- **The FLOPs estimate above** is for the Manifesto hard read. `ConfidenceLUT` adds the per-table score, roughly `G·tph·nap` log-sigmoid terms plus `G·tph` exponentials (≈ 4,096 + 512 at the reference geometry), and `read_top_n` 2 doubles the read *(arithmetic)*. The projections still dominate.
+- **The FLOPs estimate above** is for the Manifesto hard read. `ConfidenceLUT` adds the per-table score, roughly `G·tph·nap` log-sigmoid terms plus `G·tph` exponentials (≈ 8,192 + 1,024 at the h16 tph64 nap8 reference geometry), and `read_top_n` 2 doubles the read *(arithmetic)*. The projections still dominate.
 
 **The approach ladder**, cheapest to most expressive:
 1. **One shared table plus the per-layer gate:** 50,331,648 params instead of 603,979,776 (12×) *(code)*.
@@ -112,8 +119,9 @@ What the code and a measurement say for the two in-scope families:
 4. **`ProjectionMHL` on the token embedding (Anatoly's proposal, the one to try first).**
    - The key is the token's existing wte row: compress 1536 → r, LUT, decompress r → 1536.
    - No new 32,768-row table is needed, because wte is reused, so per-token storage is zero.
-   - Real numbers, using the table above: at r = 64 with the reference geometry, **≈ 1.25M per layer, 15.0M for 12 independent layers, 40× smaller**. With one shared compress (all 12 layers read the same wte row) it is 13.9M (44×) *(arithmetic)*.
-   - The earlier estimate, "~1.3M plus codebooks at r = 64, 100–400× cheaper", was **wrong**. The tables are 84% of the 1.25M, not an extra on top. Reaching 100–400× needs smaller or shared tables, e.g. tph 16 at r = 64 → 5.5M, 109× *(arithmetic)*.
+   - Real numbers at the current reference geometry h16 tph64 nap8 (table above). r = 64 is not constructible there. At r = 128 it is **≈ 2.49M per layer, 29.9M for 12 independent layers, 20× smaller**. With one shared compress (all 12 layers read the same wte row) it is 27.7M (21.8×) *(arithmetic: saves 11 × 196,736)*.
+   - **This halves the earlier headline.** "≈ 1.25M per layer, 15.0M, 40× smaller" was the superseded h8 r = 64 point, which h16 / nap8 cannot reach.
+   - The original estimate, "~1.3M plus codebooks at r = 64, 100–400× cheaper", was **wrong**. The tables are 84% of each instance (2,097,152 of 2,492,032 at r = 128), not an extra on top. Reaching ≥ 100× at h16 needs fewer bits or tables, e.g. h16 tph64 **nap6** at r = 64 → 5.5M, 109×, or h16 tph16 nap6 at r = 64 → 3.2M, 191× *(code, by instantiation)*.
    - It is **not** "strictly more expressive than low-rank at the same rank". Option 2 has a *free* code per token, while option 4 is a function of the wte row. Its map is piecewise-constant in the projected space, not a superset of rank-r linear maps.
 
 **Three caveats for option 4.**

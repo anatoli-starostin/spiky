@@ -1,0 +1,39 @@
+device NVIDIA GeForce RTX 5090  torch 2.9.1+cu130  tokens 32768  rounds 3
+  [ref r64 (h8 d8 tph64 nap8) bfloat16] ManifestoHard pure: TypeError: ManifestoHardLUT does not support low precision: got input dtype torch.bfloat16 and weight
+  [ref r64 (h8 d8 tph64 nap8) bfloat16] ManifestoSoft pure: TypeError: ManifestoSoftLUT does not support low precision: got input dtype torch.bfloat16 and weight
+  [ref r64 (h8 d8 tph64 nap8) bfloat16] ConfidenceLUT n=1 (compiled): TypeError: ConfidenceLUT does not support low precision: got input dtype torch.bfloat16 and weight dt
+  [d24 champion (h16 d48 tph64 nap8) float32] ManifestoHard pure: OutOfMemoryError: CUDA out of memory. Tried to allocate 6.00 GiB. GPU 0 has a total capacity of 31.35 GiB of
+  [d24 champion (h16 d48 tph64 nap8) float32] ManifestoSoft pure: OutOfMemoryError: CUDA out of memory. Tried to allocate 6.00 GiB. GPU 0 has a total capacity of 31.35 GiB of
+  [d24 champion (h16 d48 tph64 nap8) bfloat16] ManifestoHard pure: TypeError: ManifestoHardLUT does not support low precision: got input dtype torch.bfloat16 and weight
+  [d24 champion (h16 d48 tph64 nap8) bfloat16] ManifestoSoft pure: TypeError: ManifestoSoftLUT does not support low precision: got input dtype torch.bfloat16 and weight
+  [d24 champion (h16 d48 tph64 nap8) bfloat16] ConfidenceLUT n=1 (compiled): TypeError: ConfidenceLUT does not support low precision: got input dtype torch.bfloat16 and weight dt
+  [d24 champion (h16 d48 tph64 nap8) bfloat16] FusedManifestoHard tier1: OutOfMemoryError: CUDA out of memory. Tried to allocate 6.00 GiB. GPU 0 has a total capacity of 31.35 GiB of
+== ref r64 (h8 d8 tph64 nap8), 32768 tokens: median ms over 3 interleaved rounds; gather GB/s = forward table-row bytes / forward time
+  float32  ManifestoHard pure                fwd  26.875  fwd+bwd   38.443  bwd   11.567  peak  4.01 GiB  gather     20 GB/s
+  float32  ManifestoSoft pure                fwd  26.115  fwd+bwd   44.155  bwd   18.040  peak  3.63 GiB  gather     41 GB/s
+  float32  FusedManifestoHard auto(=native)  fwd   3.197  fwd+bwd    9.516  bwd    6.319  peak  1.96 GiB  gather    168 GB/s
+  float32  FusedManifestoHard tier1          fwd  25.187  fwd+bwd   28.627  bwd    3.440  peak  3.08 GiB  gather     21 GB/s
+  float32  FusedManifestoSoft auto(=tier1)   fwd   3.653  fwd+bwd   20.055  bwd   16.402  peak  1.83 GiB  gather    294 GB/s
+  float32  FusedManifestoSoft native         fwd   4.739  fwd+bwd   11.287  bwd    6.548  peak  2.64 GiB  gather    227 GB/s
+  float32  ConfidenceLUT n=1 (compiled)      fwd   1.550  fwd+bwd   10.367  bwd    8.817  peak  0.73 GiB  gather    346 GB/s
+  float32  FusedConfidenceLUT n=1 (CUDA)     fwd   0.361  fwd+bwd    1.971  bwd    1.609  peak  0.09 GiB  gather   1486 GB/s
+  float32  FusedConfidenceLUT n=2 (CUDA)     fwd   0.476  fwd+bwd    2.280  bwd    1.804  peak  0.09 GiB  gather   2255 GB/s
+  bfloat16 FusedManifestoHard auto(=native)  fwd   3.284  fwd+bwd    9.290  bwd    6.006  peak  1.80 GiB  gather     82 GB/s
+  bfloat16 FusedManifestoHard tier1          fwd  24.688  fwd+bwd   28.672  bwd    3.985  peak  2.52 GiB  gather     11 GB/s
+  bfloat16 FusedManifestoSoft auto(=tier1)   fwd   3.668  fwd+bwd   19.756  bwd   16.087  peak  1.84 GiB  gather    146 GB/s
+  bfloat16 FusedManifestoSoft native         fwd   4.001  fwd+bwd   10.290  bwd    6.289  peak  2.12 GiB  gather    134 GB/s
+  bfloat16 FusedConfidenceLUT n=1 (CUDA)     fwd   0.372  fwd+bwd    1.962  bwd    1.591  peak  0.09 GiB  gather    722 GB/s
+  bfloat16 FusedConfidenceLUT n=2 (CUDA)     fwd   0.453  fwd+bwd    2.255  bwd    1.802  peak  0.09 GiB  gather   1184 GB/s
+== d24 champion (h16 d48 tph64 nap8), 32768 tokens: median ms over 3 interleaved rounds; gather GB/s = forward table-row bytes / forward time
+  float32  FusedManifestoHard auto(=native)  fwd   8.697  fwd+bwd   53.846  bwd   45.149  peak  9.20 GiB  gather    741 GB/s
+  float32  FusedManifestoHard tier1          fwd  63.239  fwd+bwd   92.646  bwd   29.407  peak 21.31 GiB  gather    102 GB/s
+  float32  FusedManifestoSoft auto(=tier1)   fwd  11.596  fwd+bwd   50.068  bwd   38.472  peak  4.54 GiB  gather   1111 GB/s
+  float32  FusedManifestoSoft native         fwd  30.415  fwd+bwd   78.304  bwd   47.888  peak 15.44 GiB  gather    424 GB/s
+  float32  ConfidenceLUT n=1 (compiled)      fwd   4.895  fwd+bwd   24.709  bwd   19.814  peak  1.96 GiB  gather   1316 GB/s
+  float32  FusedConfidenceLUT n=1 (CUDA)     fwd   1.339  fwd+bwd    6.746  bwd    5.407  peak  0.36 GiB  gather   4812 GB/s
+  float32  FusedConfidenceLUT n=2 (CUDA)     fwd   2.190  fwd+bwd   10.401  bwd    8.211  peak  0.36 GiB  gather   5885 GB/s
+  bfloat16 FusedManifestoHard auto(=native)  fwd   9.080  fwd+bwd   47.333  bwd   38.252  peak  5.99 GiB  gather    355 GB/s
+  bfloat16 FusedManifestoSoft auto(=tier1)   fwd  11.767  fwd+bwd   50.310  bwd   38.543  peak  4.68 GiB  gather    548 GB/s
+  bfloat16 FusedManifestoSoft native         fwd  23.867  fwd+bwd   64.754  bwd   40.888  peak  9.47 GiB  gather    270 GB/s
+  bfloat16 FusedConfidenceLUT n=1 (CUDA)     fwd   1.220  fwd+bwd    6.384  bwd    5.164  peak  0.48 GiB  gather   2640 GB/s
+  bfloat16 FusedConfidenceLUT n=2 (CUDA)     fwd   1.664  fwd+bwd    9.478  bwd    7.814  peak  0.48 GiB  gather   3872 GB/s
