@@ -9,6 +9,7 @@ measured 2026-10-09). The table gradient depends on the accumulation mode (cartr
 """
 import contextlib
 import os
+import re
 import warnings
 
 import pytest
@@ -140,6 +141,52 @@ def test_compiled_backward_does_not_warn(monkeypatch):
         for _ in range(2):
             m(torch.randn(256, SPEC.h_in, SPEC.d_in, device="cuda")).sum().backward()
     assert not [x for x in wl if "fused read running EAGER" in str(x.message)]
+
+
+# --------------------------------------------------------------------------------------- fusion property (CUDA)
+
+_KERNEL_RE = re.compile(r"async_compile\.triton\(\s*'([^']+)'\s*,\s*'''(.*?)'''", re.S)
+
+
+def _compiled_step_code(read_top_n):
+    """(dynamo counters snapshot, every Inductor output-code string) for one compiled fwd+bwd of the fused read,
+    from a fresh dynamo state so no cached graph can mask a graph break."""
+    import torch._dynamo
+    from torch._dynamo.utils import counters
+    from torch._inductor.utils import run_and_get_code
+    torch._dynamo.reset()
+    counters.clear()
+    m = lx.ConfidenceLUT(SPEC, seed=1, read_top_n=read_top_n, fused_read=True).cuda().train()
+    x = torch.randn(512, SPEC.h_in, SPEC.d_in, device="cuda", requires_grad=True)
+    _, code = run_and_get_code(lambda: m(x).sum().backward())
+    return ({k: dict(v) for k, v in counters.items()}, code)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="the fused read compiles (and fuses) only on CUDA")
+@pytest.mark.parametrize("read_top_n", [1, 2])
+def test_compiled_fused_read_is_one_graph_with_the_scatter_fused(read_top_n):
+    """PERFORMANCE property, asserted hard. The fused read's speed comes from Inductor fusing the score-gradient
+    re-gather and the index_add_ table-gradient scatter into ONE generated kernel. A graph break (e.g. an untraceable
+    call in _FusedScoredRead.backward) or a change that keeps them apart silently loses the whole win while every
+    correctness test still passes - this happened once during development (an is_fake() check graph-broke the step).
+    So: 0 graph breaks, 1 graph, and exactly one generated kernel that does the atomic scatter AND the score-grad
+    reduction. Matched on kernel CONTENT (atomic_add / tl.sum), not on Inductor's generated kernel names."""
+    if fr.TABLE_GRAD != "index_add":
+        pytest.skip(f"LUTORCH_EX_TABLE_GRAD={fr.TABLE_GRAD} for this run; the fusion property is about index_add")
+    counters, code = _compiled_step_code(read_top_n)
+    breaks = counters.get("graph_break", {})
+    assert sum(breaks.values()) == 0, f"graph break(s) in the compiled fused read: {list(breaks)[:2]}"
+    assert counters.get("stats", {}).get("unique_graphs") == 1, counters.get("stats")
+    src = "\n".join(code)
+    kernels = _KERNEL_RE.findall(src)
+    assert kernels, "no Triton kernels parsed from Inductor's output code - its format changed; update _KERNEL_RE"
+    # The backward also has other, legitimate atomic scatters (the input-grad scatter into the margins, the gather
+    # backward's index_put) - pointwise kernels with no reduction. The fused table-grad kernel is the one that does
+    # BOTH the atomic scatter and the score-grad re-gather's reduction; if the two were split there would be none.
+    fused = [name for name, body in kernels if "atomic_add" in body and "tl.sum(" in body]
+    assert len(fused) == 1, (f"expected exactly one kernel holding both the table-grad scatter (atomic_add) and the "
+                             f"score-grad reduction (tl.sum), got {fused}; kernels: {[n for n, _ in kernels]}")
+    assert "_embedding_bag_dense_backward" not in src
 
 
 # --------------------------------------------------------------------------------------- large sizes (CUDA)
