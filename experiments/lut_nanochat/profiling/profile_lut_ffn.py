@@ -97,7 +97,8 @@ ALL_VARIANTS = ["dense-fp32", "dense-bf16", "dense-fp8", "lut-fp32", "lut-bf16",
                 "lut-fp32-i32-tbf16", "lut-bf16lib-i32-tfp32", "lut-bf16lib-i32-tbf16", "lut-bf16lib-i32-tfp8"]
 # "-i32": ConfidenceLUT(index_dtype=torch.int32) (needs a lutorch_ex with that option; skipped with a reason otherwise)
 I32_VARIANTS = {"lut-fp32-i32": "lut-fp32", "lut-bf16lib-i32": "lut-bf16lib"}
-# "-t<dtype>": ConfidenceLUT(table_dtype=...) narrow-table read (needs a lutorch_ex with that option)
+# "-t<dtype>": the fused read. "-tfp32" = ConfidenceLUT(fused_read=True) (or table_dtype=float32 on an older lutorch_ex);
+# "-tbf16" / "-tfp8" = the narrow-table reads, which exist only in a lutorch_ex with ConfidenceLUT(table_dtype=...)
 TABLE_VARIANTS = {"lut-fp32-i32-tbf16": ("lut-fp32-i32", "bfloat16"),
                   "lut-bf16lib-i32-tfp32": ("lut-bf16lib-i32", "float32"),     # control: fused read, fp32 rows
                   "lut-bf16lib-i32-tbf16": ("lut-bf16lib-i32", "bfloat16"),
@@ -320,7 +321,11 @@ def build_variant(name: str, decompress_std: float):
         base, tdt = TABLE_VARIANTS[name]
         mod = build_variant(base, decompress_std)
         lut = mod if hasattr(mod, "mhl") else mod.lut
-        lut.mhl.cartridge.table_dtype = getattr(torch, tdt)   # read in forward; the cache exists from __init__
+        if hasattr(lut.mhl.cartridge, "fused_read"):          # lutorch_ex with fused_read=: only the fp32 fused read
+            assert tdt == "float32", f"{name}: this lutorch_ex has no narrow tables (skipped upstream)"
+            lut.mhl.cartridge.fused_read = True               # read in forward
+        else:                                                 # older lutorch_ex: ConfidenceLUT(table_dtype=...)
+            lut.mhl.cartridge.table_dtype = getattr(torch, tdt)   # read in forward; the cache exists from __init__
         return mod
     if name in I32_VARIANTS:
         mod = build_variant(I32_VARIANTS[name], decompress_std)
@@ -1098,10 +1103,17 @@ def main(argv=None):
     for v in [v for v in variants if v in TABLE_VARIANTS]:
         import inspect
         from spiky.lutorch_ex import ConfidenceLUT
-        if "table_dtype" not in inspect.signature(ConfidenceLUT.__init__).parameters:
+        params = inspect.signature(ConfidenceLUT.__init__).parameters
+        why = None
+        if "fused_read" in params:                      # newer lutorch_ex: the fp32 fused read only, no narrow tables
+            if TABLE_VARIANTS[v][1] != "float32":
+                why = "this lutorch_ex has ConfidenceLUT(fused_read=) only - no narrow (bf16/fp8) tables"
+        elif "table_dtype" not in params:
+            why = "no ConfidenceLUT(fused_read=...) or ConfidenceLUT(table_dtype=...)"
+        if why:
             variants.remove(v)
-            res.setdefault("skipped_lib_variants", {})[v] = "no ConfidenceLUT(table_dtype=...)"
-            log(f"{v} skipped: the profiled lutorch_ex has no ConfidenceLUT(table_dtype=...)")
+            res.setdefault("skipped_lib_variants", {})[v] = why
+            log(f"{v} skipped: {why}")
     for v in [v for v in variants if v in I32_VARIANTS or v in TABLE_VARIANTS]:
         ok, why = i32_supported()
         if not ok:
