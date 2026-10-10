@@ -62,35 +62,6 @@ routing reference.
 - **L2 residency pinning** (`cudaAccessPolicyWindow`): 1.07–1.12× slower than plain
   cuda-fp32, 1.8× slower than Triton — the 6–12 MB table is already implicitly L2-resident,
   so pinning only steals L2 from the streaming index/output.
-  - **Refinement (2026-10-10): pin the accumulation target, not the table.** Context: the
-    hand-written ConfidenceLUT CUDA twin `FusedConfidenceLUT` (formerly `ConfidenceLUTCuda`;
-    training fwd+bwd, d24 geometry, 32k tokens), H100
-    SM 9.0, 50 MiB L2 of which ≤ 31.2 MiB persistable; the table W is 48 MiB. Baselines
-    8.6 ms (read_top_n 1) / 16.1 ms (read_top_n 2); clean runs with an L2 reset
-    (`cudaCtxResetPersistingL2Cache` + carve-out 0) before every config.
-
-    | config | n = 1 | n = 2 |
-    |---|---|---|
-    | persisting window over **grad W** (backward) | ≈0% | **−10 to −11%** (16.1 → 14.3–14.5 ms) |
-    | persisting window over **W** (the table) | +55 to +66% | +55 to +66% |
-    | `evict_last` hint on W reads | −0.4% | +4 to +5% |
-    | `evict_first` hint on W reads | +5.5% | +1% |
-
-    RTX 5090 (96 MiB L2, the table fits): nothing beyond noise. **Takeaway:** pin the
-    accumulation target — grad W, the atomic scatter destination, which has real cross-CTA
-    reuse — not the lookup table, which is read once per token and at 48 MiB does not fit the
-    31.2 MiB carve-out anyway. This *refines* the entry above rather than contradicting it:
-    pinning the table loses here too (and by more), and the one win is on a different buffer.
-    **Not shipped:** the carve-out is a device-wide limit that outlives the kernel and shrinks
-    L2 for every later kernel in the step (projection GEMMs, attention), and clearing it is
-    not stream-ordered, so it needs a per-step device sync. Neither cost is measured on the
-    full block, so a −10% backward could be a net loss; revisit only if a full-block profile
-    shows this backward on the critical path. **Code:** the `l2_hint` / `l2_window` /
-    `l2_window_target` knobs, `l2_reset` and `l2_info` live in commit `0d8a66d5` on branch
-    `quant-path-optimisation` (PR #157, `src/spiky/lutorch_ex/cartridges/csrc/confidence_cuda.cu`
-    and `bench_confidence_cuda.py --l2-sweep`, paths as of that commit, since renamed to
-    `csrc/fused_confidence.cu` / `bench_fused_confidence.py`); the following commit on that
-    branch removed them.
 - **cp.async double-buffered gather**: 1.37–1.53× slower than Triton — the gather is pure
   memory latency with no compute to overlap and no row reuse.
 - **Tensor-core GEMM** (one-hot selection @ table, dense bf16): **14–22× slower**; sparse
