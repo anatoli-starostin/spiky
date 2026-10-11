@@ -218,7 +218,7 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
 | `fused_read` | `False` | `ConfidenceLUT` only. `False` uses the `embedding_bag` read. `True` uses the fused gather read on the fp32 table (see below) |
-| `bag_eval_read` | `False` | `ConfidenceLUT` / the `pure` path of `FusedConfidenceLUT`. `False`: eval reads a plain gather (`[B, G, tph, d_out]` materialised; bitwise-stable eval outputs). `True`: eval uses the training `embedding_bag` read too (no such tensor); agrees with the default to fp32 re-association, not bitwise. Opt-in, like `fused_read`; `fused_read=True` takes precedence |
+| `bag_eval_read` | `None` | `ConfidenceLUT` / the `pure` path of `FusedConfidenceLUT`. `None` (auto): `read_top_n=2` reads eval through the training `embedding_bag` read (no `[B, G, tph, d_out]` tensors: fp32, h16 d48 tph64 nap8, 32k tokens, compiled CUDA eval 14.40 ms / 6.75 GiB → 8.46 ms / 0.85 GiB); `read_top_n=1` keeps the plain gather, which Inductor fuses (embedding_bag is 23–34% slower there). `True` / `False` force either read. The two reads agree to fp32 re-association (max relative 6.7e-7), not bitwise. `fused_read=True` takes precedence |
 
 `fused_read=True` replaces all of `embedding_bag`'s kernels: a gather and score-weighted sum forward, a
 re-gather of the same rows for the score gradient, and an `index_add_` of the score-weighted rows for the
