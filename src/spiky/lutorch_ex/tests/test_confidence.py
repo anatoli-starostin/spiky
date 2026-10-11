@@ -82,6 +82,28 @@ def test_train_eval_value_match(read_top_n, anchor_mode, device):
 
 @pytest.mark.parametrize("read_top_n", [1, 2])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
+@pytest.mark.parametrize("pattern", PATTERNS)
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+@pytest.mark.parametrize("device", DEVICES)
+def test_bag_eval_read_matches_the_gather_eval_read(read_top_n, anchor_mode, pattern, dtype, device):
+    """bag_eval_read=True reads eval through embedding_bag: same value as the default plain-gather eval read up to
+    summation order (fp32 re-association), and the flag changes nothing in training."""
+    h_in, h_out = pattern
+    spec = LUTSpec(h_in=h_in, h_out=h_out, tph=8, nap=4, d_in=6, d_out=5, anchor_mode=anchor_mode)
+    gather = ConfidenceLUT(spec, seed=2, weight_init_std=1.0, read_top_n=read_top_n).to(device=device, dtype=dtype)
+    bag = ConfidenceLUT(spec, seed=2, weight_init_std=1.0, read_top_n=read_top_n, bag_eval_read=True)
+    bag = bag.to(device=device, dtype=dtype)
+    assert gather.bag_eval_read is False and bag.bag_eval_read is True
+    x = torch.randn(64, h_in, 6, device=device, dtype=dtype)
+    with torch.no_grad():
+        ye_g, ye_b = gather.eval()(x), bag.eval()(x)
+        yt_g, yt_b = gather.train()(x), bag.train()(x)
+    assert _normrel(ye_b, ye_g) < (1e-6 if dtype == torch.float32 else 1e-14)
+    assert torch.equal(yt_b, yt_g)
+
+
+@pytest.mark.parametrize("read_top_n", [1, 2])
+@pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_input_grad_is_score_only_no_routing(read_top_n, anchor_mode):
     """The address is detached: x receives gradient ONLY through the score (and, for n=2, the
     blend). Detaching the score/blend must zero the input gradient — proving no routing grad
@@ -156,3 +178,11 @@ def test_single_and_pairs_canonical_coverage(anchor_mode):
     y = m(x)
     assert y.shape == (8, 2, 5)
     torch.autograd.grad(y.sum(), x)  # runs, no error
+
+
+def test_quantised_refuses_bag_eval_read():
+    """QuantisedConfidenceLUT has its own fake-quant read, so the ConfidenceLUT eval-read option is refused."""
+    from spiky.lutorch_ex import QuantisedConfidenceLUT
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=4, anchor_mode="pairs")
+    with pytest.raises(ValueError, match="bag_eval_read"):
+        QuantisedConfidenceLUT(spec, seed=1, bag_eval_read=True)
