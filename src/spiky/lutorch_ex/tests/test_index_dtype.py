@@ -114,6 +114,10 @@ def test_eval_int32_vs_int64(device, name, kw):
     outs = []
     with inductor_config.patch({"triton.autotune_pointwise": False}):
         for dt in (torch.int64, torch.int32):
+            # Both sides must compile fresh under this config: a graph of the same _forward_impl cached by an earlier
+            # test (compiled with autotuning on, e.g. the quantised rows of test_fused_vs_reference) would otherwise
+            # serve one side with different kernel configs.
+            torch._dynamo.reset()
             torch.manual_seed(0)
             m = getattr(lx, name)(spec, seed=1, index_dtype=dt, **kw).to(device).eval()
             with torch.no_grad():

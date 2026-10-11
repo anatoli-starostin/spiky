@@ -117,17 +117,37 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
 - **Consequence D:** `tests/test_fused_vs_reference.py` is the one fused-vs-reference harness: per cartridge (both
   Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2, FusedQuantisedConfidenceLUT), per dtype (fp32,
   bf16, fp16 input) and anchor mode wherever the fused class covers them, per head pattern, on every leaf, with
-  explicit tolerances justified in its docstring. The quantised pair is compared with the eager reference
-  (bit-identical); the compiled quantised reference can round a power-of-two exponent the other way at an exact
-  tie (Inductor evaluates log2 / logsigmoid differently), bounded separately and left to the follow-up PR's
-  rounding-tie item. It replaced
+  explicit tolerances justified in its docstring. It replaced
   `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
   double rounding of a low-precision input's gradient in the fan-out pattern.
+- **Consequence D, the quantised pair: two layers.** The power-of-two exponents are round-half-up floors of fp32
+  transcendental expressions, and no two implementations agree on them to the last ulp, so a value within a few ulps
+  of a rounding boundary can floor differently (one table's weight changes 2x). Two independent sources, tested
+  separately:
+  - *Layer 1, the oracle -- fused vs the eager (uncompiled) reference.* Only the kernel's own log1p / exp / log2
+    (nvcc, `--fmad=false`) vs torch's CUDA kernels differ: 0-3 integer disagreements per 8.4M tables at the champion
+    scale (4 seeds, at init and after training), all within 1e-7 (fp64) of a boundary. On every table more than
+    1e-5 (fp64) from a boundary the integers are exact and the output rows bit-identical (99.996% of tables, 99.73%
+    of rows); the remainder is counted, not asserted.
+  - *Layer 2, compile trust -- the compiled reference vs the eager reference.* Inductor reassociates the
+    transcendentals and flips ~1e-7 of tables; a tolerance test ("compile did not break the maths"): flipped rows
+    <= 1e-6 per table, eval relative norm <= 1e-3, training <= 1e-2 (worst measured 2.4e-7, 3.1e-4, 2.9e-3).
+  - Constructed exact ties: the reference and the kernel both round half up. Natural exact ties: zero.
+  - **Correction.** An earlier version of this section (and the harness, and #160's text) said the fused class is
+    bit-identical to the eager reference. That held only at test sizes (<= 0.6M tables, where a 1e-7 event rarely
+    lands); at the champion scale it is false. The non-quantised pairs have no rounded transcendental in their path
+    and are unaffected. No library code reads or exposes any test switch: the gate is recomputed in the tests.
 - **Consequence E:** every fused class (`FusedManifestoHardLUT`, `FusedManifestoSoftLUT`, `FusedConfidenceLUT`) is
   exported from `lutorch_ex/__init__.py`.
 
 **Deferred, outside #160 (on purpose):**
 - The quantised-optimisation follow-up PR: `DeployedQuantisedConfidenceLUT` 2.6x slower than its float twin at 32k
-  tokens, int8 deploy at n=2, the n=1 variant, the rounding-tie fix, and the reference quantised path's speed.
+  tokens, int8 deploy at n=2, the n=1 variant, the reference quantised path's speed, and the rounding-boundary
+  item: true bit-exactness of the quantised pair needs the kernel and the reference to share one transcendental
+  implementation (fp64 on both sides, or torch's CUDA math ported into the kernel) vs the documented status quo
+  (exact away from boundaries, bounded at them). Measured for fp64 exponents in the reference alone (branch
+  `wip/quant-fp64-exponents`, unpushed, the starting point): 0 compiled-vs-eager flips, but 0-6 disagreements per
+  8.4M tables with the fp32 kernel, and on the RTX 5090 (sm_120, fp64 at 1/64 of fp32) quantised eval 4.5x and
+  train +80% slower; cheap on H100 (sm_90, fp64 at 1/2).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
   lutorch_ex, and the nanochat profiling scripts (which also pass the removed `backend=`).
