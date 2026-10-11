@@ -132,10 +132,14 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     training forward) in 28 runs of 8.4M tables -- nap 3, 5, 6, 7 and 8 on the champion geometry and h8 tph32 nap4 d64,
     4 seeds, at init and after 200 training steps. Before, with torch's own reduction order, they disagreed on 0-3
     tables per run (the summation order and the reciprocal-multiply division; the transcendentals were identical).
-  - *Layer 2, compile trust -- the compiled reference vs the eager reference.* Inductor reassociates the
-    transcendentals and flips ~1e-7 of tables; a tolerance test ("compile did not break the maths"): flipped rows
-    <= 1e-6 per table, eval relative norm <= 1e-3, training <= 1e-2 (worst at the champion geometry 2.4e-7, 1.6e-4,
-    3.6e-3; at nap=3 training reached 8.9e-3, a documented limit if that geometry is ever tested).
+  - *Layer 2, compile trust -- the compiled reference vs the eager reference, in fp64 on purpose.* In fp32 Inductor's
+    reassociation of the transcendentals lands a few values per million tables on the other side of a rounding
+    boundary (measured: 52 of 192 runs had a flipped row; flip-free rows <= 1.1e-7, flipped rows >= 5.8e-3), so any
+    fp32 bound only absorbs flips. In fp64 the two evaluations differ by ~1e-16 and nothing flips (0 in 192 runs: nap 3
+    to 8 on two geometries, 8 seeds, at init and after training). The test therefore builds the cartridge in fp64
+    (through its normal dtype support; no library switch) and asserts tight bounds -- every row <= 1e-13, eval / value
+    / grad x / grad weights <= 1e-14, learned scalars <= 1e-12 (worst 2.3e-16, 2.2e-16 and 6.0e-14): compile
+    preserved the code logic. The fp32 numerics differ slightly, as expected; layer 1 pins them bit for bit.
   - Constructed exact ties: the reference and the kernel both round half up. Natural exact ties: zero.
   - **The trade-off, accepted on purpose:** (1) the reference partly encodes the kernel's operation order, so their
     agreement is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate than

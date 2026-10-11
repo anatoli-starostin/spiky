@@ -41,9 +41,9 @@ tested separately:
   docstring for the trade-off), so the same fp32 operations give the same integers, and the read the same values.
   Measured: 0 integer disagreements and bit-identical output rows in 28 runs (8.4M tables each; nap 3, 5, 6, 7, 8; two
   geometries; init and after training). Gradients keep the fp32 tolerances above (the backward's sums differ in order).
-* LAYER 2, compile trust -- the compiled reference vs the eager reference. A TOLERANCE test: Inductor reassociates the
-  transcendentals, so the shipped compiled reference flips ~1e-7 of tables; the test asserts compile did not break the
-  maths, not that it is bit-reproducible.
+* LAYER 2, compile trust -- the compiled reference vs the eager reference, in fp64 on purpose: in fp32 Inductor's
+  reassociation flips ~1e-7 of the exponents, in fp64 none (0 in 192 runs), so a tight bound checks that compile kept
+  the code logic; layer 1 pins the fp32 numbers.
 Constructed exact ties check the rule itself: reference and kernel both round half up. Natural exact ties: zero.
 
 Kernel-specific checks (launch knobs, determinism, the d_out launch boundary, bf16 accumulation under row collision,
@@ -188,22 +188,19 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
 # kernel's order (_pow2.blend_exponents) -- so:
 #   layer 1 -- fused vs the EAGER reference: BIT FOR BIT, integers and output rows, no tolerance, no gate. A CUDA or
 #              torch upgrade that changes libdevice (which both sides call) would fail here, by design;
-#   layer 2 -- compiled vs eager reference: a tolerance test ("compile did not break the maths"), bounds below.
-# All fp32; library code is not switched by any test.
+#   layer 2 -- compiled vs eager reference, in fp64: a check that torch.compile preserved the code logic (below).
+# Library code is not switched by any test; layer 2 builds the cartridge in fp64 through its public dtype support.
 
 CHAMPION = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
 QUANT_KW = dict(weight_init_std=0.5, read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6)
-#: A flipped exponent moves its row by >= ~6e-5 relative (one of 64 tables, weights within the 2^8 window, x2);
-#: fp32 summation order moves a row by <= 8.8e-8 (measured). Rows above this are flips.
-ROW_FLIP = 1e-6
-#: Layer 2 bounds, compiled vs eager reference. Worst measured at the champion geometry (8 runs): flipped rows
-#: 2.4e-7 per table, eval relative norm 1.6e-4, training (value, input and parameter gradients) 3.6e-3; the bounds
-#: leave ~4x, ~6x and ~3x headroom. A broken compile (a wrong op, a dropped term) moves every row, far beyond them.
-#: Known limit: at nap=3 (otherwise the champion geometry) training reached 8.9e-3 against TRAIN_REL_BOUND = 1e-2;
-#: these tests use the champion geometry only, and the bound must be revisited if a nap=3 geometry is ever added.
-FLIP_RATE_BOUND = 1e-6
-EVAL_REL_BOUND = 1e-3
-TRAIN_REL_BOUND = 1e-2
+#: Layer 2 bounds (fp64; see the comment above the layer-2 test). Measured over 192 runs -- nap 3, 4, 5, 6, 7, 8 on the
+#: champion geometry (8,192 vectors) and on h8 tph32 d64 (16,384 vectors), 8 seeds each, at init and after 200 Adam
+#: steps: no row moved by more than 2.3e-16 (so no exponent flipped in any run); eval and training value at most
+#: 6.1e-17, grad x 2.2e-16, grad weights 2.8e-19, the learned scalars beta / gamma / tau 6.0e-14 (each one sum over
+#: every sample, group, table and output, with cancellation). A flipped exponent would move its row by ~1e-2.
+FP64_ROW_BOUND = 1e-13          # every output row: no flip anywhere (worst 2.3e-16)
+FP64_TENSOR_BOUND = 1e-14       # eval, value, grad x, grad weights (worst 2.2e-16, ~45x headroom)
+FP64_SCALAR_BOUND = 1e-12       # beta / gamma / tau gradients (worst 6.0e-14, ~17x headroom)
 
 
 def _champion_pair(seed):
@@ -242,25 +239,33 @@ def test_quantised_layer1_fused_bit_exact_vs_eager_reference(seed):
 
 
 @pytest.mark.parametrize("seed", [0, 1])
-def test_quantised_layer2_compiled_reference_within_bounds_of_eager(seed):
-    """LAYER 2 (compile trust): the shipped compiled reference vs the eager reference, ungated. A tolerance test --
-    Inductor reassociates the transcendentals, so near-boundary exponents flip (~1e-7 of tables); asserted is that
-    compile did not break the maths: flipped rows per table <= FLIP_RATE_BOUND, eval relative norm <= EVAL_REL_BOUND,
-    training (value and every gradient) <= TRAIN_REL_BOUND (measured worst and headroom at the constants)."""
+def test_quantised_layer2_compiled_reference_matches_eager_in_fp64(seed):
+    """LAYER 2 (compile trust): the compiled reference vs the eager reference, both in fp64, at the champion geometry.
+
+    We run this comparison in fp64 on purpose. The quantised read rounds its power-of-two exponents to integers, and
+    in fp32 torch.compile's slightly different evaluation of the same formula lands a few values per million tables on
+    the other side of a rounding boundary, flipping an integer; any bound loose enough to absorb that says little. In
+    fp64 the two evaluations differ by ~1e-16, so no value is that close to a boundary and no integer flips (0 flips in
+    192 measured runs). What is left to compare is the code logic itself: if the compiled reference matches the eager
+    reference in fp64, torch.compile has preserved the logic, which is what this layer asserts. We believe that logic
+    then works the same in fp32 -- the fp32 numbers will of course differ slightly, and layer 1 is what pins the fp32
+    path, bit for bit against the fused kernel. The cartridge is built in fp64 through its normal dtype support
+    (``.double()``); no library code is switched. Bounds and the measurements behind them: the FP64_* constants."""
     ref, _, x = _champion_pair(seed)
-    tables = x.shape[0] * ref.spec.n_groups * ref.spec.tph
+    ref = ref.double()
+    x = x.double()
     with torch.no_grad():
         ref.eval()
         ye = ref._forward_impl(x)
         torch._dynamo.reset()
         yc = ref(x)                                        # compiled
-    rows = (yc - ye).norm(dim=-1) / ye.norm(dim=-1).clamp_min(1e-30)
-    rate = int((rows > ROW_FLIP).sum()) / tables
-    assert rate <= FLIP_RATE_BOUND, f"flipped-row rate {rate:.2e} > {FLIP_RATE_BOUND:.0e}"
-    e = float((yc - ye).norm() / ye.norm())
-    assert e <= EVAL_REL_BOUND, f"eval relative norm {e:.2e} > {EVAL_REL_BOUND:.0e}"
+    rows = (yc - ye).norm(dim=-1) / ye.norm(dim=-1).clamp_min(1e-300)
+    assert float(rows.max()) <= FP64_ROW_BOUND, f"a row moved by {float(rows.max()):.2e} (an exponent flipped?)"
+    e = _rel(yc, ye)
+    assert e <= FP64_TENSOR_BOUND, f"eval relative norm {e:.2e} > {FP64_TENSOR_BOUND:.0e}"
     ref.train()
-    go = torch.randn(x.shape[0], 16, 48, device="cuda", generator=torch.Generator(device="cuda").manual_seed(99))
+    go = torch.randn(x.shape[0], 16, 48, device="cuda", dtype=torch.float64,
+                     generator=torch.Generator(device="cuda").manual_seed(99))
     res = []
     for f in (ref._forward_impl, ref):                     # eager, then compiled
         torch._dynamo.reset()
@@ -270,8 +275,9 @@ def test_quantised_layer2_compiled_reference_within_bounds_of_eager(seed):
         res.append({"value": y.detach(), "grad x": xi.grad} | {n: p.grad.clone() for n, p in ref.named_parameters()})
         ref.zero_grad(set_to_none=True)
     for leaf in res[0]:
+        bound = FP64_SCALAR_BOUND if res[0][leaf].numel() == 1 else FP64_TENSOR_BOUND
         e = _rel(res[1][leaf], res[0][leaf])
-        assert e <= TRAIN_REL_BOUND, f"train {leaf}: relative norm {e:.2e} > {TRAIN_REL_BOUND:.0e}"
+        assert e <= bound, f"train {leaf}: relative norm {e:.2e} > {bound:.0e}"
 
 
 def _tie_margins(target_q=None, target_k=None, nap=4):
