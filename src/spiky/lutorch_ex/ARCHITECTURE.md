@@ -32,8 +32,9 @@
 - **C. The reference is a load-bearing path, not a test fixture.** Under rule 3, a machine without the compiled
   extension has no fast path at all, so the reference is the only thing that runs there. It must be correct at the
   real dtypes and geometries.
-  - **bf16 reference support: DECIDED, NOT YET IMPLEMENTED.** Today the plain cartridges raise on bf16 and only the
-    fused ones accept it, the exact reverse of rule 4. This gap is to be closed.
+  - **bf16 reference support: DECIDED, landed on #160.** The reference classes accept bf16 / fp16 with the fused
+    contract: fp32 maths (on fp32 views of the parameters and input), exactly one rounding per leaf; bit-identical
+    to the fp32 run rounded once.
 - **D. The fused-vs-reference equivalence test is the only thing binding the two files** once they are separate by
   design. It is per cartridge, with explicit per-dtype tolerances (value, input gradient, table gradient, learned
   scalars). It is a REQUIRED check, not optional hygiene.
@@ -94,9 +95,11 @@ Under rules 3 and 5 the first two **are gone**:
   reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
   `ConfidenceLUT`'s forward.
+- **Consequence C:** the reference classes accept bf16 / fp16: fp32 maths, one rounding per leaf, bit-identical to
+  the fp32 run rounded once (`tests/test_reference_low_precision.py`). `QuantisedConfidenceLUT` keeps rejecting low
+  precision (outside this spec's families).
 
 **Still open:**
-- **Consequence C:** the reference classes raise on bf16.
 - **Consequence D:** fused-vs-reference equivalence tests exist (`test_fused_equivalence`,
   `test_fused_manifesto_softsign`, `test_fused_confidence`, `test_fused_manifesto_cuda`), but not uniformly per
   cartridge and per dtype with explicit tolerances.

@@ -227,10 +227,7 @@ def test_bf16_vector_widths_agree(vec, n):
         assert _rel(a[k], b[k]) < BF16_TOL, f"vec {vec}: {k}"
 
 
-def test_confidence_lut_error_names_fused_confidence():
-    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
-    with pytest.raises(TypeError, match="FusedConfidenceLUT"):
-        ConfidenceLUT(spec).to(torch.bfloat16)(torch.randn(3, 2, 8, dtype=torch.bfloat16))
+
 
 
 # -- bf16 input read in-kernel, bf16 output stored in-kernel, identity in_head gather skipped -------------------------

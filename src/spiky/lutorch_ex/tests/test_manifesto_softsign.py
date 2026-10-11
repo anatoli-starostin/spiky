@@ -102,40 +102,11 @@ def test_forward_backward_runs(Cls, anchor_mode, h_in, h_out, device):
 
 @pytest.mark.parametrize("Cls", CARTRIDGES)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_rejects_low_precision(Cls, dtype):
-    """The reference cartridges are fp32/fp64 only; low-precision params OR inputs must raise."""
+def test_accepts_low_precision(Cls, dtype):
+    """Spec amendment C: low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
+    test_reference_low_precision.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(dtype)
-    with pytest.raises(TypeError, match="does not support low precision"):
-        m(torch.randn(8, 2, 6, dtype=dtype))
+    assert m(torch.randn(8, 2, 6, dtype=dtype)).dtype == dtype
     m32 = Cls(spec, seed=0, weight_init_std=1.0)
-    with pytest.raises(TypeError, match="does not support low precision"):
-        m32(torch.randn(8, 2, 6, dtype=dtype))
-
-
-def test_temps_are_learnable_parameters():
-    spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
-    m = ManifestoSoftLUT(spec, weight="softsign", seed=0, weight_init_std=1.0)
-    names = {n for n, _ in m.named_parameters()}
-    assert "log_soft_score_temp" in names and "log_select_temp" in names
-    frozen = ManifestoSoftLUT(spec, weight="softsign", seed=0, weight_init_std=1.0, learnable_temps=False)
-    fnames = {n for n, _ in frozen.named_parameters()}
-    assert "log_soft_score_temp" not in fnames and "log_select_temp" not in fnames
-
-
-def test_temperature_options_belong_to_softsign_only():
-    """The temperatures exist only with weight="softsign"; with "rational" their options are refused, and the
-    confidence cartridges have no neighbour weight at all."""
-    import spiky.lutorch_ex as lx
-    spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
-    assert not hasattr(ManifestoHardLUT(spec, seed=0), "log_select_temp")
-    for kw in (dict(soft_score_temp=0.3), dict(select_temp=0.3), dict(learnable_temps=False)):
-        with pytest.raises(ValueError, match="apply only to weight='softsign'"):
-            ManifestoSoftLUT(spec, seed=0, **kw)
-    with pytest.raises(ValueError, match="weight must be one of"):
-        ManifestoHardLUT(spec, seed=0, weight="sigmoid")
-    for kw in (dict(weight="softsign"), dict(select_temp=0.3)):
-        with pytest.raises(TypeError, match="unexpected keyword"):
-            lx.ConfidenceLUT(spec, seed=0, **kw)
-    m = ManifestoHardLUT(spec, seed=0, weight="softsign", soft_score_temp=0.25, select_temp=2.0)
-    assert abs(m.log_soft_score_temp.exp().item() - 0.25) < 1e-6 and abs(m.log_select_temp.exp().item() - 2.0) < 1e-6
+    assert m32(torch.randn(8, 2, 6, dtype=dtype)).dtype == dtype

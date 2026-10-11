@@ -22,7 +22,7 @@ Methodology:
   gradients excluded), measured on one extra iteration: eval forward; train forward (including what it saves for
   the backward); train backward (the peak while the backward runs, which still holds those saved tensors); train
   total = the larger of the two.
-- A cell that runs out of memory, or that the class refuses (the reference cartridges reject bf16), is recorded as
+- A cell that runs out of memory, or that the class refuses (QuantisedConfidenceLUT rejects bf16), is recorded as
   such, never dropped.
 - ``torch._dynamo.reset()`` before every cell: all cartridges of a class compile the same ``_forward_impl``, so without
   it the cells after the first eight compiles hit Dynamo's recompile limit and silently measure eager execution.

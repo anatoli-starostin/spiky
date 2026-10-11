@@ -41,6 +41,8 @@ from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION, resolve_index_dtyp
 class QuantisedConfidenceLUT(ConfidenceLUT):
     """p2_int8 quant-aware twin of :class:`ConfidenceLUT`; see module docstring."""
 
+    _ACCEPTS_LOW_PRECISION = False   # outside spec amendment C (the quantised-cartridges work decides its precision)
+
     # The n=2 quant train path is the flat monolith (see _quant_read_monolith). For its cheaper fused
     # backward it compiles with torch.compile(dynamic=None) (auto: specialise on the first shape), not
     # the base's dynamic=True. With dynamic=True the backward

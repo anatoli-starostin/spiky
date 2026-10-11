@@ -30,8 +30,7 @@ Gradient asymmetry (by design).
 
 Read path: in training, ``F.embedding_bag`` (the per-table gather and the tph sum in one kernel) for the hard value,
 plus the two cells' difference, detached, for the surrogate; backward is plain autograd through ``w``. torch.compile
-wraps the eval read on CUDA only (ReferenceForward). fp32/fp64 only: the forward raises on bf16/fp16 (low precision
-is the fused cartridges' feature).
+wraps the eval read on CUDA only (ReferenceForward). bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward, spec amendment C).
 """
 from __future__ import annotations
 

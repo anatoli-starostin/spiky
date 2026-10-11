@@ -2,7 +2,7 @@
 
 Covers: fp64 gradcheck of the scored backward (input, weights, β, γ, and τ for n=2); both anchor
 modes; read_top_n ∈ {1,2}; gradients reach β/γ/τ; the address is detached (x gets gradient ONLY
-through the score / blend, no routing grad); bf16/fp16 raises (pure fp32/fp64 only); single-anchor
+through the score / blend, no routing grad); bf16/fp16 runs (exactness: test_reference_low_precision.py); single-anchor
 canonical coverage; train == eval forward value; the removed read flags raise; shape/dtype invariants.
 """
 import pytest
@@ -110,14 +110,14 @@ def test_input_grad_is_score_only_no_routing(read_top_n, anchor_mode):
 
 @pytest.mark.parametrize("read_top_n", [1, 2])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
-def test_rejects_low_precision(read_top_n, dtype):
+def test_accepts_low_precision(read_top_n, dtype):
+    """Spec amendment C: low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
+    test_reference_low_precision.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n).to(dtype)
-    with pytest.raises(TypeError, match="does not support low precision"):
-        m(torch.randn(8, 2, 6, dtype=dtype))
+    assert m(torch.randn(8, 2, 6, dtype=dtype)).dtype == dtype
     m32 = ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n)
-    with pytest.raises(TypeError, match="does not support low precision"):
-        m32(torch.randn(8, 2, 6, dtype=dtype))
+    assert m32(torch.randn(8, 2, 6, dtype=dtype)).dtype == dtype
 
 
 def test_score_params_and_tau_wiring():
