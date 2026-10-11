@@ -1,4 +1,4 @@
-"""Benchmark FusedConfidenceLUT against the compiled ConfidenceLUT (default and fused read), cartridge only, train
+"""Benchmark FusedConfidenceLUT against the compiled ConfidenceLUT, cartridge only, train
 forward and fwd+bwd, at the d24 LUT-FFN geometry (h 16, d 48, tph 64, nap 8, table dropout 0.2), with an fp32 and a
 bf16 table. Also reports each path's error against an fp64 eager reference (same keep mask), and optionally sweeps
 the CUDA launch knobs (--sweep: fp32 table; --sweep-bf16: bf16 table).
@@ -27,11 +27,11 @@ def provenance(mod) -> str:
     """The backend that actually ran, for the row label; raises if it cannot be determined (never report blind)."""
     if isinstance(mod, FusedConfidenceLUT):
         return backend_of(mod)
-    return "compiled ConfidenceLUT, " + ("fused read" if mod.fused_read else "default read")
+    return "compiled ConfidenceLUT"
 
 SPEC = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
 KW = dict(seed=1, table_dropout_rate=0.2)
-KINDS = ("compiled", "compiled-fused", "cuda", "cuda-bf16")
+KINDS = ("compiled", "cuda", "cuda-bf16")
 
 
 def build(kind, n, knobs=None):
@@ -39,8 +39,7 @@ def build(kind, n, knobs=None):
     if kind in ("cuda", "cuda-bf16"):
         m = FusedConfidenceLUT(spec, read_top_n=n, backend="cuda", knobs=knobs, **KW).cuda().train()
         return m.to(torch.bfloat16) if kind == "cuda-bf16" else m
-    return ConfidenceLUT(spec, read_top_n=n, fused_read=(kind == "compiled-fused"), index_dtype=torch.int32,
-                         **KW).cuda().train()
+    return ConfidenceLUT(spec, read_top_n=n, index_dtype=torch.int32, **KW).cuda().train()
 
 
 def time_step(mod, x, go, iters=20, warmup=5, reps=3, fwd_only=False):

@@ -27,24 +27,19 @@ cells** only (``w_c ∈ R^{d_out}``), both anchor modes (inherited from the base
 fp32/fp64 only — like the other pure cartridges it carries no mixed-precision handling, so the
 base ``forward`` raises ``TypeError`` on bf16/fp16.
 
-Read path mirrors the pure SoftSign cartridges: the train read is one ``F.embedding_bag`` (fuses
-the per-table gather + the score-scaled tph-sum, no ``[B,G,tph,d_out]`` tensor), and torch.compile
-wraps the eval forward on CUDA only (inherited from the base). The eval read depends on n by default
-(``bag_eval_read=None``, "auto"):
+One read, for train and eval and both n: ``y = Σ_k w_k · W[r_k]`` over the flat table rows ``r`` and weights
+``w`` from :meth:`_cells_and_weights` (``w = s`` at n = 1; ``s(1-v)`` and ``s v`` over ``c`` and ``c'`` at n = 2).
+It runs in one of two forms of the same maths, chosen by whether the forward is being compiled:
 
-* n = 2: the train ``embedding_bag`` read in eval too. The plain two-cell gather would materialise two
-  ``[B,G,tph,d_out]`` tensors, which Inductor does not fuse away (fp32, h16 d48 tph64 nap8, 32k tokens,
-  compiled CUDA eval: 14.40 ms / 6.75 GiB gather vs 8.46 ms / 0.85 GiB embedding_bag). Same math,
-  different summation order: agrees with the gather to fp32 re-association (max |a-b| / max |b| 6.7e-7
-  CPU, 6.4e-7 CUDA; 1.2e-15 fp64), not bitwise.
-* n = 1: the plain gather, which Inductor does fuse on CUDA (the embedding_bag read is 23-34% slower
-  there).
+* compiled (CUDA, the default): :func:`fused_scored_read` (``cartridges/_fused_read.py``), a gather × weight → sum
+  with its own backward, which Inductor fuses into a few kernels. Fp32, h16 d48 tph64 nap8, 8,192 vectors: train
+  step 6.55 → 3.48 ms (n = 1) and 11.83 → 5.35 ms (n = 2) against ``F.embedding_bag``;
+* eager (CPU, or ``LUTORCH_EX_NO_COMPILE=1``): one ``F.embedding_bag`` with ``per_sample_weights``. Uncompiled, the
+  fused read materialises its gathered rows (CPU n = 1 train step 97.6 → 350.7 ms at 1,024 vectors), so eager keeps
+  the one-kernel embedding_bag.
 
-``bag_eval_read=True`` / ``False`` forces either read for any n. None of this touches
-FusedConfidenceLUT's 'cuda' path, which never reads through here.
-Backward is plain autograd — ``s_t`` / ``v`` (and their temperatures) are fully differentiable.
-``fused_read=True`` replaces both reads with the fused gather read (``cartridges/_fused_read.py``) and
-takes precedence over ``bag_eval_read``.
+The two agree to fp32 re-association (≤ 7e-7), not bitwise. Backward is autograd through either form: ``s_t`` / ``v``
+(and their temperatures) are fully differentiable. FusedConfidenceLUT's ``cuda`` path never reads through here.
 """
 from __future__ import annotations
 
@@ -68,11 +63,6 @@ class ConfidenceLUT(ManifestoLUT):
         read_tau_init: initial τ for read_top_n=2 (champion 0.5).
         read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer.
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
-        fused_read: read via the fused gather -> x score -> sum (cartridges/_fused_read.py) instead of the
-            default embedding_bag read; replaces embedding_bag's forward and score-gradient kernels (default False).
-        bag_eval_read: whether eval reads through the train embedding_bag read too, instead of the plain gather
-            (no [B, G, tph, d_out] tensor; agrees to fp32 re-association, not bitwise). Default None = auto: on for
-            read_top_n=2, off for read_top_n=1 (see the module docstring); True / False force it.
     """
 
     # Compile the TRAIN forward too (not just eval): the score/blend read-out folds into a handful
@@ -91,19 +81,11 @@ class ConfidenceLUT(ManifestoLUT):
         read_tau_init: float = 0.5,
         read_tau_learnable: bool = True,
         learnable_score: bool = True,
-        fused_read: bool = False,
-        bag_eval_read: bool | None = None,
         **kw,
     ):
         super().__init__(spec, **kw)
-        # Fused read (see cartridges/_fused_read.py): gather -> x score -> sum from the fp32 master, replacing
-        # embedding_bag's forward and score-gradient kernels. False (default) = the unchanged embedding_bag read.
-        self.fused_read = bool(fused_read)
         if read_top_n not in (1, 2):
             raise ValueError(f"read_top_n must be 1 or 2, got {read_top_n}")
-        # Eval read (see the module docstring): None = auto, the train embedding_bag read at n=2 (no two
-        # [B, G, tph, d_out] tensors) and the plain gather at n=1 (which Inductor fuses); True / False force it.
-        self.bag_eval_read = (read_top_n == 2) if bag_eval_read is None else bool(bag_eval_read)
         if not (beta_init > 0 and gamma_init > 0 and read_tau_init > 0):
             raise ValueError(
                 f"beta_init, gamma_init, read_tau_init must be > 0, got "
@@ -143,47 +125,36 @@ class ConfidenceLUT(ManifestoLUT):
         tau = self.log_read_tau.to(u_abs_star.dtype).exp()
         return torch.sigmoid(-2.0 * u_abs_star / tau)
 
-    # -- score-weighted reads (train = fused embedding_bag; eval = plain gather) ------------
+    # -- the score-weighted read ---------------------------------------------------------------
 
-    def _scored_read(self, c: torch.Tensor, s: torch.Tensor) -> torch.Tensor:
-        """``Σ_t s_t·W_t[c_t]`` via one embedding_bag (per_sample_weights = s); no
-        ``[B,G,tph,d_out]`` tensor. -> ``[B, G, d_out]``."""
-        G, tph, K, d_out = self.weights.shape
+    def _cells_and_weights(self, c, c_alt, s, v):
+        """Flat table rows ``[B*G, n*tph]`` and their weights: ``s`` over ``c`` (n = 1), or ``s(1-v)`` over ``c``
+        and ``s v`` over ``c'`` (n = 2)."""
+        G, tph, K, _ = self.weights.shape
         B = c.shape[0]
-        W2 = self.weights.reshape(G * tph * K, d_out)
-        gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
-        psw = s.reshape(B * G, tph).to(W2.dtype)
-        return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
+        rows = _global_cells(c, G, tph, K)
+        if self.read_top_n == 1:
+            return rows.reshape(B * G, tph), s.reshape(B * G, tph)
+        rows = torch.cat([rows, _global_cells(c_alt, G, tph, K)], dim=2)
+        w = torch.cat([s * (1.0 - v), s * v], dim=2)
+        return rows.reshape(B * G, 2 * tph), w.reshape(B * G, 2 * tph)
 
-    def _scored_blend_read(self, c, c_alt, s, v) -> torch.Tensor:
-        """``Σ_t s_t·[(1-v)W[c] + v W[c']]`` via one embedding_bag over the two cells with
-        per_sample_weights ``[s(1-v), s v]``. -> ``[B, G, d_out]``."""
+    def _scored_read(self, c, c_alt, s, v) -> torch.Tensor:
+        """``Σ_k w_k · W[r_k]`` per (vector, group) -> ``[B, G, d_out]``; the two forms are in the module docstring."""
         G, tph, K, d_out = self.weights.shape
-        B = c.shape[0]
-        W2 = self.weights.reshape(G * tph * K, d_out)
-        gc = _global_cells(c, G, tph, K)
-        gca = _global_cells(c_alt, G, tph, K)
-        idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
-        psw = torch.cat([s * (1.0 - v), s * v], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
-        return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
+        table = self.weights.reshape(G * tph * K, d_out)
+        rows, w = self._cells_and_weights(c, c_alt, s, v)
+        w = w.to(table.dtype)
+        if torch.compiler.is_compiling():
+            out = fused_scored_read(rows, w, table)
+        else:
+            out = F.embedding_bag(rows, table, per_sample_weights=w, mode="sum")
+        return out.reshape(c.shape[0], G, d_out)
 
     # -- combine is not used (forward is overridden); kept to satisfy the ABC ---------------
 
     def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
         raise NotImplementedError
-
-    def _fused_read(self, c, c_alt, s, v) -> torch.Tensor:
-        """Score-weighted read via :func:`fused_scored_read` from the master table (``fused_read=True``)."""
-        G, tph, K, d_out = self.weights.shape
-        B = c.shape[0]
-        W2 = self.weights.reshape(G * tph * K, d_out)
-        if self.read_top_n == 1:
-            idx = _global_cells(c, G, tph, K).reshape(B * G, tph)
-            psw = s.reshape(B * G, tph)
-        else:
-            idx = torch.cat([_global_cells(c, G, tph, K), _global_cells(c_alt, G, tph, K)], dim=2).reshape(B * G, 2 * tph)
-            psw = torch.cat([s * (1.0 - v), s * v], dim=2).reshape(B * G, 2 * tph)
-        return fused_scored_read(idx, psw.to(W2.dtype), W2).reshape(B, G, d_out)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
@@ -193,21 +164,5 @@ class ConfidenceLUT(ManifestoLUT):
         mask = self._table_dropout_mask(s.shape[0], s.device, s.dtype)
         if mask is not None:
             s = s * mask
-        if self.fused_read:
-            v = self._blend_v(u_abs_star) if self.read_top_n == 2 else None
-            return self._route(self._fused_read(c, c_alt, s, v), x)
-        bag = self.training or self.bag_eval_read
-        if self.read_top_n == 1:
-            if bag:
-                grp_out = self._scored_read(c, s)
-            else:
-                grp_out = (s.unsqueeze(-1) * self._read(c)).sum(dim=2)
-        else:
-            v = self._blend_v(u_abs_star)                     # [B, G, tph]
-            if bag:
-                grp_out = self._scored_blend_read(c, c_alt, s, v)
-            else:
-                y_hard, y_alt = self._read_pair(c, c_alt)
-                blend = y_hard + v.unsqueeze(-1) * (y_alt - y_hard)
-                grp_out = (s.unsqueeze(-1) * blend).sum(dim=2)
-        return self._route(grp_out, x)
+        v = self._blend_v(u_abs_star) if self.read_top_n == 2 else None
+        return self._route(self._scored_read(c, c_alt, s, v), x)

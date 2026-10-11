@@ -25,7 +25,6 @@ output heads, the kernel stores the bf16 output itself (a fan-in keeps the fp32 
 both are bitwise identical to casting outside the kernel. A bf16 table stays bf16 in memory and is upconverted in
 registers on the 'cuda' path; its weight gradient accumulates in an fp32 buffer and is cast to bf16 once, at the end.
 On the 'pure' path low precision runs the ConfidenceLUT math in fp32 on an fp32 view of the parameters.
-``fused_read`` is ignored by the CUDA path.
 
 Table dropout draws its keep flags with ``torch.rand`` (one bool per (b, g, t), like Inductor's separate RNG kernel)
 and the kernels apply them; the stream of random numbers differs from the compiled ConfidenceLUT's, the

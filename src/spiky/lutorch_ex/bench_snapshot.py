@@ -11,8 +11,7 @@ Methodology:
   eval mode under ``no_grad``; train forward / backward / total run in train mode, ``y.backward(go)``.
 - Each class runs with its defaults (``backend='auto'``, default read options), i.e. what a user gets, marked ``*``.
   Every implementation choice the class offers is also measured as its own row, so each default is checked against
-  its alternatives: the explicit backends of the fused classes, and ConfidenceLUT's ``bag_eval_read`` (the read the
-  n-dependent default does not pick) and ``fused_read``. The backend that actually ran is recorded.
+  its alternatives: the explicit backends of the fused classes. The backend that actually ran is recorded.
 - Every cell runs in its own fresh Python process (``--no-isolate`` runs them all in this one).
 - Per mode, the first call (build / compile) and ``--warmup`` iterations are discarded. Then ``--repeats``
   iterations are timed one by one with CUDA events, with ``torch.cuda.synchronize()`` around each, and reported as
@@ -84,11 +83,7 @@ CARTRIDGES = [
     *[(f"FusedSoftSignSmoothLUT backend={b}", _fused(lx.FusedSoftSignSmoothLUT, b), False)
       for b in ("native", "tier1", "pure_eval")],
     ("ConfidenceLUT n=1", _conf(lx.ConfidenceLUT, 1), True),
-    ("ConfidenceLUT n=1 bag_eval_read=True", _conf(lx.ConfidenceLUT, 1, bag_eval_read=True), False),
-    ("ConfidenceLUT n=1 fused_read=True", _conf(lx.ConfidenceLUT, 1, fused_read=True), False),
     ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2), True),
-    ("ConfidenceLUT n=2 bag_eval_read=False", _conf(lx.ConfidenceLUT, 2, bag_eval_read=False), False),
-    ("ConfidenceLUT n=2 fused_read=True", _conf(lx.ConfidenceLUT, 2, fused_read=True), False),
     ("FusedConfidenceLUT n=1", _conf(FusedConfidenceLUT, 1), True),
     ("FusedConfidenceLUT n=1 backend=pure", _conf(FusedConfidenceLUT, 1, backend="pure"), False),
     ("FusedConfidenceLUT n=2", _conf(FusedConfidenceLUT, 2), True),
