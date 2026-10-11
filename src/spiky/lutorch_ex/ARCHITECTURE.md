@@ -57,10 +57,10 @@ fold, SoftSign's "Smooth" (the same variant as Manifesto's "Soft") becomes `Soft
 - **Rejected:** an implementation suffix (`ManifestoHardRefLUT` / `ManifestoHardCudaLUT`), which renames every class,
   and namespaces (`lutorch_ex.reference.X` / `lutorch_ex.cuda.X`), which change every import and make the two forms
   identical in a `repr`.
-- **The `SoftSign*` names: no deprecated aliases** (Anatoly's preference) unless something outside the package
-  depends on them. No checkpoint and no model code does (state_dicts hold no class names; the learned temperatures
-  stay `log_soft_score_temp` / `log_select_temp`). The only references are documentation and experiment / profiling
-  scripts, listed in #160; final call pending.
+- **The `SoftSign*` names: DECIDED, no aliases, no shims, no deprecation wrappers.** The fold renames them cleanly
+  (one name per thing). No checkpoint and no model code depends on them: state_dicts hold no class names, and the
+  learned temperatures stay `log_soft_score_temp` / `log_select_temp`. References in the report `.tex` and in
+  experiment / profiling scripts are left dangling on purpose until the final cleanup; they are listed in #160.
 
 ## `LUTORCH_EX_NO_CUDA_EXT` under this spec
 
