@@ -244,3 +244,32 @@ def test_confidence_lut_error_names_fused_confidence():
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
     with pytest.raises(TypeError, match="FusedConfidenceLUT"):
         ConfidenceLUT(spec).to(torch.bfloat16)(torch.randn(3, 2, 8, dtype=torch.bfloat16))
+
+
+# -- bf16 input read in-kernel, bf16 output stored in-kernel, identity in_head gather skipped -------------------------
+@pytest.mark.parametrize("table", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("pattern", [(4, 4), (4, 1), (1, 4)])          # per-head, fan-in, fan-out
+@pytest.mark.parametrize("n", [1, 2])
+def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
+    """A bf16 input goes to the kernels as is (upconverted when staged: exact). Per-head / fan-out store the bf16
+    output in-kernel; fan-in sums the groups in fp32 and casts. All must be bitwise the fp32 run on the same values
+    with its output rounded once, which is what the path did before (cast in, cast out). grad x comes back bf16."""
+    h_in, h_out = pattern
+    spec = LUTSpec(h_in=h_in, h_out=h_out, tph=16, nap=6, d_in=24, d_out=24, anchor_mode="pairs")
+    m = FusedConfidenceLUT(spec, seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
+                           read_tau_init=0.6, backend="cuda").to(device="cuda", dtype=table)
+    torch.manual_seed(0)
+    xb = torch.randn(70, h_in, 24, device="cuda").to(torch.bfloat16)
+    go = torch.randn(70, h_out, 24, device="cuda").to(torch.bfloat16).float()   # same go for both runs
+    for mode in ("eval", "train"):
+        getattr(m, mode)()
+        with torch.no_grad():
+            yb, yf = m(xb), m(xb.float())
+        assert yb.dtype == torch.bfloat16 and yf.dtype == torch.float32
+        assert torch.equal(yb, yf.to(torch.bfloat16)), mode
+    a, b = _fwd_bwd(m, xb, go), _fwd_bwd(m, xb.float(), go)
+    assert a["grad x"].dtype == torch.bfloat16
+    # The backward accumulates grad z with shared-memory atomics (not bit-reproducible run to run), so the gradients
+    # are compared to one bf16 rounding of the fp32 run.
+    for k in a:
+        assert _rel(a[k], b[k].to(a[k].dtype)) < BF16_TOL, k

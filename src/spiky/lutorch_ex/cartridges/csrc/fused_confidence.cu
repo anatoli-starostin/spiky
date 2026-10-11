@@ -13,9 +13,13 @@
 // Launch knobs (host side, see fused_confidence.py): threads per CTA (forward and backward separately), rows per
 // CTA, vector width VEC (1, 2, 4; 8 for bf16) and whether the weight-gradient scatter uses vector atomics (sm_90+).
 //
-// Table dtype T: fp32 or bf16. A bf16 table is loaded and upconverted to fp32 in registers; every reduction, the
-// output and the weight-gradient buffer stay fp32 (a bf16 atomic scatter would lose small contributions to
-// rounding, and the loss grows with the number of tokens hitting a row).
+// Table dtype T: fp32 or bf16. A bf16 table is loaded and upconverted to fp32 in registers; every reduction and the
+// weight-gradient buffer stay fp32 (a bf16 atomic scatter would lose small contributions to rounding, and the loss
+// grows with the number of tokens hitting a row).
+//
+// Input z: fp32 or bf16. A bf16 z is upconverted while its row is staged into fp32 shared memory (no fp32 copy of the
+// input in global memory). The forward output is fp32, or bf16 when the caller asks (out_bf16: one RNE rounding at
+// the store, after the fp32 reduction); grad z is stored in z's dtype (one rounding, in-kernel).
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -30,7 +34,8 @@ namespace {
 constexpr int MAX_NAP = 16;
 
 struct Params {
-    const float* z;          // [B, G, d_in]
+    const float* z;          // [B, G, d_in], fp32 input (nullptr when bf16)
+    const __nv_bfloat16* zb; // the same, bf16 input, upconverted when staged (nullptr when fp32)
     const int16_t* anc_a;    // [G, tph, nap]
     const int16_t* anc_b;    // [G, tph, nap], nullptr in single-anchor mode
     const float* W;          // [G * tph * K, d_out], fp32 table (nullptr when the table is bf16)
@@ -100,6 +105,12 @@ __device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
     }
 }
 
+// The input row is staged once per row into fp32 shared memory; a bf16 input is upconverted there (exact). The branch
+// is uniform across the CTA.
+__device__ inline float load_z(const Params& p, size_t i) {
+    return p.zb ? __bfloat162float(p.zb[i]) : p.z[i];
+}
+
 template <typename T> __device__ inline const T* table(const Params& p);
 template <> __device__ inline const float* table<float>(const Params& p) { return p.W; }
 template <> __device__ inline const __nv_bfloat16* table<__nv_bfloat16>(const Params& p) { return p.Wb; }
@@ -161,7 +172,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
 }
 
 template <int N, int VEC, typename T>
-__global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
+__global__ void confidence_fwd_kernel(Params p, float* __restrict__ out, __nv_bfloat16* __restrict__ outb) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
     const int nchunk = p.d_out / VEC;
     const int nstripe = blockDim.x / nchunk;
@@ -191,7 +202,7 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
         const int b = b0 + r;
         if (b >= p.B) break;                              // uniform across the CTA
         const size_t row = (size_t)b * p.G + g;
-        for (int i = tid; i < p.d_in; i += bd) zs[i] = p.z[row * p.d_in + i];
+        for (int i = tid; i < p.d_in; i += bd) zs[i] = load_z(p, row * p.d_in + i);
         __syncthreads();
         for (int t = tid; t < p.tph; t += bd)
             address_table<N>(p, g, b, t, zs, sa, sb, beta, gamma, tau, cs, cas, w1, w2, nullptr);
@@ -218,7 +229,8 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out) {
         for (int i = tid; i < p.d_out; i += bd) {
             float y = 0.f;
             for (int s = 0; s < nstripe; ++s) y += part[s * p.d_out + i];
-            out[row * p.d_out + i] = y;
+            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bf16-output mode: one RNE rounding at the store
+            else out[row * p.d_out + i] = y;
         }
         __syncthreads();                                  // part / zs reused by the next row
     }
@@ -238,7 +250,8 @@ __device__ inline float block_sum(float v, float* red) {
 
 template <int N, int VEC, typename T>
 __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, float* __restrict__ gW,
-                                      float* __restrict__ gz, float* __restrict__ gscal, bool vec_atomics) {
+                                      float* __restrict__ gz, __nv_bfloat16* __restrict__ gzb,
+                                      float* __restrict__ gscal, bool vec_atomics) {
     extern __shared__ __align__(16) unsigned char smem_raw[];
     const int nchunk = p.d_out / VEC;
     const int nstripe = blockDim.x / nchunk;
@@ -274,7 +287,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
         const int b = b0 + r;
         if (b >= p.B) break;
         const size_t row = (size_t)b * p.G + g;
-        for (int i = tid; i < p.d_in; i += bd) { zs[i] = p.z[row * p.d_in + i]; gzs[i] = 0.f; }
+        for (int i = tid; i < p.d_in; i += bd) { zs[i] = load_z(p, row * p.d_in + i); gzs[i] = 0.f; }
         for (int i = tid; i < p.d_out; i += bd) gos[i] = go[row * p.d_out + i];
         __syncthreads();
         for (int t = tid; t < p.tph; t += bd) {
@@ -355,7 +368,10 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
             }
         }
         __syncthreads();
-        for (int i = tid; i < p.d_in; i += bd) gz[row * p.d_in + i] = gzs[i];
+        for (int i = tid; i < p.d_in; i += bd) {
+            if (gzb) gzb[row * p.d_in + i] = __float2bfloat16(gzs[i]);
+            else gz[row * p.d_in + i] = gzs[i];
+        }
         __syncthreads();
     }
     // Per-CTA partials of the scalar gradients; summed on the host side (no contended global atomics).
@@ -373,13 +389,16 @@ Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10
                    const torch::Tensor& W, const c10::optional<torch::Tensor>& keep, double keep_scale,
                    const torch::Tensor& log_beta, const torch::Tensor& log_gamma, const torch::Tensor& log_tau,
                    int nap, double eps, int rows_per_cta) {
-    TORCH_CHECK(z.is_cuda() && z.scalar_type() == torch::kFloat32 && z.is_contiguous() && z.dim() == 3, "z: contiguous fp32 CUDA [B, G, d_in]");
+    TORCH_CHECK(z.is_cuda() && (z.scalar_type() == torch::kFloat32 || z.scalar_type() == torch::kBFloat16) && z.is_contiguous()
+                && z.dim() == 3, "z: contiguous fp32 or bf16 CUDA [B, G, d_in]");
     TORCH_CHECK((W.scalar_type() == torch::kFloat32 || W.scalar_type() == torch::kBFloat16) && W.is_contiguous() && W.dim() == 2,
                 "W: contiguous fp32 or bf16 [rows, d_out]");
     TORCH_CHECK(anc_a.scalar_type() == torch::kInt16 && anc_a.is_contiguous() && anc_a.dim() == 3, "anchors: contiguous int16 [G, tph, nap]");
     TORCH_CHECK(nap >= 1 && nap <= MAX_NAP, "nap must be in [1, 16]");
     Params p{};
-    p.z = z.data_ptr<float>();
+    const bool zbf16 = z.scalar_type() == torch::kBFloat16;
+    p.z = zbf16 ? nullptr : z.data_ptr<float>();
+    p.zb = zbf16 ? reinterpret_cast<const __nv_bfloat16*>(z.data_ptr()) : nullptr;
     p.anc_a = anc_a.data_ptr<int16_t>();
     p.anc_b = anc_b.has_value() ? anc_b->data_ptr<int16_t>() : nullptr;
     const bool bf16 = W.scalar_type() == torch::kBFloat16;
@@ -437,11 +456,14 @@ torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional
                              torch::Tensor W, c10::optional<torch::Tensor> keep, double keep_scale,
                              torch::Tensor log_beta, torch::Tensor log_gamma, torch::Tensor log_tau,
                              int64_t nap, double eps, int64_t read_top_n,
-                             int64_t threads, int64_t rows_per_cta, int64_t vec) {
+                             int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
-    auto out = torch::empty({p.B, p.G, p.d_out}, z.options());   // fp32 for either table dtype
+    // fp32 output for either table dtype, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1
+    // onto output heads; a fan-in sums the groups first and keeps fp32 so it rounds once).
+    TORCH_CHECK(!out_bf16 || z.scalar_type() == torch::kBFloat16, "out_bf16 needs a bf16 input");
+    auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(out_bf16 ? torch::kBFloat16 : torch::kFloat32));
     if (p.B == 0) return out;
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, false);
@@ -455,7 +477,9 @@ torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional
             } else {
                 auto k = confidence_fwd_kernel<kN, kV, T>;
                 if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-                k<<<grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+                k<<<grid, threads, L.total, stream>>>(
+                    p, out_bf16 ? nullptr : out.data_ptr<float>(),
+                    out_bf16 ? reinterpret_cast<__nv_bfloat16*>(out.data_ptr()) : nullptr);
             }
         });
     });
@@ -476,9 +500,10 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
     // The weight-gradient accumulator is fp32 for either table dtype (the caller casts it to the table dtype once).
     auto gW = torch::zeros(W.sizes(), W.options().dtype(torch::kFloat32));
-    auto gz = torch::empty_like(z);
+    const bool zbf16 = z.scalar_type() == torch::kBFloat16;   // grad z in the input dtype (one rounding in-kernel)
+    auto gz = torch::empty(z.sizes(), z.options().dtype(zbf16 ? torch::kBFloat16 : torch::kFloat32));
     const int grid = p.G * ((p.B + rows_per_cta - 1) / rows_per_cta);
-    auto gscal = torch::zeros({std::max(grid, 1), 3}, z.options());
+    auto gscal = torch::zeros({std::max(grid, 1), 3}, z.options().dtype(torch::kFloat32));
     if (p.B == 0) return {gW, gz, gscal};
     const int nstripe = threads / (p.d_out / vec);
     const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, true);
@@ -491,7 +516,9 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
             } else {
                 auto k = confidence_bwd_kernel<kN, kV, T>;
                 if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(k, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
-                k<<<grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(), gz.data_ptr<float>(),
+                k<<<grid, threads, L.total, stream>>>(p, go.data_ptr<float>(), gW.data_ptr<float>(),
+                                                      zbf16 ? nullptr : gz.data_ptr<float>(),
+                                                      zbf16 ? reinterpret_cast<__nv_bfloat16*>(gz.data_ptr()) : nullptr,
                                                       gscal.data_ptr<float>(), vec_atomics);
             }
         });
