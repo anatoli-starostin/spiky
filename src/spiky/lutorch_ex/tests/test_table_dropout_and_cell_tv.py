@@ -13,10 +13,9 @@ import pytest
 import torch
 import torch.nn as nn
 
-from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT,
-                              FusedSoftSignHardLUT, FusedSoftSignSmoothLUT, LUTSpec, ManifestoHardLUT,
-                              ManifestoSoftLUT, QuantisedConfidenceLUT, SoftSignHardLUT,
-                              SoftSignSmoothLUT, cell_tv_penalty)
+from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec,
+                              ManifestoHardLUT, ManifestoSoftLUT, QuantisedConfidenceLUT, cell_tv_penalty)
+from spiky.lutorch_ex.tests._weights import softsign
 
 _CUDA = torch.cuda.is_available()
 
@@ -76,8 +75,8 @@ def _build(Cls, spec, device, dtype, rate):
     return Cls(spec, **kw).to(device=device, dtype=dtype)
 
 
-ALL = [ManifestoHardLUT, ManifestoSoftLUT, SoftSignHardLUT, SoftSignSmoothLUT,
-       FusedManifestoHardLUT, FusedManifestoSoftLUT, FusedSoftSignHardLUT, FusedSoftSignSmoothLUT,
+ALL = [ManifestoHardLUT, ManifestoSoftLUT, softsign(ManifestoHardLUT), softsign(ManifestoSoftLUT),
+       FusedManifestoHardLUT, FusedManifestoSoftLUT, softsign(FusedManifestoHardLUT), softsign(FusedManifestoSoftLUT),
        ConfidenceLUT, QuantisedConfidenceLUT]
 
 
@@ -141,8 +140,8 @@ def _inject_mask(m, mask):
 # must agree. This is the native-kernel dropout-threading check (fused vs eager).
 PAIRS = [(FusedManifestoHardLUT, ManifestoHardLUT),
          (FusedManifestoSoftLUT, ManifestoSoftLUT),
-         (FusedSoftSignHardLUT, SoftSignHardLUT),
-         (FusedSoftSignSmoothLUT, SoftSignSmoothLUT)]
+         (softsign(FusedManifestoHardLUT), softsign(ManifestoHardLUT)),
+         (softsign(FusedManifestoSoftLUT), softsign(ManifestoSoftLUT))]
 
 
 @pytest.mark.parametrize("Fused,Pure", PAIRS)

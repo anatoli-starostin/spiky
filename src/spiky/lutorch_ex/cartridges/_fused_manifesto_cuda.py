@@ -2,16 +2,18 @@
 (``csrc/fused_manifesto.cu``), built the way FusedConfidenceLUT's are.
 
 One forward and one backward kernel per step run the whole cartridge: addressing (margins, MSB-first address,
-least-confident bit, neighbour), the uncertainty U = 0.5 / (1 + |u*|), the (weighted) read summed over the group's
-tables, and on the backward the weight-gradient scatter (vector fp32 atomics) plus the j*-pair margin gradient into z.
+least-confident bit, neighbour), the neighbour weight w (``weight="rational"``: 0.5 / (1 + |u*|); ``"softsign"``: the
+learned-temperature sigmoid, the two temperatures passed in as a device tensor), the (weighted) read summed over the
+group's tables, and on the backward the weight-gradient scatter (vector fp32 atomics), the j*-pair margin gradient into
+z and, for ``softsign``, the two temperatures' gradients (summed per CTA, then one atomic add each).
 Nothing per table goes through global memory; the backward recomputes the addressing from z. Compared with the
 'native' (lprojection) backend this removes the ``[B, G*tph, d_out]`` expanded gradient, the materialised addressing
 tensors, the per-element scalar atomics and most of the launches.
 
 Hard and Soft share the kernels and differ only in the read weights (see the .cu header for the math):
-  HARD  value  m W[c]                 table grad on c only        (straight-through: the input gradient is that of
-                                                                   the (1-U)/U blend)
-  SOFT  value  m ((1-U) W[c] + U W[c'])  table grad on c and c'   (the exact derivative of the blend)
+  HARD  value  m W[c]                 table grad on c only        (straight-through: the input / temperature
+                                                                   gradient is that of the (1-w)/w blend)
+  SOFT  value  m ((1-w) W[c] + w W[c'])  table grad on c and c'   (the exact derivative of the blend)
 with the table-dropout factor m.
 """
 from __future__ import annotations
@@ -130,29 +132,32 @@ def require_cuda(module, x: torch.Tensor) -> None:
 
 class _FusedManifesto(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, z, weights, anc_a, anc_b, mask, nap, eps, mode, knobs, out_bf16=False):
-        # z: fp32 or bf16 [B, G, d_in]. weights: fp32 or bf16 [G, tph, K, d_out] (read in place). mask: fp32 [B, G, tph]
-        # or None. out_bf16: the kernel stores its (fp32-accumulated) output as bf16; only for a bf16 z.
+    def forward(ctx, z, weights, temps, anc_a, anc_b, mask, nap, eps, mode, knobs, out_bf16=False):
+        # z: fp32 or bf16 [B, G, d_in]. weights: fp32 or bf16 [G, tph, K, d_out] (read in place). temps: fp32 [2]
+        # (T_soft, T_select) for weight="softsign", None for "rational". mask: fp32 [B, G, tph] or None. out_bf16: the
+        # kernel stores its (fp32-accumulated) output as bf16; only for a bf16 z.
         ext = fused_manifesto_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
-        out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, nap, eps, mode, fwd_threads, knobs.rows_per_cta, vec,
-                                out_bf16)
-        ctx.save_for_backward(z, weights, anc_a, anc_b, mask)
+        out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, temps, nap, eps, mode, fwd_threads, knobs.rows_per_cta,
+                                vec, out_bf16)
+        ctx.save_for_backward(z, weights, temps, anc_a, anc_b, mask)
         ctx.cfg = (nap, eps, mode, knobs, vec, bwd_threads)
         return out                                                   # fp32 [B, G, d_out]
 
     @staticmethod
     def backward(ctx, go):
-        z, weights, anc_a, anc_b, mask = ctx.saved_tensors
+        z, weights, temps, anc_a, anc_b, mask = ctx.saved_tensors
         nap, eps, mode, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
-        gW, gz = fused_manifesto_ext().manifesto_bwd(
-            go.float().contiguous(), z, anc_a, anc_b, W2, mask, nap, eps, mode,
+        gW, gz, gtemps = fused_manifesto_ext().manifesto_bwd(
+            go.float().contiguous(), z, anc_a, anc_b, W2, mask, temps, nap, eps, mode,
             bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         # gW accumulates in fp32 whatever the table dtype; cast once to the parameter's dtype.
         # gz comes back in z's dtype (a bf16 z: rounded once, in the kernel's store); the .to is then a no-op.
-        return gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), None, None, None, None, None, None, None, None
+        gt = gtemps if temps is not None and ctx.needs_input_grad[2] else None
+        return (gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), gt,
+                None, None, None, None, None, None, None, None)
 
 
 def init_cuda_backend(module, knobs) -> None:
@@ -183,6 +188,9 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     # Routing gate: the kernel may store bf16 directly only when _route is the identity (h_out == n_groups: per-head and
     # fan-out). Fan-in sums groups in _route, which must happen on the fp32 output before the single cast below.
     out_bf16 = z.dtype == torch.bfloat16 and module.spec.h_out == module.spec.n_groups
-    grp = _FusedManifesto.apply(z, module.weights, module._anc_a16, module._anc_b16, mask,
+    # weight="softsign": the two temperatures, fp32, on the device (no host sync); autograd carries their gradient
+    # back to the log-parametrised leaves.
+    temps = torch.stack(module._softsign_temps(torch.float32)).contiguous() if module.weight == "softsign" else None
+    grp = _FusedManifesto.apply(z, module.weights, temps, module._anc_a16, module._anc_b16, mask,
                                 module.spec.nap, module.cmp_eps, mode, module.knobs, out_bf16)
     return module._route(grp, x).to(x.dtype)

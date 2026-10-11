@@ -70,6 +70,7 @@ class ConfidenceLUT(ManifestoLUT):
     # whole _forward_impl is compiled, so the addressing is included -- _addresses is called
     # directly (no separate compiled _addr) to avoid a nested compile.
     _COMPILE_TRAIN = True
+    _WEIGHTED = False            # scored cells: no neighbour-weight function (weight= / soft-sign temperatures)
 
     def __init__(
         self,
@@ -150,11 +151,6 @@ class ConfidenceLUT(ManifestoLUT):
         else:
             out = F.embedding_bag(rows, table, per_sample_weights=w, mode="sum")
         return out.reshape(c.shape[0], G, d_out)
-
-    # -- combine is not used (forward is overridden); kept to satisfy the ABC ---------------
-
-    def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
-        raise NotImplementedError
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)

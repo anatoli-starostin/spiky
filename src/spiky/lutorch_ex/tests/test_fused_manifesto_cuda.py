@@ -1,8 +1,9 @@
 """The 'cuda' backend of FusedManifestoHardLUT / FusedManifestoSoftLUT (csrc/fused_manifesto.cu).
 
-Correctness gate: the new backend must reproduce the existing implementations (value, input gradient, table gradient
-and, inside ProjectionMHL, the projection gradients) for both cartridges, both anchor modes, with and without table
-dropout, fp32 and bf16, at small geometries and at the canonical h16 d48 tph64 nap8. The weight-gradient scatter uses
+Correctness gate: the new backend must reproduce the existing implementations (value, input gradient, table gradient,
+with weight="softsign" the two temperatures' gradients, and, inside ProjectionMHL, the projection gradients) for both
+cartridges and both weight functions, both anchor modes, with and without table dropout, fp32 and bf16, at small
+geometries and at the canonical h16 d48 tph64 nap8. The weight-gradient scatter uses
 fp32 atomics, so run-to-run results differ in summation order; that is measured here, not assumed.
 """
 import warnings
@@ -27,6 +28,9 @@ def _needs_fused_manifesto_ext():
     require_extension(fused_manifesto_ext() is not None, fmc.EXT_NAME)
 
 HARD, SOFT = lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT
+WEIGHTS = ["rational", "softsign"]
+#: The temperature gradients are sums over every (sample, group, table): a looser bound than the per-element ones.
+TEMP_TOL = 1e-4
 # (h_in, h_out, d, tph, nap): two small geometries, a fan-in one and the canonical one.
 GEOMS = {
     "small": (2, 2, 8, 4, 3),
@@ -47,13 +51,29 @@ def _make(cls, spec, backend, rate=0.0, dtype=torch.float32, **kw):
 
 
 def _run(mod, x, go, seed=1234):
-    """Forward + backward; the RNG is reseeded so table dropout draws the same keep pattern on every backend."""
+    """Forward + backward -> {"value", "grad x", "grad W"} (+ the two temperature gradients for weight="softsign").
+    The RNG is reseeded so table dropout draws the same keep pattern on every backend."""
     xx = x.detach().clone().requires_grad_(True)
     mod.zero_grad(set_to_none=True)
     torch.manual_seed(seed)
     y = mod(xx)
     y.backward(go.to(y.dtype))
-    return y.detach().float(), xx.grad.float(), mod.weights.grad.float()
+    return _grads(mod, y, xx)
+
+
+def _grads(mod, y, xx):
+    out = {"value": y.detach().float(), "grad x": xx.grad.float(), "grad W": mod.weights.grad.float()}
+    if mod.weight == "softsign":
+        out["grad T_soft"] = mod.log_soft_score_temp.grad.float().reshape(1)
+        out["grad T_sel"] = mod.log_select_temp.grad.float().reshape(1)
+    return out
+
+
+def _check(got, want, tol, msg=""):
+    for k, b in want.items():
+        a = got[k]
+        t = max(tol, TEMP_TOL) if k.startswith("grad T") else tol
+        assert _rel(a.double(), b.double()) < t, f"{msg} {k}: rel {_rel(a.double(), b.double()):.2e}"
 
 
 def _rel(a, b):
@@ -75,34 +95,41 @@ def _refs(cls):
 
 # --- fp32 equivalence against every existing backend --------------------------------------------------------------
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 @pytest.mark.parametrize("geom", ["small", "mid", "fan_in", "canonical"])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 @pytest.mark.parametrize("rate", [0.0, 0.3])
-def test_cuda_matches_existing_backends_fp32(cls, geom, anchor_mode, rate):
+def test_cuda_matches_existing_backends_fp32(cls, geom, anchor_mode, rate, weight):
     spec = _spec(geom, anchor_mode)
     x, go = _inputs(spec, 512 if geom == "canonical" else 192)
-    got = _run(_make(cls, spec, "cuda", rate), x, go)
+    got = _run(_make(cls, spec, "cuda", rate, weight=weight), x, go)
     for ref in _refs(cls):
-        want = _run(_make(cls, spec, ref, rate), x, go)
-        for what, a, b in zip(("value", "grad x", "grad W"), got, want):
-            assert _rel(a, b) < 2e-5, f"{cls.__name__} cuda vs {ref} {what}: rel {_rel(a, b):.2e}"
+        want = _run(_make(cls, spec, ref, rate, weight=weight), x, go)
+        _check(got, want, 2e-5, f"{cls.__name__}({weight}) cuda vs {ref}")
 
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("pure_cls, cls", [(lx.ManifestoHardLUT, HARD), (lx.ManifestoSoftLUT, SOFT)], ids=["hard", "soft"])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 @pytest.mark.parametrize("geom", ["small", "mid"])
-def test_cuda_fp32_matches_the_pure_cartridge_in_fp64(pure_cls, cls, anchor_mode, geom):
-    """The oracle: the pure ManifestoHardLUT / ManifestoSoftLUT in float64 (same seed -> same anchors and tables)."""
+@pytest.mark.parametrize("rate", [0.0, 0.3])
+def test_cuda_fp32_matches_the_pure_cartridge_in_fp64(pure_cls, cls, anchor_mode, geom, weight, rate):
+    """The oracle: the pure ManifestoHardLUT / ManifestoSoftLUT in float64 (same seed -> same anchors and tables), with
+    the same table-dropout draw."""
     spec = _spec(geom, anchor_mode)
     x, go = _inputs(spec, 160)
-    oracle = pure_cls(spec, seed=7, weight_init_std=0.5).cuda().train().double()
+    oracle = pure_cls(spec, seed=7, weight_init_std=0.5, table_dropout_rate=rate, weight=weight).cuda().train()
+    oracle = oracle.double()
     xo = x.double().requires_grad_(True)
+    torch.manual_seed(1234)
+    keep = oracle._table_dropout_mask(160, "cuda", torch.float32)           # the draw _run makes, reproduced
+    if keep is not None:
+        oracle._table_dropout_mask = lambda B, dev, dt: keep.to(dt)
     yo = oracle(xo)
     yo.backward(go.double())
-    got = _run(_make(cls, spec, "cuda"), x, go)
-    for what, a, b in zip(("value", "grad x", "grad W"), got, (yo.detach(), xo.grad, oracle.weights.grad)):
-        assert _rel(a.double(), b) < 1e-5, f"{what}: rel {_rel(a.double(), b):.2e}"
+    got = _run(_make(cls, spec, "cuda", rate, weight=weight), x, go)
+    _check(got, _grads(oracle, yo, xo), 1e-5, f"{cls.__name__}({weight})")
 
 
 def test_soft_oracle_gradient_is_the_true_derivative_gradcheck():
@@ -116,17 +143,19 @@ def test_soft_oracle_gradient_is_the_true_derivative_gradcheck():
     assert torch.autograd.gradcheck(lambda t: m(t), (x,), eps=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 @pytest.mark.parametrize("ref", ["tier1", "native"])
-def test_projection_gradients_match(cls, ref):
-    """Inside ProjectionMHL: the compress / decompress weight and bias gradients and the input gradient."""
+def test_projection_gradients_match(cls, ref, weight):
+    """Inside ProjectionMHL: the compress / decompress weight and bias gradients and the input gradient (and every
+    other parameter's, the temperatures included)."""
     if ref == "native":
         require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     spec = _spec("mid")
     res = {}
     for be in ("cuda", ref):
         torch.manual_seed(5)
-        proj = lx.ProjectionMHL(_make(cls, spec, be, rate=0.2), d_model=96).cuda().train()
+        proj = lx.ProjectionMHL(_make(cls, spec, be, rate=0.2, weight=weight), d_model=96).cuda().train()
         torch.manual_seed(6)
         with torch.no_grad():
             proj.decompress.weight.normal_(0, 0.1)        # zero-init by default: give it gradient to pass back
@@ -137,39 +166,40 @@ def test_projection_gradients_match(cls, ref):
         y.square().sum().backward()
         res[be] = {"y": y.detach(), "x": x.grad} | {n: p.grad for n, p in proj.named_parameters()}
     for k in res["cuda"]:
-        assert _rel(res["cuda"][k], res[ref][k]) < 5e-5, f"{k}: rel {_rel(res['cuda'][k], res[ref][k]):.2e}"
+        tol = TEMP_TOL if "temp" in k else 5e-5
+        assert _rel(res["cuda"][k], res[ref][k]) < tol, f"{k}: rel {_rel(res['cuda'][k], res[ref][k]):.2e}"
 
 
 # --- bf16 -------------------------------------------------------------------------------------------------------------
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 @pytest.mark.parametrize("geom", ["mid", "fan_in", "canonical"])   # fan_in: the fp32-output path (groups summed)
-def test_cuda_bf16_matches_fp32_math_on_the_bf16_values(cls, geom, anchor_mode):
+def test_cuda_bf16_matches_fp32_math_on_the_bf16_values(cls, geom, anchor_mode, weight):
     """A bf16 table + input: identical to the fp32 cuda backend run on the same (bf16-representable) values, up to
     the bf16 rounding of the outputs (the kernels upconvert and accumulate in fp32)."""
     spec = _spec(geom, anchor_mode)
     x, go = _inputs(spec, 256, dtype=torch.bfloat16)
-    lo = _make(cls, spec, "cuda", rate=0.2, dtype=torch.bfloat16)
-    hi = _make(cls, spec, "cuda", rate=0.2)
-    with torch.no_grad():
-        hi.weights.copy_(lo.weights.float())
-    got, want = _run(lo, x, go), _run(hi, x.float(), go)
-    for what, a, b in zip(("value", "grad x", "grad W"), got, want):
-        assert _rel(a, b) < 1e-2, f"{what}: rel {_rel(a, b):.2e}"      # bf16 output / grad rounding: 2**-8
+    lo = _make(cls, spec, "cuda", rate=0.2, dtype=torch.bfloat16, weight=weight)
+    hi = _make(cls, spec, "cuda", rate=0.2, weight=weight)
+    hi.load_state_dict({k: v.float() for k, v in lo.state_dict().items()})   # the same bf16-representable values
+    _check(_run(lo, x, go), _run(hi, x.float(), go), 1e-2)                   # bf16 output / grad rounding: 2**-8
 
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
-def test_cuda_bf16_matches_native_bf16(cls):
+def test_cuda_bf16_matches_native_bf16(cls, weight):
     require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     spec = _spec("canonical")
     x, go = _inputs(spec, 256, dtype=torch.bfloat16)
-    got = _run(_make(cls, spec, "cuda", rate=0.2, dtype=torch.bfloat16), x, go)
-    want = _run(_make(cls, spec, "native", rate=0.2, dtype=torch.bfloat16), x, go)
+    got = _run(_make(cls, spec, "cuda", rate=0.2, dtype=torch.bfloat16, weight=weight), x, go)
+    want = _run(_make(cls, spec, "native", rate=0.2, dtype=torch.bfloat16, weight=weight), x, go)
     # native rounds the deciding margin to bf16 before its input-gradient coefficient (_native_ops._flatten); the
     # cuda backend keeps it fp32. Both values / table grads are fp32-accumulated then rounded to bf16 once.
-    for what, a, b, tol in zip(("value", "grad x", "grad W"), got, want, (1e-2, 3e-2, 1e-2)):
-        assert _rel(a, b) < tol, f"{what}: rel {_rel(a, b):.2e}"
+    for what, tol in (("value", 1e-2), ("grad x", 3e-2), ("grad W", 1e-2), ("grad T_soft", 3e-2), ("grad T_sel", 3e-2)):
+        if what in want:
+            assert _rel(got[what], want[what]) < tol, f"{what}: rel {_rel(got[what], want[what]):.2e}"
 
 
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
@@ -184,25 +214,25 @@ def test_bf16_table_grad_accumulates_in_fp32_under_heavy_row_collision(cls):
     hi = _make(cls, spec, "cuda")
     with torch.no_grad():
         hi.weights.copy_(lo.weights.float())
-    a, b = _run(lo, x.bfloat16(), go)[2], _run(hi, x, go)[2]
+    a, b = _run(lo, x.bfloat16(), go)["grad W"], _run(hi, x, go)["grad W"]
     assert _rel(a, b) < 1e-2
 
 
 # --- determinism, knobs, dispatch ---------------------------------------------------------------------------------
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
-def test_forward_is_deterministic_backward_differs_only_in_summation_order(cls):
+def test_forward_is_deterministic_backward_differs_only_in_summation_order(cls, weight):
     """The forward has no atomics (fixed-order stripe reduction): bit-identical across runs. The backward scatters
     with fp32 atomics (table grad, global) and shared-memory atomics (grad z): NOT bit-deterministic; the run-to-run
     difference must stay at fp32 summation-order level."""
     spec = _spec("canonical")
     x, go = _inputs(spec, 2048)
-    m = _make(cls, spec, "cuda", rate=0.2)
+    m = _make(cls, spec, "cuda", rate=0.2, weight=weight)
     runs = [_run(m, x, go) for _ in range(4)]
     for r in runs[1:]:
-        assert torch.equal(r[0], runs[0][0]), "forward must be bit-identical"
-        assert _rel(r[1], runs[0][1]) < 1e-5
-        assert _rel(r[2], runs[0][2]) < 1e-5
+        assert torch.equal(r["value"], runs[0]["value"]), "forward must be bit-identical"
+        _check({k: v for k, v in r.items() if k != "value"}, {k: v for k, v in runs[0].items() if k != "value"}, 1e-5)
 
 
 @pytest.mark.parametrize("knobs", [
@@ -210,14 +240,14 @@ def test_forward_is_deterministic_backward_differs_only_in_summation_order(cls):
     dict(fwd_threads=128, bwd_threads=256, rows_per_cta=3, vec=2),
     dict(fwd_threads=64, bwd_threads=64, rows_per_cta=4, vec=4, vec_atomics=False),
 ])
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
-def test_knobs_do_not_change_the_result(knobs, cls):
+def test_knobs_do_not_change_the_result(knobs, cls, weight):
     spec = _spec("mid")
     x, go = _inputs(spec, 200)
-    base = _run(_make(cls, spec, "cuda", rate=0.3), x, go)
-    got = _run(_make(cls, spec, "cuda", rate=0.3, knobs=ManifestoCudaKnobs(**knobs)), x, go)
-    for a, b in zip(got, base):
-        assert _rel(a, b) < 1e-5
+    base = _run(_make(cls, spec, "cuda", rate=0.3, weight=weight), x, go)
+    got = _run(_make(cls, spec, "cuda", rate=0.3, knobs=ManifestoCudaKnobs(**knobs), weight=weight), x, go)
+    _check(got, base, 1e-5)
 
 
 @pytest.mark.parametrize("vec", [1, 2, 4, 8])
@@ -226,15 +256,15 @@ def test_bf16_vector_widths_agree(vec):
     x, go = _inputs(spec, 128, dtype=torch.bfloat16)
     base = _run(_make(SOFT, spec, "cuda", dtype=torch.bfloat16), x, go)
     got = _run(_make(SOFT, spec, "cuda", dtype=torch.bfloat16, knobs=ManifestoCudaKnobs(vec_bf16=vec)), x, go)
-    for a, b in zip(got, base):
-        assert _rel(a, b) < 1e-2
+    _check(got, base, 1e-2)
 
 
-def test_auto_picks_cuda_in_training_and_in_eval():
+@pytest.mark.parametrize("weight", WEIGHTS)
+def test_auto_picks_cuda_in_training_and_in_eval(weight):
     spec = _spec("mid")
     x = torch.randn(64, spec.h_in, spec.d_in, device="cuda")
     big = torch.randn(SOFT._LARGE_BATCH, spec.h_in, spec.d_in, device="cuda")
-    h, s = HARD(spec).cuda().train(), SOFT(spec).cuda().train()
+    h, s = HARD(spec, weight=weight).cuda().train(), SOFT(spec, weight=weight).cuda().train()
     h(x), s(x)
     assert (h.last_backend, s.last_backend) == ("cuda", "cuda")
     s(big)
@@ -282,23 +312,23 @@ def test_wide_d_out_is_not_a_cuda_case(cls, d_out, vec):
         cls(spec, backend="cuda").cuda().train()(x)
 
 
+@pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("pure_cls, cls", [(lx.ManifestoHardLUT, HARD), (lx.ManifestoSoftLUT, SOFT)], ids=["hard", "soft"])
 @pytest.mark.parametrize("d_out", [4096, 1026])
-def test_cuda_matches_the_fp64_oracle_at_the_d_out_boundary(pure_cls, cls, d_out):
+def test_cuda_matches_the_fp64_oracle_at_the_d_out_boundary(pure_cls, cls, d_out, weight):
     """Eligible widths at the edge of a launch class: d_out 4096 (vec 4, exactly 1024 threads per CTA, the largest
     eligible width at the default knobs) and d_out 1026 (vec 2, the 2-wide load path). Value, grad x and grad W of the
     cuda backend in fp32 against the pure cartridge in float64."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=d_out, anchor_mode="pairs")
     x, go = _inputs(spec, 96)
-    m = _make(cls, spec, "cuda")
+    m = _make(cls, spec, "cuda", weight=weight)
     got = _run(m, x, go)
     assert m.last_backend == "cuda"
-    oracle = pure_cls(spec, seed=7, weight_init_std=0.5).cuda().train().double()
+    oracle = pure_cls(spec, seed=7, weight_init_std=0.5, weight=weight).cuda().train().double()
     xo = x.double().requires_grad_(True)
     yo = oracle(xo)
     yo.backward(go.double())
-    for what, a, b in zip(("value", "grad x", "grad W"), got, (yo.detach(), xo.grad, oracle.weights.grad)):
-        assert _rel(a.double(), b) < 1e-5, f"d_out {d_out} {what}: rel {_rel(a.double(), b):.2e}"
+    _check(got, _grads(oracle, yo, xo), 1e-5, f"d_out {d_out}")
 
 
 def test_explicit_cuda_backend_errors_off_cuda():
@@ -360,8 +390,9 @@ def test_missing_extension_raises_and_deliberate_disable_moves_on(monkeypatch):
     _fallback._reset_for_tests()
 
 
-def test_state_dict_unchanged_by_the_cuda_buffers():
+@pytest.mark.parametrize("weight", WEIGHTS)
+def test_state_dict_unchanged_by_the_cuda_buffers(weight):
     """The int16 anchor copies are non-persistent: checkpoints are interchangeable with the other backends."""
     spec = _spec("small")
-    assert set(HARD(spec).state_dict()) == set(lx.ManifestoHardLUT(spec).state_dict())
-    assert set(SOFT(spec).state_dict()) == set(lx.ManifestoSoftLUT(spec).state_dict())
+    assert set(HARD(spec, weight=weight).state_dict()) == set(lx.ManifestoHardLUT(spec, weight=weight).state_dict())
+    assert set(SOFT(spec, weight=weight).state_dict()) == set(lx.ManifestoSoftLUT(spec, weight=weight).state_dict())

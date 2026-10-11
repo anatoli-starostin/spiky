@@ -1,7 +1,6 @@
-"""Gen-2 soft-sign cartridges: SoftSignHardLUT and SoftSignSmoothLUT.
+"""The Manifesto reference cartridges with ``weight="softsign"`` (Gen-2): ManifestoHardLUT and ManifestoSoftLUT.
 
-Two cartridges (the collapsed Gen-2 family): both read with ``F.embedding_bag`` on the train path,
-plain-autograd backward, bf16/fp16 support. Covered here: fp64 gradcheck of the 2-alternative soft
+Both read with ``F.embedding_bag`` on the train path, plain-autograd backward. Covered here: fp64 gradcheck of the 2-alternative soft
 backward (incl. the two learned temperatures) against reference finite differences; the hard
 cartridge's value == the hard read and its output-Jacobian == the smooth cartridge's; the bf16
 path vs an fp32 reference; every head pattern / anchor mode runs with finite grads; temperatures
@@ -10,14 +9,10 @@ are learnable (and freezable).
 import pytest
 import torch
 
-from spiky.lutorch_ex import (
-    LUTSpec,
-    ManifestoHardLUT,
-    SoftSignHardLUT,
-    SoftSignSmoothLUT,
-)
+from spiky.lutorch_ex import LUTSpec, ManifestoHardLUT, ManifestoSoftLUT
+from spiky.lutorch_ex.tests._weights import softsign
 
-CARTRIDGES = [SoftSignHardLUT, SoftSignSmoothLUT]
+CARTRIDGES = [softsign(ManifestoHardLUT), softsign(ManifestoSoftLUT)]
 PATTERNS = [(4, 4), (1, 4), (4, 1)]
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
@@ -33,7 +28,7 @@ def test_smooth_backward_gradcheck_fp64(anchor_mode):
     torch.set_default_dtype(torch.float64)
     try:
         spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4, anchor_mode=anchor_mode)
-        m = SoftSignSmoothLUT(spec, seed=1, weight_init_std=1.0).train()
+        m = ManifestoSoftLUT(spec, weight="softsign", seed=1, weight_init_std=1.0).train()
         x = torch.randn(6, 2, 5, dtype=torch.float64, requires_grad=True)
         assert torch.autograd.gradcheck(lambda xx: m(xx).pow(2).sum(), (x,), eps=1e-6, atol=1e-5)
         w0 = m.weights.detach().clone().requires_grad_(True)
@@ -53,10 +48,10 @@ def test_smooth_backward_gradcheck_fp64(anchor_mode):
 
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_hard_value_is_hard_read(anchor_mode):
-    """SoftSignHard's forward value is the plain hard read sum_t W[c_t] — identical to the Gen-1
+    """The softsign hard forward value is the plain hard read sum_t W[c_t] — identical to the rational
     ManifestoHard eval (same addressing)."""
     spec = LUTSpec(h_in=3, h_out=3, tph=4, nap=3, d_in=6, d_out=5, anchor_mode=anchor_mode)
-    ss = SoftSignHardLUT(spec, seed=2, weight_init_std=1.0).eval()
+    ss = ManifestoHardLUT(spec, weight="softsign", seed=2, weight_init_std=1.0).eval()
     mh = ManifestoHardLUT(spec, seed=2, weight_init_std=1.0).eval()
     x = torch.randn(32, 3, 6)
     with torch.no_grad():
@@ -69,8 +64,8 @@ def test_hard_output_jacobian_matches_smooth(anchor_mode):
     cartridge's — both route the input/temperature gradient through the same weight w — while the
     hard weight gradient is a 1-row scatter (touches fewer cells) vs the smooth 2-row."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5, anchor_mode=anchor_mode)
-    h = SoftSignHardLUT(spec, seed=3, weight_init_std=1.0).train()
-    s = SoftSignSmoothLUT(spec, seed=3, weight_init_std=1.0).train()
+    h = ManifestoHardLUT(spec, weight="softsign", seed=3, weight_init_std=1.0).train()
+    s = ManifestoSoftLUT(spec, weight="softsign", seed=3, weight_init_std=1.0).train()
     s.load_state_dict(h.state_dict())
     x = torch.randn(16, 2, 6)
     xh = x.clone().requires_grad_(True); xs = x.clone().requires_grad_(True)
@@ -108,8 +103,7 @@ def test_forward_backward_runs(Cls, anchor_mode, h_in, h_out, device):
 @pytest.mark.parametrize("Cls", CARTRIDGES)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_rejects_low_precision(Cls, dtype):
-    """Gen-2 soft-sign cartridges are fp32/fp64 only (bf16 gave no speedup); low-precision params
-    OR inputs must raise, like the other non-fused cartridges."""
+    """The reference cartridges are fp32/fp64 only; low-precision params OR inputs must raise."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(dtype)
     with pytest.raises(TypeError, match="does not support low precision"):
@@ -121,9 +115,27 @@ def test_rejects_low_precision(Cls, dtype):
 
 def test_temps_are_learnable_parameters():
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
-    m = SoftSignSmoothLUT(spec, seed=0, weight_init_std=1.0)
+    m = ManifestoSoftLUT(spec, weight="softsign", seed=0, weight_init_std=1.0)
     names = {n for n, _ in m.named_parameters()}
     assert "log_soft_score_temp" in names and "log_select_temp" in names
-    frozen = SoftSignSmoothLUT(spec, seed=0, weight_init_std=1.0, learnable_temps=False)
+    frozen = ManifestoSoftLUT(spec, weight="softsign", seed=0, weight_init_std=1.0, learnable_temps=False)
     fnames = {n for n, _ in frozen.named_parameters()}
     assert "log_soft_score_temp" not in fnames and "log_select_temp" not in fnames
+
+
+def test_temperature_options_belong_to_softsign_only():
+    """The temperatures exist only with weight="softsign"; with "rational" their options are refused, and the
+    confidence cartridges have no neighbour weight at all."""
+    import spiky.lutorch_ex as lx
+    spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
+    assert not hasattr(ManifestoHardLUT(spec, seed=0), "log_select_temp")
+    for kw in (dict(soft_score_temp=0.3), dict(select_temp=0.3), dict(learnable_temps=False)):
+        with pytest.raises(ValueError, match="apply only to weight='softsign'"):
+            ManifestoSoftLUT(spec, seed=0, **kw)
+    with pytest.raises(ValueError, match="weight must be one of"):
+        ManifestoHardLUT(spec, seed=0, weight="sigmoid")
+    for kw in (dict(weight="softsign"), dict(select_temp=0.3)):
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            lx.ConfidenceLUT(spec, seed=0, **kw)
+    m = ManifestoHardLUT(spec, seed=0, weight="softsign", soft_score_temp=0.25, select_temp=2.0)
+    assert abs(m.log_soft_score_temp.exp().item() - 0.25) < 1e-6 and abs(m.log_select_temp.exp().item() - 2.0) < 1e-6

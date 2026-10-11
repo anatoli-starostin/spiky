@@ -1,4 +1,5 @@
-"""Lock in the optimized read paths: hard eval reads one cell; otherwise a fused pair read."""
+"""Lock in the optimized read paths: hard eval reads one cell; hard train and soft eval read the pair in one gather;
+soft train reads through embedding_bag."""
 import torch
 
 from spiky.lutorch_ex import LUTSpec, ManifestoHardLUT, ManifestoSoftLUT
@@ -40,13 +41,15 @@ def test_hard_train_uses_fused_pair():
     assert counts == {"read": 0, "pair": 1}, counts  # train: both cells, one fused gather
 
 
-def test_soft_always_uses_fused_pair():
-    for training in (False, True):
+def test_soft_eval_uses_fused_pair_and_train_the_embedding_bag_blend():
+    """Soft eval: both cells in one fused gather, then the blend. Soft train: one embedding_bag over both cells with
+    the blend weights as per-sample weights (no [B, G, tph, d_out] gather at all)."""
+    for training, want in ((False, {"read": 0, "pair": 1}), (True, {"read": 0, "pair": 0})):
         cart = ManifestoSoftLUT(_spec(), seed=0)
         cart.train(training)
         counts = _instrument(cart)
         cart(torch.randn(4, cart.spec.h_in, cart.spec.d_in))
-        assert counts == {"read": 0, "pair": 1}, (training, counts)
+        assert counts == want, (training, counts)
 
 
 def test_compile_not_used_on_cpu():
@@ -65,11 +68,13 @@ import pytest as _pytest  # noqa: E402
 
 import spiky.lutorch_ex as _lx  # noqa: E402
 from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT as _FusedConfidenceLUT  # noqa: E402
+from spiky.lutorch_ex.tests._weights import softsign  # noqa: E402
 
 
 @_pytest.mark.parametrize("cls", [
     _lx.ManifestoHardLUT, _lx.ManifestoSoftLUT, _lx.FusedManifestoHardLUT, _lx.FusedManifestoSoftLUT,
-    _lx.SoftSignHardLUT, _lx.SoftSignSmoothLUT, _lx.FusedSoftSignHardLUT, _lx.FusedSoftSignSmoothLUT,
+    softsign(_lx.ManifestoHardLUT), softsign(_lx.ManifestoSoftLUT), softsign(_lx.FusedManifestoHardLUT),
+    softsign(_lx.FusedManifestoSoftLUT),
     _lx.ConfidenceLUT, _FusedConfidenceLUT, _lx.QuantisedConfidenceLUT,
 ])
 def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):

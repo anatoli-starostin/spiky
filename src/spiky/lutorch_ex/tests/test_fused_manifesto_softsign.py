@@ -1,4 +1,5 @@
-"""Every fused soft-sign backend (auto / tier1 / native) must equal the pure cartridge (oracle).
+"""Every FusedManifesto* backend with weight="softsign" (auto / tier1 / native / cuda) must equal the reference
+cartridge with weight="softsign" (the oracle).
 
 Covers forward value (eval + train) and gradients wrt input, weights AND both learned
 temperatures, for both cartridges, both anchor modes, fp32 + fp64, CPU (tier1 fallback) and
@@ -9,17 +10,13 @@ bf16-rounded input.
 import pytest
 import torch
 
-from spiky.lutorch_ex import (
-    FusedSoftSignHardLUT,
-    FusedSoftSignSmoothLUT,
-    LUTSpec,
-    SoftSignHardLUT,
-    SoftSignSmoothLUT,
-)
+from spiky.lutorch_ex import FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec, ManifestoHardLUT, ManifestoSoftLUT
+from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import EXT_NAME as FM_EXT_NAME, fused_manifesto_ext
+from spiky.lutorch_ex.tests._weights import softsign
 
 PAIRS = [
-    (SoftSignHardLUT, FusedSoftSignHardLUT, "hard"),
-    (SoftSignSmoothLUT, FusedSoftSignSmoothLUT, "smooth"),
+    (softsign(ManifestoHardLUT), softsign(FusedManifestoHardLUT), "hard"),
+    (softsign(ManifestoSoftLUT), softsign(FusedManifestoSoftLUT), "soft"),
 ]
 PATTERNS = [(4, 4), (1, 4), (4, 1)]
 
@@ -92,10 +89,12 @@ def test_fused_equiv_cpu_f64(PureCls, FusedCls, name, h_in, h_out, backend, anch
 @pytest.mark.parametrize("PureCls,FusedCls,name", PAIRS)
 @pytest.mark.parametrize("h_in,h_out", PATTERNS)
 @pytest.mark.parametrize("B", [1, 128, 24576])
-@pytest.mark.parametrize("backend", ["auto", "tier1", "native"])
+@pytest.mark.parametrize("backend", ["auto", "tier1", "native", "cuda"])
 def test_fused_equiv_cuda_f32(PureCls, FusedCls, name, h_in, h_out, B, backend, anchor_mode):
     if backend == "native":       # extension unavailable: fail, or skip if disabled on purpose (see _native_required)
         require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
+    if backend == "cuda":
+        require_extension(fused_manifesto_ext() is not None, FM_EXT_NAME)
     _check(PureCls, FusedCls, h_in, h_out, B, "cuda", torch.float32, backend,
            exact=False, anchor_mode=anchor_mode)
 
@@ -126,7 +125,7 @@ def test_fused_f64_forward_value_byte_identical(anchor_mode):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-@pytest.mark.parametrize("FusedCls", [FusedSoftSignHardLUT, FusedSoftSignSmoothLUT])
+@pytest.mark.parametrize("FusedCls", [softsign(FusedManifestoHardLUT), softsign(FusedManifestoSoftLUT)])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_fused_bf16_runs_and_matches_fp32(FusedCls, anchor_mode):
     """bf16 is supported (kept for its H100 speedup) and does NOT raise; its grads match an fp32
@@ -147,8 +146,8 @@ def test_fused_bf16_runs_and_matches_fp32(FusedCls, anchor_mode):
 
 def test_fused_defaults_and_backend_kwarg():
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
-    for FusedCls in (FusedSoftSignHardLUT, FusedSoftSignSmoothLUT):
-        m = FusedCls(spec, seed=0, weight_init_std=1.0)
+    for FusedCls in (FusedManifestoHardLUT, FusedManifestoSoftLUT):
+        m = FusedCls(spec, seed=0, weight_init_std=1.0, weight="softsign")
         assert m.backend == "auto"
         assert {"log_soft_score_temp", "log_select_temp"} <= {n for n, _ in m.named_parameters()}
 
@@ -157,17 +156,19 @@ def test_fused_defaults_and_backend_kwarg():
 from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_available  # noqa: E402
 from spiky.lutorch_ex.tests._native_required import require_extension  # noqa: E402
 
-_TRAINABLE = {"auto", "tier1", "native"}               # 'pure_eval' is the eval-only read
+_TRAINABLE = {"auto", "tier1", "native", "cuda", "pure"}   # 'pure_eval' (the hard twin's) is the eval-only read
 
 
 @pytest.mark.parametrize("FusedCls,backend",
-                         [(C, b) for C in (FusedSoftSignHardLUT, FusedSoftSignSmoothLUT) for b in C._BACKENDS])
+                         [(C, b) for C in (FusedManifestoHardLUT, FusedManifestoSoftLUT) for b in C._BACKENDS])
 def test_every_accepted_backend_runs(FusedCls, backend):
     if backend == "native":       # no CUDA device: skip; extension unavailable: fail (see _native_required)
         require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
-    dev = "cuda" if backend == "native" else "cpu"
+    if backend == "cuda":
+        require_extension(fused_manifesto_ext() is not None, FM_EXT_NAME)
+    dev = "cuda" if backend in ("native", "cuda") else "cpu"
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
-    m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).to(dev)
+    m = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend, weight="softsign").to(dev)
     x = torch.randn(8, 2, 6, device=dev, requires_grad=True)
     m.eval()
     with torch.no_grad():
@@ -178,12 +179,13 @@ def test_every_accepted_backend_runs(FusedCls, backend):
         assert m.weights.grad is not None and x.grad is not None
 
 
-@pytest.mark.parametrize("FusedCls", [FusedSoftSignHardLUT, FusedSoftSignSmoothLUT])
-@pytest.mark.parametrize("bad,hint", [("pure", "this class uses 'pure_eval'"), ("fastest", None)])
+@pytest.mark.parametrize("FusedCls,bad,hint", [
+    (FusedManifestoHardLUT, "pure", "this class uses 'pure_eval'"), (FusedManifestoHardLUT, "fastest", None),
+    (FusedManifestoSoftLUT, "pure_eval", "this class uses 'pure'"), (FusedManifestoSoftLUT, "fastest", None)])
 def test_invalid_backend_raises(FusedCls, bad, hint):
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     with pytest.raises(ValueError) as ei:
-        FusedCls(spec, seed=0, backend=bad)
+        FusedCls(spec, seed=0, backend=bad, weight="softsign")
     msg = str(ei.value)
     assert FusedCls.__name__ in msg and repr(bad) in msg
     assert all(repr(b) in msg for b in FusedCls._BACKENDS)

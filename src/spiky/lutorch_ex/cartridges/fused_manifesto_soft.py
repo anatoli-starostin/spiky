@@ -1,19 +1,19 @@
-"""FusedManifestoSoftLUT — hybrid, GPU-efficient twin of ManifestoSoftLUT.
+"""FusedManifestoSoftLUT — hybrid, GPU-efficient twin of ManifestoSoftLUT, for both weight functions.
 
-Same (1-U)/U two-cell blend, dispatched per (op, batch, device) to the fastest path and
-numerically equivalent to the pure ManifestoSoftLUT oracle:
+Same ``(1-w)`` / ``w`` two-cell blend (``weight="rational"`` or ``"softsign"``), dispatched per (op, batch, device) to
+the fastest path and numerically equivalent to the ManifestoSoftLUT oracle:
 
 * ``pure``   — base two-cell read + blend (the compiled read; best for small-batch eval);
-* ``tier1``  — one F.embedding_bag with per_sample_weights=[1-U, U] (fuses read+scale+sum);
-* ``native`` — the native lprojection_forward_smooth + its na1-smooth backward;
-* ``cuda``   — hand-written kernels (``csrc/fused_manifesto.cu``): one forward and one backward
-  kernel, nothing per table in global memory.
+* ``tier1``  — one F.embedding_bag with per_sample_weights=[1-w, w] (fuses read+scale+sum);
+* ``native`` — the native lprojection_forward_smooth + its na1-smooth backward (with the soft-sign surrogate tail of
+  ``_native_softsign`` for ``softsign``);
+* ``cuda``   — hand-written kernels (``csrc/fused_manifesto.cu``): one forward and one backward kernel, nothing per
+  table in global memory; both weight functions, the soft-sign temperatures' gradients included.
 
-``backend`` forces a path ('pure'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid. In
-training and in eval 'auto' takes 'cuda' whenever the case is one the kernels cover, at every batch
-size (a covered case whose extension is missing raises NativeUnavailableError, unless
-LUTORCH_EX_NO_CUDA_EXT=1); otherwise the batch-size heuristic below applies. ``knobs`` (a :class:`ManifestoCudaKnobs`) sets
-the 'cuda' kernels' launch configuration.
+``backend`` forces a path ('pure'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid. In training and in eval
+'auto' takes 'cuda' whenever the case is one the kernels cover, at every batch size (a covered case whose extension is
+missing raises NativeUnavailableError, unless LUTORCH_EX_NO_CUDA_EXT=1); otherwise the batch-size heuristic below
+applies. ``knobs`` (a :class:`ManifestoCudaKnobs`) sets the 'cuda' kernels' launch configuration.
 """
 from __future__ import annotations
 
@@ -23,15 +23,15 @@ from ._fused_manifesto_cuda import (MODE_SOFT, auto_wants_cuda, init_cuda_backen
                                     require_cuda, shape_ok)
 from ._fused_ops import fused_blend_read, _acc_dtype, validate_backend
 from ._native_ops import NativeSoft, native_available, raise_if_forced_native_unavailable, require_native_or_report
+from ._native_softsign import NativeSoftSignSmooth
 from .manifesto_base import ManifestoLUT
-from .uncertainty import rational_uncertainty
 
 _LOW_PREC = (torch.bfloat16, torch.float16)
 
 
 class FusedManifestoSoftLUT(ManifestoLUT):
     #: Every backend _forward_impl dispatches on ('auto' picks one of the others per call). The pure path is
-    #: called 'pure' here (not 'pure_eval' as in the other twins): auto also uses it for CPU training.
+    #: called 'pure' here (not 'pure_eval' as in the hard twin): auto also uses it for CPU training.
     _BACKENDS = ("auto", "pure", "tier1", "native", "cuda")
 
     def __init__(self, spec, *, backend: str = "auto", knobs=None, **kw):
@@ -43,25 +43,10 @@ class FusedManifestoSoftLUT(ManifestoLUT):
     def _supports_low_precision(self) -> bool:
         return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1)
 
-    def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
-        raise NotImplementedError
-
-    def _star_global(self, z, u, j_star):
-        G, tph, nap, d_in = self.spec.n_groups, self.spec.tph, self.spec.nap, self.spec.d_in
-        B = z.shape[0]
-        je = j_star.unsqueeze(-1)
-        u_signed = u.gather(-1, je).squeeze(-1)
-        al = self.anchor_a.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        bl = al if self.single else (  # single: b is a placeholder; input grad scatters to a only
-            self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        )
-        off = torch.arange(G, device=z.device).view(1, G, 1) * d_in
-        return al + off, bl + off, u_signed
-
     def _pure_blend(self, c, c_alt, u_abs_star, drop_mask=None):
         y_hard, y_alt = self._read_pair(c, c_alt)
-        u = rational_uncertainty(u_abs_star).unsqueeze(-1)
-        blend = y_hard + u * (y_alt - y_hard)
+        w = self._blend_w(u_abs_star)
+        blend = y_hard + w.unsqueeze(-1) * (y_alt - y_hard)
         if drop_mask is not None:                              # table dropout before the tph-sum
             blend = blend * drop_mask.unsqueeze(-1)
         return blend.sum(dim=2, dtype=_acc_dtype(blend.dtype))  # fp32-accum for bf16/fp16
@@ -129,10 +114,15 @@ class FusedManifestoSoftLUT(ManifestoLUT):
         elif be == "native":
             # Single mode reuses the native smooth forward + weight-grad; input grad to a only.
             # Grad target z passed in the input dtype (bf16) -> input grad stays bf16, one cast.
-            ag, bg, us = self._star_global(z, u, j_star)
+            ag, bg, us = self._star(z, u, j_star)[2:]       # the local anchor indices are not needed here
             zc = x[:, self.in_head, :] if low else z
-            grp_out = NativeSoft.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single, dmask)
+            if self.weight == "rational":
+                grp_out = NativeSoft.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single, dmask)
+            else:
+                t_soft, t_select = self._softsign_temps(us.dtype)
+                w = self._blend_w(u_abs_star)
+                grp_out = NativeSoftSignSmooth.apply(self.weights, zc, c, c_alt, us, ag, bg,
+                                                     self.single, t_soft, t_select, w.detach(), dmask)
         else:  # tier1
-            U = rational_uncertainty(u_abs_star)
-            grp_out = fused_blend_read(self.weights, c, c_alt, U, drop_mask=dmask)
+            grp_out = fused_blend_read(self.weights, c, c_alt, self._blend_w(u_abs_star), drop_mask=dmask)
         return self._route(grp_out, x).to(x.dtype)

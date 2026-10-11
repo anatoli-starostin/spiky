@@ -1,16 +1,16 @@
-"""FusedManifestoHardLUT — hybrid, GPU-efficient twin of ManifestoHardLUT.
+"""FusedManifestoHardLUT — hybrid, GPU-efficient twin of ManifestoHardLUT, for both weight functions.
 
-Same manifesto math (hard sign-addressed read; two-alternative soft backward), but the
-forward/backward dispatch to whichever implementation is fastest for the current
-(op, batch, device), never slower than the pure cartridge and numerically equivalent to
-it (the oracle):
+Same Manifesto math (hard sign-addressed read; two-alternative soft backward through the neighbour weight ``w``,
+``weight="rational"`` or ``"softsign"``), but the forward/backward dispatch to whichever implementation is fastest for
+the current (op, batch, device), numerically equivalent to the reference (the oracle):
 
-* train and eval -> the hand-written 'cuda' kernels (``csrc/fused_manifesto.cu``: one forward and
-  one backward kernel, nothing per table in global memory) whenever the input / configuration is
-  a case they cover. A covered case whose extension is missing raises NativeUnavailableError
-  (``_fallback``), unless LUTORCH_EX_NO_CUDA_EXT=1;
-* otherwise eval -> the pure compiled gather read; train -> tier-2 NATIVE lprojection kernels when
-  available, else tier-1 embedding_bag + the custom straight-through autograd.Function.
+* train and eval -> the hand-written 'cuda' kernels (``csrc/fused_manifesto.cu``: one forward and one backward kernel,
+  nothing per table in global memory; both weight functions, the soft-sign temperatures' gradients included) whenever
+  the input / configuration is a case they cover. A covered case whose extension is missing raises
+  NativeUnavailableError (``_fallback``), unless LUTORCH_EX_NO_CUDA_EXT=1;
+* otherwise eval -> the pure compiled gather read; train -> the NATIVE lprojection kernels when available (the
+  rational surrogate, or the soft-sign surrogate tail of ``_native_softsign``), else tier-1: embedding_bag plus a
+  straight-through surrogate.
 
 ``backend`` forces a path ('pure_eval'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid.
 ``knobs`` (a :class:`ManifestoCudaKnobs`) sets the 'cuda' kernels' launch configuration.
@@ -21,8 +21,9 @@ import torch
 
 from ._fused_manifesto_cuda import (MODE_HARD, auto_wants_cuda, init_cuda_backend, manifesto_cuda_forward,
                                     require_cuda, shape_ok)
-from ._fused_ops import FusedHardSTE, _acc_dtype, validate_backend
+from ._fused_ops import FusedHardSTE, _acc_dtype, _global_cells, fused_hard_read, validate_backend
 from ._native_ops import NativeHard, native_available, raise_if_forced_native_unavailable, require_native_or_report
+from ._native_softsign import NativeSoftSignHard
 from .manifesto_base import ManifestoLUT
 
 _LOW_PREC = (torch.bfloat16, torch.float16)
@@ -39,31 +40,7 @@ class FusedManifestoHardLUT(ManifestoLUT):
         init_cuda_backend(self, knobs)
 
     def _supports_low_precision(self) -> bool:
-        return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1)
-
-    def _needs_alt(self) -> bool:
-        return self.training  # eval reads only c_t
-
-    def _combine(self, y_hard, y_alt, u_abs_star):  # pragma: no cover - forward is overridden
-        raise NotImplementedError
-
-    def _star(self, z, u, j_star):
-        """Return (a_local, b_local, a_global, b_global, u_signed_star) at the j* bit.
-
-        In single mode b is a placeholder (= a): each bit tests one coordinate vs zero, so
-        the input grad scatters to a only (FusedHardSTE honours ``single``; native is not
-        used in single mode).
-        """
-        G, tph, nap, d_in = self.spec.n_groups, self.spec.tph, self.spec.nap, self.spec.d_in
-        B = z.shape[0]
-        je = j_star.unsqueeze(-1)
-        u_signed = u.gather(-1, je).squeeze(-1)
-        al = self.anchor_a.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        bl = al if self.single else (
-            self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        )
-        off = torch.arange(G, device=z.device).view(1, G, 1) * d_in
-        return al, bl, al + off, bl + off, u_signed
+        return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads
 
     def _pick(self, x: torch.Tensor) -> str:
         if not self.training:
@@ -115,14 +92,30 @@ class FusedManifestoHardLUT(ManifestoLUT):
             rd = self._read(c)
             grp_out = rd.sum(dim=2, dtype=_acc_dtype(rd.dtype))  # fp32-accum for bf16/fp16 (eval)
         elif be == "native":
-            # Single mode reuses the native forward + weight-grad kernels (index-only); only
-            # the input-grad scatters to one coordinate (handled inside NativeHard). The grad
-            # target z is passed in the INPUT dtype (bf16) so the input grad stays bf16 end to
-            # end (one cast), while the fp32 addressing above supplies c/c_alt/us.
+            # The grad target z is passed in the INPUT dtype (bf16) so the input grad stays bf16 end to end (one
+            # cast), while the fp32 addressing above supplies c/c_alt/us. Single mode reuses the native forward and
+            # weight-grad kernels (index-only); only the input grad scatters to one coordinate.
             al, bl, ag, bg, us = self._star(z, u, j_star)
             zc = x[:, self.in_head, :] if low else z
-            grp_out = NativeHard.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single, dmask)
-        else:  # tier1
+            if self.weight == "rational":
+                grp_out = NativeHard.apply(self.weights, zc, c, c_alt, us, ag, bg, self.single, dmask)
+            else:
+                t_soft, t_select = self._softsign_temps(us.dtype)
+                grp_out = NativeSoftSignHard.apply(self.weights, zc, c, c_alt, us, ag, bg,
+                                                   self.single, t_soft, t_select, dmask)
+        elif self.weight == "rational":  # tier1: embedding_bag + the hand-written rational STE
             al, bl, ag, bg, us = self._star(z, u, j_star)
             grp_out = FusedHardSTE.apply(self.weights, z, c, c_alt, al, bl, self.single, dmask)
+        else:  # tier1, softsign: embedding_bag value + the surrogate through w (autograd reaches the temperatures)
+            W = self.weights.float() if low else self.weights
+            w = self._blend_w(u_abs_star)
+            y_c = fused_hard_read(W, c, drop_mask=dmask)
+            W2 = W.reshape(-1, W.shape[-1])
+            G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
+            diff = (W2[_global_cells(c_alt, G, tph, K)] - W2[_global_cells(c, G, tph, K)]).detach()
+            sw = w.unsqueeze(-1) * diff
+            if dmask is not None:
+                sw = sw * dmask.unsqueeze(-1)
+            surr = sw.sum(dim=2)
+            grp_out = y_c + (surr - surr.detach())
         return self._route(grp_out, x).to(x.dtype)

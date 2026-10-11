@@ -26,12 +26,11 @@ def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
 
 
 # The fused twins do not share one spelling for their pure-read backend: FusedManifestoSoftLUT calls
-# it "pure" (it also serves CPU training there), FusedManifestoHardLUT and the FusedSoftSign twins call
+# it "pure" (it also serves CPU training there), FusedManifestoHardLUT calls
 # it "pure_eval". Each class lists its own names in a _BACKENDS class constant next to its dispatch.
 _PURE_NAME_HINT = {
     "pure_eval": "this class uses 'pure_eval' (FusedManifestoSoftLUT is the one that calls its pure path 'pure')",
-    "pure": "this class uses 'pure' (FusedManifestoHardLUT and the FusedSoftSign twins call their pure path "
-            "'pure_eval')",
+    "pure": "this class uses 'pure' (FusedManifestoHardLUT calls its pure path 'pure_eval')",
 }
 
 

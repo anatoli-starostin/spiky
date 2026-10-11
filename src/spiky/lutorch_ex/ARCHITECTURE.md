@@ -9,8 +9,8 @@
    not separate classes. The fold is a net deletion of three files, landing in two places (reference and fused).
    - The parameter selects the neighbour-weight function: `weight="rational"` is the Gen-1 `U = 0.5/(1+|u*|)`;
      `weight="softsign"` is the Gen-2 learned-temperature `w`.
-   - On `main` the Gen-2 files are `softsign_base.py`, `softsign_hard.py`, `softsign_smooth.py` (reference) and
-     `fused_softsign.py` (fused).
+   - Landed on #160: `softsign_base.py`, `softsign_hard.py`, `softsign_smooth.py` (reference) and `fused_softsign.py`
+     (fused) are gone (four files out, one test helper in).
 2. **Reference and fused implementations of each cartridge live in different files.** This is a recommendation, not
    an absolute: some reuse is expected and fine, and parts of the base class are already reused.
 3. **A fused implementation works only with the CUDA extension compiled and installed; otherwise it raises.** It may
@@ -84,19 +84,21 @@ Under rules 3 and 5 it **disappears**:
 
 ## Gaps between `main` and this spec (for the PRs that land it)
 
+**Landed on #160:** rule 1 (the fold: `ManifestoHardLUT` / `ManifestoSoftLUT` and their `Fused` twins take
+`weight="rational" | "softsign"`; the four SoftSign files are gone, with no aliases), and the `fused_manifesto.cu`
+kernels take the soft-sign temperatures (their gradients included). The shared base no longer has the combine-based
+forward (its `_forward_impl` is abstract), but it still carries `forward()`'s compile dispatch.
+
 - **Rule 5:** the `Fused*` classes have a `backend=` argument and fall back internally:
-  - FusedManifesto*: `pure` / `pure_eval` / `tier1` / `native` / `cuda`;
-  - FusedSoftSign*: `pure_eval` / `tier1` / `native`;
+  - FusedManifesto*: `pure` / `pure_eval` / `tier1` / `native` / `cuda` (both weights);
   - FusedConfidenceLUT: `pure` / `cuda`.
 
   That also breaks rule 3. One consequence measured in #159: an explicit `backend="pure_eval"` trains silently with
-  no input gradient on FusedManifestoHard / FusedSoftSignHard.
-- **Consequence B:** `ManifestoLUT` (the shared base) has a runnable forward.
-- **Rules 1 and 3:** the SoftSign family has no CUDA kernel of its own. Its fast path is the generic `lprojection`
-  extension plus a surrogate-tail kernel, so a `FusedManifesto*(weight="softsign")` needs the `fused_manifesto.cu`
-  kernels to take the two soft-sign temperatures.
+  no input gradient on FusedManifestoHard (either weight). Removing the `native` backend also retires
+  `_native_softsign.py` and `softsign_surrogate_grad.cu`, which only it uses.
+- **Consequence B:** `ManifestoLUT` (the shared base) still owns the compile dispatch in `forward()`.
 - **Consequence C:** the reference classes raise on bf16.
-- **Consequence D:** fused-vs-reference equivalence tests exist (`test_fused_equivalence`, `test_fused_softsign`,
-  `test_fused_confidence`, `test_fused_manifesto_cuda`), but not uniformly per cartridge and per dtype with explicit
-  tolerances.
+- **Consequence D:** fused-vs-reference equivalence tests exist (`test_fused_equivalence`,
+  `test_fused_manifesto_softsign`, `test_fused_confidence`, `test_fused_manifesto_cuda`), but not uniformly per
+  cartridge and per dtype with explicit tolerances.
 - **Consequence E:** `FusedConfidenceLUT` is not exported from `lutorch_ex/__init__.py`.

@@ -1,6 +1,6 @@
 """Hard errors when a cartridge's fast CUDA path is unavailable and it would fall back to a slow path involuntarily.
 
-The CUDA extensions (``lutorch_ex_lprojection`` for the Fused Manifesto / SoftSign native backends,
+The CUDA extensions (``lutorch_ex_lprojection`` for the FusedManifesto* native backends,
 ``lutorch_ex_fused_manifesto`` for the Manifesto 'cuda' backend, ``lutorch_ex_fused_confidence`` for
 FusedConfidenceLUT) are JIT-built at first use and never raise on a failed build: the cartridges could fall back to
 correct but far slower pure-torch / tier-1 paths. Silently, that hid a real bug (setuptools missing from a pinned

@@ -86,9 +86,9 @@ def test_other_or_mixed_index_dtypes_rejected(bad):
         mgr.lprojection_forward_smooth(W, li, lai, lad, tif_m, tif_a, True, 256)
 
 
-@pytest.mark.parametrize("cls", ["FusedManifestoHardLUT", "FusedManifestoSoftLUT", "FusedSoftSignHardLUT",
-                                 "FusedSoftSignSmoothLUT"])
-def test_int32_native_training_stores_no_int64_cell_index(cls):
+@pytest.mark.parametrize("weight", ["rational", "softsign"])
+@pytest.mark.parametrize("cls", ["FusedManifestoHardLUT", "FusedManifestoSoftLUT"])
+def test_int32_native_training_stores_no_int64_cell_index(cls, weight):
     """The per-(token, table) index tensors the native Functions save: going from index_dtype=int64 to int32 moves
     exactly three of them -- the cell indices li / lai and the table ids -- to int32 (no int64 copy is made). What stays
     int64 is not a cell index: j* (torch.min's argmin) and the anchor-derived a_glob / b_glob / batch_offset."""
@@ -97,7 +97,7 @@ def test_int32_native_training_stores_no_int64_cell_index(cls):
     B, nt = 256, 4 * 16
     counts = {}
     for dt in (torch.int64, torch.int32):
-        m = getattr(lx, cls)(spec, seed=1, backend="native", index_dtype=dt).cuda().train()
+        m = getattr(lx, cls)(spec, seed=1, backend="native", index_dtype=dt, weight=weight).cuda().train()
         x = torch.randn(B, 4, 16, device="cuda", requires_grad=True)
         m(x).sum().backward()
         saved = []

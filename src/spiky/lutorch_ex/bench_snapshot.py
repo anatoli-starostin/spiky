@@ -57,8 +57,8 @@ def _conf(cls, n, **kw):
     return lambda s: cls(s, seed=1, read_top_n=n, **kw)
 
 
-def _fused(cls, backend):
-    return lambda s: cls(s, seed=1, backend=backend)
+def _fused(cls, backend, **kw):
+    return lambda s: cls(s, seed=1, backend=backend, **kw)
 
 
 #: (name, constructor, is the default). Every concrete cartridge class, read from the package (reference and fused),
@@ -74,14 +74,14 @@ CARTRIDGES = [
     ("FusedManifestoSoftLUT", _fused(lx.FusedManifestoSoftLUT, "auto"), True),
     *[(f"FusedManifestoSoftLUT backend={b}", _fused(lx.FusedManifestoSoftLUT, b), False)
       for b in ("native", "tier1", "pure")],
-    ("SoftSignHardLUT", lambda s: lx.SoftSignHardLUT(s, seed=1), True),
-    ("SoftSignSmoothLUT", lambda s: lx.SoftSignSmoothLUT(s, seed=1), True),
-    ("FusedSoftSignHardLUT", _fused(lx.FusedSoftSignHardLUT, "auto"), True),
-    *[(f"FusedSoftSignHardLUT backend={b}", _fused(lx.FusedSoftSignHardLUT, b), False)
-      for b in ("native", "tier1", "pure_eval")],
-    ("FusedSoftSignSmoothLUT", _fused(lx.FusedSoftSignSmoothLUT, "auto"), True),
-    *[(f"FusedSoftSignSmoothLUT backend={b}", _fused(lx.FusedSoftSignSmoothLUT, b), False)
-      for b in ("native", "tier1", "pure_eval")],
+    ("ManifestoHardLUT weight=softsign", lambda s: lx.ManifestoHardLUT(s, seed=1, weight="softsign"), True),
+    ("ManifestoSoftLUT weight=softsign", lambda s: lx.ManifestoSoftLUT(s, seed=1, weight="softsign"), True),
+    ("FusedManifestoHardLUT weight=softsign", _fused(lx.FusedManifestoHardLUT, "auto", weight="softsign"), True),
+    *[(f"FusedManifestoHardLUT weight=softsign backend={b}", _fused(lx.FusedManifestoHardLUT, b, weight="softsign"),
+       False) for b in ("native", "tier1", "pure_eval")],
+    ("FusedManifestoSoftLUT weight=softsign", _fused(lx.FusedManifestoSoftLUT, "auto", weight="softsign"), True),
+    *[(f"FusedManifestoSoftLUT weight=softsign backend={b}", _fused(lx.FusedManifestoSoftLUT, b, weight="softsign"),
+       False) for b in ("native", "tier1", "pure")],
     ("ConfidenceLUT n=1", _conf(lx.ConfidenceLUT, 1), True),
     ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2), True),
     ("FusedConfidenceLUT n=1", _conf(FusedConfidenceLUT, 1), True),

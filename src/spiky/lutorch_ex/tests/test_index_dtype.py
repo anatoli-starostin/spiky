@@ -27,16 +27,16 @@ DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 CARTRIDGES = [
     ("ManifestoHardLUT", {}),
     ("ManifestoSoftLUT", {}),
-    ("SoftSignHardLUT", {}),
-    ("SoftSignSmoothLUT", {}),
+    ("ManifestoHardLUT", dict(weight="softsign")),
+    ("ManifestoSoftLUT", dict(weight="softsign")),
     ("ConfidenceLUT", dict(read_top_n=1)),
     ("ConfidenceLUT", dict(read_top_n=2)),
     ("QuantisedConfidenceLUT", dict(read_top_n=1)),
     ("QuantisedConfidenceLUT", dict(read_top_n=2)),
     ("FusedManifestoHardLUT", dict(backend="tier1")),
     ("FusedManifestoSoftLUT", dict(backend="tier1")),
-    ("FusedSoftSignHardLUT", dict(backend="tier1")),
-    ("FusedSoftSignSmoothLUT", dict(backend="tier1")),
+    ("FusedManifestoHardLUT", dict(backend="tier1", weight="softsign")),
+    ("FusedManifestoSoftLUT", dict(backend="tier1", weight="softsign")),
 ]
 FUSED = [n for n, _ in CARTRIDGES if n.startswith("Fused")]
 
