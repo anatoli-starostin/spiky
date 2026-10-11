@@ -5,11 +5,12 @@ forward/backward dispatch to whichever implementation is fastest for the current
 (op, batch, device), never slower than the pure cartridge and numerically equivalent to
 it (the oracle):
 
-* eval  -> the pure compiled gather read (fastest on the inference path);
-* train -> the hand-written 'cuda' kernels (``csrc/fused_manifesto.cu``: one forward and one
-  backward kernel, nothing per table in global memory) when they can run; else tier-2 NATIVE
-  lprojection kernels when available; else tier-1 embedding_bag + the custom straight-through
-  autograd.Function.
+* train and eval -> the hand-written 'cuda' kernels (``csrc/fused_manifesto.cu``: one forward and
+  one backward kernel, nothing per table in global memory) whenever the input / configuration is
+  a case they cover. A covered case whose extension is missing raises NativeUnavailableError
+  (``_fallback``), unless LUTORCH_EX_NO_CUDA_EXT=1;
+* otherwise eval -> the pure compiled gather read; train -> tier-2 NATIVE lprojection kernels when
+  available, else tier-1 embedding_bag + the custom straight-through autograd.Function.
 
 ``backend`` forces a path ('pure_eval'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid.
 ``knobs`` (a :class:`ManifestoCudaKnobs`) sets the 'cuda' kernels' launch configuration.

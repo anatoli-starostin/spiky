@@ -114,7 +114,8 @@ def raise_if_forced_native_unavailable(cartridge: str, x: torch.Tensor) -> None:
 
 def require_native_or_report(cartridge: str, x: torch.Tensor, wanted: str, used: str) -> None:
     """Call where a cartridge picks a non-native backend for a CUDA input only because native is unavailable:
-    reports the classified cause (warn once / raise in strict mode). CPU inputs are a deliberate path: no-op."""
+    raises NativeUnavailableError with the classified cause (quiet when disabled on purpose with
+    LUTORCH_EX_NO_CUDA_EXT=1). CPU inputs are a deliberate path: no-op."""
     if x.is_cuda:
         _fallback.report_involuntary_fallback(cartridge, LPROJ_EXT_NAME, wanted, used)
 

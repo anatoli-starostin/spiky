@@ -10,8 +10,9 @@ numerically equivalent to the pure ManifestoSoftLUT oracle:
   kernel, nothing per table in global memory.
 
 ``backend`` forces a path ('pure'/'tier1'/'native'/'cuda'/'auto'); 'auto' is the hybrid. In
-training 'auto' takes 'cuda' whenever it can run, at every batch size; otherwise (and in eval)
-the batch-size heuristic below applies unchanged. ``knobs`` (a :class:`ManifestoCudaKnobs`) sets
+training and in eval 'auto' takes 'cuda' whenever the case is one the kernels cover, at every batch
+size (a covered case whose extension is missing raises NativeUnavailableError, unless
+LUTORCH_EX_NO_CUDA_EXT=1); otherwise the batch-size heuristic below applies. ``knobs`` (a :class:`ManifestoCudaKnobs`) sets
 the 'cuda' kernels' launch configuration.
 """
 from __future__ import annotations
