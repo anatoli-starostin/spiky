@@ -29,9 +29,15 @@ base ``forward`` raises ``TypeError`` on bf16/fp16.
 
 Read path mirrors the pure SoftSign cartridges: the train read is one ``F.embedding_bag`` (fuses
 the per-table gather + the score-scaled tph-sum, no ``[B,G,tph,d_out]`` tensor), eval reads the
-plain gather, and torch.compile wraps the eval forward on CUDA only (inherited from the base).
+plain gather by default, and torch.compile wraps the eval forward on CUDA only (inherited from the
+base). The plain-gather eval read materialises ``[B,G,tph,d_out]`` (one per cell at n = 2; Inductor
+does not fuse the n = 2 blend away: 6.75 GiB peak at 32k tokens, h16 d48 tph64 nap8) but keeps eval
+outputs bitwise stable. ``bag_eval_read=True`` uses the train ``embedding_bag`` read in eval too: no
+such tensor (~20x faster eager on CPU), same math, different summation order (agrees to fp32
+re-association, ~1e-7 relative; not bitwise). Opt-in, like ``fused_read``.
 Backward is plain autograd — ``s_t`` / ``v`` (and their temperatures) are fully differentiable.
-``fused_read=True`` replaces both reads with the fused gather read (``cartridges/_fused_read.py``).
+``fused_read=True`` replaces both reads with the fused gather read (``cartridges/_fused_read.py``) and
+takes precedence over ``bag_eval_read``.
 """
 from __future__ import annotations
 
@@ -57,6 +63,8 @@ class ConfidenceLUT(ManifestoLUT):
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
         fused_read: read via the fused gather -> x score -> sum (cartridges/_fused_read.py) instead of the
             default embedding_bag read; replaces embedding_bag's forward and score-gradient kernels (default False).
+        bag_eval_read: eval reads through the train embedding_bag read too, instead of the plain gather (no
+            [B, G, tph, d_out] tensor; agrees to fp32 re-association, not bitwise). Default False.
     """
 
     # Compile the TRAIN forward too (not just eval): the score/blend read-out folds into a handful
@@ -76,12 +84,16 @@ class ConfidenceLUT(ManifestoLUT):
         read_tau_learnable: bool = True,
         learnable_score: bool = True,
         fused_read: bool = False,
+        bag_eval_read: bool = False,
         **kw,
     ):
         super().__init__(spec, **kw)
         # Fused read (see cartridges/_fused_read.py): gather -> x score -> sum from the fp32 master, replacing
         # embedding_bag's forward and score-gradient kernels. False (default) = the unchanged embedding_bag read.
         self.fused_read = bool(fused_read)
+        # Eval read: False (default) = the plain gather (bitwise-stable eval outputs); True = the train embedding_bag
+        # read (no [B, G, tph, d_out] tensor; fp32 re-association). See the module docstring.
+        self.bag_eval_read = bool(bag_eval_read)
         if read_top_n not in (1, 2):
             raise ValueError(f"read_top_n must be 1 or 2, got {read_top_n}")
         if not (beta_init > 0 and gamma_init > 0 and read_tau_init > 0):
@@ -176,14 +188,15 @@ class ConfidenceLUT(ManifestoLUT):
         if self.fused_read:
             v = self._blend_v(u_abs_star) if self.read_top_n == 2 else None
             return self._route(self._fused_read(c, c_alt, s, v), x)
+        bag = self.training or self.bag_eval_read
         if self.read_top_n == 1:
-            if self.training:
+            if bag:
                 grp_out = self._scored_read(c, s)
             else:
                 grp_out = (s.unsqueeze(-1) * self._read(c)).sum(dim=2)
         else:
             v = self._blend_v(u_abs_star)                     # [B, G, tph]
-            if self.training:
+            if bag:
                 grp_out = self._scored_blend_read(c, c_alt, s, v)
             else:
                 y_hard, y_alt = self._read_pair(c, c_alt)

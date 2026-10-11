@@ -216,6 +216,7 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
 | `fused_read` | `False` | `ConfidenceLUT` only. `False` uses the `embedding_bag` read. `True` uses the fused gather read on the fp32 table (see below) |
+| `bag_eval_read` | `False` | `ConfidenceLUT` / the `pure` path of `FusedConfidenceLUT`. `False`: eval reads a plain gather (`[B, G, tph, d_out]` materialised; bitwise-stable eval outputs). `True`: eval uses the training `embedding_bag` read too (no such tensor); agrees with the default to fp32 re-association, not bitwise. Opt-in, like `fused_read`; `fused_read=True` takes precedence |
 
 `fused_read=True` replaces all of `embedding_bag`'s kernels: a gather and score-weighted sum forward, a
 re-gather of the same rows for the score gradient, and an `index_add_` of the score-weighted rows for the
