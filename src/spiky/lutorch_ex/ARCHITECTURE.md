@@ -35,7 +35,7 @@ marked **DECIDED** or **OPEN**.
   real dtypes and geometries.
   - **bf16 reference support: DECIDED, landed on #160.** The reference classes accept bf16 / fp16 with the fused
     contract: fp32 maths (on fp32 views of the parameters and input), exactly one rounding per leaf; bit-identical
-    to the fp32 run rounded once.
+    to the fp32 run rounded once -- measured at test sizes (tests/test_reference_low_precision.py), and on CUDA under torch.use_deterministic_algorithms (otherwise the fp32 run's own atomic scatters are not reproducible).
 - **D. The fused-vs-reference equivalence test is the only thing binding the two files** once they are separate by
   design. It is per cartridge, with explicit per-dtype tolerances (value, input gradient, table gradient, learned
   scalars). It is a REQUIRED check, not optional hygiene.
@@ -114,8 +114,8 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
   `ConfidenceLUT`'s forward.
 - **Consequence C:** the reference classes accept bf16 / fp16: fp32 maths, one rounding per leaf, bit-identical to
-  the fp32 run rounded once (`tests/test_reference_low_precision.py`). `QuantisedConfidenceLUT` keeps rejecting low
-  precision (outside this spec's families).
+  the fp32 run rounded once -- measured at test sizes (tests/test_reference_low_precision.py), and on CUDA under torch.use_deterministic_algorithms (otherwise the fp32 run's own atomic scatters are not reproducible). `QuantisedConfidenceLUT` keeps rejecting low precision (outside this
+  spec's families).
 - **Consequence D:** `tests/test_fused_vs_reference.py` is the one fused-vs-reference harness: per cartridge (both
   Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2, FusedQuantisedConfidenceLUT), per dtype (fp32,
   bf16, fp16 input) and anchor mode wherever the fused class covers them, per head pattern, on every leaf, with
@@ -159,5 +159,15 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   tokens, int8 deploy at n=2, the n=1 variant, and the reference quantised path's speed -- now including the cost of
   its explicit left fold (+15% eval, +0.84 GiB eval peak at 32k). The rounding-boundary item is RESOLVED on #160 (the
   bit-exact layer 1 above); the fp64-exponent exploration (`wip/quant-fp64-exponents`, unpushed) is superseded.
+- Test gaps found by #160's final review, deferred to the same follow-up (closing them is test work):
+  `FusedQuantisedConfidenceLUT` is never compared with its reference with table dropout active (the harness runs at
+  rate 0; `tests/test_table_dropout_and_cell_tv.py` covers only the reference class); it is absent from
+  `tests/test_index_dtype.py`'s fused list; and two declared mixed-dtype combinations of the Manifesto / confidence
+  pairs are not exercised by the harness (a bf16 table with an fp32 input, an fp16 input with a bf16 table).
+- Cleanups found by the same review: `tests/test_table_dropout_and_cell_tv.py` still skips `QuantisedConfidenceLUT`
+  on CPU as "quant native path is CUDA-only" (lines 103-104, 125-126, 189-190) although the reference now runs there,
+  and its comment at line 104 claiming CPU quant is covered by the fused==pure test is false; the README's package
+  layout omits `_fused_read.py`, `bench_snapshot.py` and `bench_fused_confidence.py`. Also: re-measure the snapshot
+  of record on the H100 (it is RTX 5090 only).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
   lutorch_ex, and the nanochat profiling scripts (which also pass the removed `backend=`).

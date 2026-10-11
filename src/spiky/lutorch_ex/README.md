@@ -297,7 +297,7 @@ int8 read: int8 tables are always read with the torch definition (`_pow2.int_ble
 input and a bf16 table with one contract: addressing runs in fp32, so a lossy margin cannot flip a bit; reads and
 reductions accumulate in fp32; and each result is rounded once (the output and the input gradient to the input dtype,
 a parameter's gradient to its dtype). The reference classes do it by running their fp32 maths on fp32 views; the
-result is bit-identical to the fp32 run rounded once (`tests/test_reference_low_precision.py`). The reference
+result is bit-identical to the fp32 run rounded once -- measured at test sizes (tests/test_reference_low_precision.py), and on CUDA under torch.use_deterministic_algorithms (otherwise the fp32 run's own atomic scatters are not reproducible). The reference
 classes also run fp64; the fused ones do not (and take no fp16 table). `QuantisedConfidenceLUT` stays fp32 / fp64
 and raises a `TypeError` on bf16/fp16; `FusedQuantisedConfidenceLUT` is fp32 only.
 
