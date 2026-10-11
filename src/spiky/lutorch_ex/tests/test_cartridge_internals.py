@@ -58,3 +58,25 @@ def test_compile_not_used_on_cpu():
             cart.train(training)
             cart(torch.randn(2, cart.spec.h_in, cart.spec.d_in))  # CPU tensor
             assert cart._compiled is None
+
+
+# ---- unknown constructor keywords are rejected, not swallowed --------------------------------------------------------
+import pytest as _pytest  # noqa: E402
+
+import spiky.lutorch_ex as _lx  # noqa: E402
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT as _FusedConfidenceLUT  # noqa: E402
+
+
+@_pytest.mark.parametrize("cls", [
+    _lx.ManifestoHardLUT, _lx.ManifestoSoftLUT, _lx.FusedManifestoHardLUT, _lx.FusedManifestoSoftLUT,
+    _lx.SoftSignHardLUT, _lx.SoftSignSmoothLUT, _lx.FusedSoftSignHardLUT, _lx.FusedSoftSignSmoothLUT,
+    _lx.ConfidenceLUT, _FusedConfidenceLUT, _lx.QuantisedConfidenceLUT,
+])
+def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):
+    """A misspelt option (here table_dropout_rate) used to be swallowed by ManifestoLUT.__init__(**unused): the
+    cartridge built fine with the option silently at its default (dropout off)."""
+    spec = _lx.LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8)
+    with _pytest.raises(TypeError, match=r"table_droput_rate"):
+        cls(spec, seed=0, table_droput_rate=0.5)
+    with _pytest.raises(TypeError, match=r"\['also_bogus', 'bogus'\]"):
+        cls(spec, seed=0, bogus=1, also_bogus=2)

@@ -300,3 +300,47 @@ def test_backend_of():
         _fallback.backend_of(lx.FusedManifestoHardLUT(_spec(), seed=0))      # auto, never run
     assert _fallback.backend_of(lx.FusedManifestoHardLUT(_spec(), seed=0, backend="tier1")) == "tier1"
     assert isinstance(Cause("unclassified"), Cause)
+
+
+# -- the soft-sign twins: their native path is lprojection; a missing build is an involuntary fallback too ----------
+from spiky.lutorch_ex.cartridges import fused_softsign  # noqa: E402
+
+
+@pytest.fixture
+def no_lprojection(monkeypatch):
+    """lprojection is unavailable for the soft-sign twins, with the setuptools cause recorded."""
+    monkeypatch.setattr(fused_softsign, "native_available", lambda device: False)
+    monkeypatch.setattr(_native_ops, "native_available", lambda device: False)
+    record_build_failure("lutorch_ex_lprojection", ModuleNotFoundError("No module named 'setuptools'",
+                                                                       name="setuptools"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_softsign_hard_auto_fallback_raises_by_default(no_lprojection):
+    """FusedSoftSignHardLUT trains on native when it can; without it, auto used to fall back to tier1 SILENTLY."""
+    m = lx.FusedSoftSignHardLUT(_spec(), seed=0).cuda().train()
+    with pytest.raises(NativeUnavailableError, match=r"\[setuptools_missing\]"):
+        m(torch.randn(64, 4, 8, device="cuda"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls", [lx.FusedSoftSignHardLUT, lx.FusedSoftSignSmoothLUT])
+def test_softsign_explicit_native_unavailable_raises_with_cause(cls, no_lprojection):
+    m = cls(_spec(), seed=0, backend="native").cuda().train()
+    with pytest.raises(NativeUnavailableError, match=r"\[setuptools_missing\]"):
+        m(torch.randn(64, 4, 8, device="cuda"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_softsign_deliberate_paths_stay_quiet(no_lprojection, monkeypatch):
+    """Quiet: Smooth's auto (tier1 is its choice, not a fallback), eval, a CPU input, and LUTORCH_EX_NO_CUDA_EXT=1."""
+    x = torch.randn(64, 4, 8, device="cuda")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        lx.FusedSoftSignSmoothLUT(_spec(), seed=0).cuda().train()(x)
+        with torch.no_grad():
+            lx.FusedSoftSignHardLUT(_spec(), seed=0).cuda().eval()(x)
+        lx.FusedSoftSignHardLUT(_spec(), seed=0).train()(x.cpu())
+        monkeypatch.setenv("LUTORCH_EX_NO_CUDA_EXT", "1")
+        lx.FusedSoftSignHardLUT(_spec(), seed=0).cuda().train()(x)
+    assert not [x_ for x_ in w if "FAST CUDA PATH" in str(x_.message)]

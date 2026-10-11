@@ -128,8 +128,12 @@ class ManifestoLUT(MultiHeadLUT):
         table_dropout_rate: float = 0.0,
         device: Optional[torch.device] = None,
         index_dtype: Optional[torch.dtype] = None,
-        **unused,
+        **unknown,
     ):
+        # Every keyword is consumed by this class or a subclass on the way here; anything left is a typo or an option
+        # this cartridge does not have (silently ignoring it once turned a misspelt table_dropout_rate into no dropout).
+        if unknown:
+            raise TypeError(f"{type(self).__name__}: unexpected keyword argument(s) {sorted(unknown)}")
         super().__init__(spec)
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,

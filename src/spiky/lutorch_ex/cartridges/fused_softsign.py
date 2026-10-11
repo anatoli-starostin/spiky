@@ -25,7 +25,7 @@ from __future__ import annotations
 import torch
 
 from ._fused_ops import _acc_dtype, _global_cells, fused_blend_read, fused_hard_read, validate_backend
-from ._native_ops import native_available
+from ._native_ops import native_available, raise_if_forced_native_unavailable, require_native_or_report
 from ._native_softsign import NativeSoftSignHard, NativeSoftSignSmooth
 from .softsign_base import SoftSignLUT
 
@@ -86,6 +86,10 @@ class FusedSoftSignLUT(SoftSignLUT):
             return "pure_eval"
         if native_available(x.device):
             return "native"
+        # Native was the choice and is unavailable: on a CUDA input that is an involuntary fallback, reported like the
+        # Manifesto twins' (NativeUnavailableError naming the cause; quiet when disabled on purpose with
+        # LUTORCH_EX_NO_CUDA_EXT=1). A CPU input is a deliberate path.
+        require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1"
 
     def _temps(self, dtype):
@@ -101,6 +105,8 @@ class FusedSoftSignHardLUT(FusedSoftSignLUT):
         low = x.dtype in _LOW_PREC
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if self.backend == "native":                      # an explicit request is never silently downgraded
+            raise_if_forced_native_unavailable(type(self).__name__, x)
         dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             W = self.weights.float() if low else self.weights
@@ -142,6 +148,8 @@ class FusedSoftSignSmoothLUT(FusedSoftSignLUT):
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         w = self._blend_w(u_abs_star)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if self.backend == "native":                      # an explicit request is never silently downgraded
+            raise_if_forced_native_unavailable(type(self).__name__, x)
         dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             W = self.weights.float() if low else self.weights
