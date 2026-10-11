@@ -2,7 +2,8 @@
 reference class.
 
 Per cartridge (FusedManifestoHardLUT / FusedManifestoSoftLUT with both weights, FusedConfidenceLUT with read_top_n 1
-and 2, FusedQuantisedConfidenceLUT), per dtype (fp32; bf16 table + input; fp16 input on an fp32 table), per anchor mode
+and 2, FusedQuantisedConfidenceLUT), per dtype (fp32; bf16 table + input; fp16 input on an fp32 table; bf16 table with
+an fp32 input; fp16 input on a bf16 table -- every table / input combination the fused classes declare), per anchor mode
 and head pattern, wherever the fused class covers the case (the quantised op: fp32, pairs, read_top_n=2 only): the fused
 class and its reference class, loaded with the same state_dict, are fed the same input and output gradient, in
 training and in eval, and compared on every leaf: the value, the input gradient, the table gradient and every learned
@@ -78,7 +79,8 @@ CARTRIDGES = [
 ]
 #: (id, table dtype, input dtype)
 DTYPES = [("fp32", torch.float32, torch.float32), ("bf16", torch.bfloat16, torch.bfloat16),
-          ("fp16-input", torch.float32, torch.float16)]
+          ("fp16-input", torch.float32, torch.float16), ("bf16-table", torch.bfloat16, torch.float32),
+          ("fp16-input-bf16-table", torch.bfloat16, torch.float16)]
 #: What each fused class covers (everything not listed: all dtypes, both anchor modes).
 COVERS = {"Quantised n=2": dict(dtypes={"fp32"}, anchor_modes={"pairs"})}
 #: (id, h_in, h_out, d, tph, nap, batch)
@@ -278,6 +280,71 @@ def test_quantised_layer2_compiled_reference_matches_eager_in_fp64(seed):
         bound = FP64_SCALAR_BOUND if res[0][leaf].numel() == 1 else FP64_TENSOR_BOUND
         e = _rel(res[1][leaf], res[0][leaf])
         assert e <= bound, f"train {leaf}: relative norm {e:.2e} > {bound:.0e}"
+
+
+#: A row whose tables were dropped identically on both sides differs only by fp32 rounding (measured <= 1e-6 with
+#: room to spare); one table dropped on a single side moves its row by ~1/64.
+ROW_SAME = 1e-6
+
+
+def _injected_mask(m, mask):
+    """Make ``m`` draw ``mask`` (``[B, G, tph]``, inverted scale) as its table-dropout keep-mask, with the library's own
+    gate (TRAIN + grad only). Needed for an apples-to-apples comparison: the fused forward is compiled, and Inductor
+    generates ``torch.rand`` with its own Philox RNG, so a shared seed does NOT give the eager reference and the
+    compiled fused class the same mask; an identical explicit mask does. Test-side, on the instance only."""
+    def draw(B, device, dtype):
+        if not (m.training and torch.is_grad_enabled()):
+            return None
+        return mask.to(device=device, dtype=dtype)
+    m._table_dropout_mask = draw
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_quantised_layer1_with_table_dropout(seed):
+    """LAYER 1 with table dropout ACTIVE (rate 0.3), at the champion scale: driven by one identical explicit mask (see
+    _injected_mask), the fused class and the eager reference agree on WHICH tables are dropped (no output row moves by
+    more than ROW_SAME: a table dropped on one side only would move its row by ~1/64) and on the values, every leaf
+    within the harness's fp32 tolerances. Not bit for bit, unlike layer 1 at rate 0: the survivors are scaled by
+    1/0.7, which fp32 cannot represent exactly, and the compiled fused graph and the eager reference round that
+    product differently (measured over 4 seeds: no row above 1e-6; value 2.1e-7 and grad x 1.4e-7 relative norm, 2%
+    and 1.4% of FP32_TOL; grad weights identical; the learned scalars below 0.03% of their bound). And eval is a no-op
+    for both: with the library's own mask (no injection) the rate-0.3 cartridges evaluate bit for bit like rate-0
+    copies."""
+    requires_extension("quantised")
+    torch._dynamo.reset()
+    spec = LUTSpec(**CHAMPION)
+    rate, B = 0.3, 8192
+    ref = QuantisedConfidenceLUT(spec, seed=seed, table_dropout_rate=rate, **QUANT_KW).cuda()
+    fused = FusedQuantisedConfidenceLUT(spec, seed=seed, table_dropout_rate=rate, **QUANT_KW).cuda()
+    fused.load_state_dict(ref.state_dict())
+    g = torch.Generator(device="cuda").manual_seed(1234 + seed)
+    x = torch.randn(B, 16, 48, device="cuda", generator=g)
+    go = torch.randn(B, 16, 48, device="cuda", generator=g)
+    keep = (torch.rand(B, spec.n_groups, spec.tph, device="cuda", generator=g) < 1.0 - rate).float() / (1.0 - rate)
+    assert 0.6 < float((keep > 0).float().mean()) < 0.8               # the mask really drops ~30% of tables
+    # eval first, with the library's own mask: a no-op in both classes
+    with torch.no_grad():
+        for cls, m in ((QuantisedConfidenceLUT, ref), (FusedQuantisedConfidenceLUT, fused)):
+            m0 = cls(spec, seed=seed, table_dropout_rate=0.0, **QUANT_KW).cuda()
+            m0.load_state_dict(m.state_dict())
+            m.eval(); m0.eval()
+            assert torch.equal(m(x), m0(x)), f"{cls.__name__}: dropout changed the eval output"
+    _injected_mask(ref, keep)
+    _injected_mask(fused, keep)
+    ref.train(); fused.train()
+    oracle = _Eager(ref)
+    a, b = _leaves(fused, x, go), _leaves(oracle, x, go)
+    rows = (a["value"] - b["value"]).norm(dim=-1) / b["value"].norm(dim=-1).clamp_min(1e-30)
+    assert float(rows.max()) <= ROW_SAME, f"a row moved by {float(rows.max()):.2e}: a table dropped on one side only?"
+    n_terms = B * spec.n_groups * spec.tph * spec.d_out
+    for leaf in b:
+        tol = _tol(leaf, b[leaf].dtype, torch.float32, n_terms=n_terms)
+        e = _rel(a[leaf], b[leaf])
+        assert e < tol, f"{leaf}: rel-norm error {e:.2e} >= {tol:.1e}"
+    # the dropped tables contribute nothing: the masked value differs from the unmasked one
+    with torch.no_grad():
+        _injected_mask(fused, torch.ones_like(keep))
+        assert not torch.equal(fused(x), a["value"]), "the mask had no effect"
 
 
 def _tie_margins(target_q=None, target_k=None, nap=4):

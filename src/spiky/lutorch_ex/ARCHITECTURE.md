@@ -124,7 +124,9 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
 - **Consequence D:** `tests/test_fused_vs_reference.py` is the one fused-vs-reference harness: per cartridge (both
   Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2, FusedQuantisedConfidenceLUT), per dtype (fp32,
   bf16, fp16 input) and anchor mode wherever the fused class covers them, per head pattern, on every leaf, with
-  explicit tolerances justified in its docstring. It replaced
+  explicit tolerances justified in its docstring. Its dtypes are every table / input combination the fused classes
+  declare: fp32; bf16 table + bf16 input; fp16 input on an fp32 table; a bf16 table with an fp32 input; an fp16 input
+  on a bf16 table. It replaced
   `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
   double rounding of a low-precision input's gradient in the fan-out pattern.
 - **Consequence D, the quantised pair: bit-exact, in two layers.** The power-of-two exponents are round-half-up
@@ -146,6 +148,13 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     / grad x / grad weights <= 1e-14, learned scalars <= 1e-12 (worst 2.3e-16, 2.2e-16 and 6.0e-14): compile
     preserved the code logic. The fp32 numerics differ slightly, as expected; layer 1 pins them bit for bit.
   - Constructed exact ties: the reference and the kernel both round half up. Natural exact ties: zero.
+  - With table dropout active (rate 0.3), driven by one identical explicit mask on both sides (the compiled fused
+    graph draws `torch.rand` from Inductor's own RNG, so a shared seed would not give the same mask): the fused class
+    drops exactly the tables the reference drops (no output row moves by more than 1e-6) and agrees on every leaf
+    within the harness's fp32 tolerances -- not bit for bit, since the survivors' 1/0.7 scale is inexact in fp32 and
+    the two graphs round that product differently (measured: value 2.1e-7, grad x 1.4e-7, grad weights identical).
+    Eval is a no-op in both. The fused class also passes the dropout effect / unbiasedness / dropped-table-zero-grad
+    tests and the int32-vs-int64 index test.
   - **The trade-off, accepted on purpose:** (1) the reference partly encodes the kernel's operation order, so their
     agreement is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate than
     torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7; (3) the
@@ -164,11 +173,6 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   tokens, int8 deploy at n=2, the n=1 variant, and the reference quantised path's speed -- now including the cost of
   its explicit left fold (+15% eval, +0.84 GiB eval peak at 32k). The rounding-boundary item is RESOLVED on #160 (the
   bit-exact layer 1 above); the fp64-exponent exploration (`wip/quant-fp64-exponents`, unpushed) is superseded.
-- Test gaps found by #160's final review, deferred to the same follow-up (closing them is test work):
-  `FusedQuantisedConfidenceLUT` is never compared with its reference with table dropout active (the harness runs at
-  rate 0; `tests/test_table_dropout_and_cell_tv.py` covers only the reference class); it is absent from
-  `tests/test_index_dtype.py`'s fused list; and two declared mixed-dtype combinations of the Manifesto / confidence
-  pairs are not exercised by the harness (a bf16 table with an fp32 input, an fp16 input with a bf16 table).
 - Re-measure the snapshot of record on the H100 (it is RTX 5090 only).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
   lutorch_ex, and the nanochat profiling scripts (which also pass the removed `backend=`).

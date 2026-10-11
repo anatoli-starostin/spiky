@@ -36,7 +36,8 @@ CARTRIDGES = [
 ]
 FUSED = [("FusedManifestoHardLUT", {}), ("FusedManifestoSoftLUT", {}),
          ("FusedManifestoHardLUT", dict(weight="softsign")), ("FusedManifestoSoftLUT", dict(weight="softsign")),
-         ("FusedConfidenceLUT", dict(read_top_n=1)), ("FusedConfidenceLUT", dict(read_top_n=2))]
+         ("FusedConfidenceLUT", dict(read_top_n=1)), ("FusedConfidenceLUT", dict(read_top_n=2)),
+         ("FusedQuantisedConfidenceLUT", dict(read_top_n=2))]
 
 
 @contextlib.contextmanager
@@ -51,6 +52,10 @@ def _deterministic(on):
 
 
 def _run(name, kw, index_dtype, device, wrap, spec):
+    # Each run compiles fresh: earlier tests can leave Dynamo's recompile count for the same _forward_impl near its
+    # limit, and then one of the two runs would silently fall back to eager -- whose torch.rand draws a different
+    # table-dropout mask from the compiled graph's -- and the comparison would no longer isolate the index dtype.
+    torch._dynamo.reset()
     torch.manual_seed(0)
     cart = getattr(lx, name)(spec, seed=1, table_dropout_rate=0.2, index_dtype=index_dtype, **kw)
     gen = torch.Generator().manual_seed(1)
@@ -88,10 +93,11 @@ def test_int32_bit_identical_to_int64(device, name, kw, wrap):
 @pytest.mark.parametrize("name,kw", FUSED, ids=[f"{n}{''.join(f'-{k}{v}' for k, v in kw.items())}"
                                                   for n, kw in FUSED])
 def test_fused_close_within_baseline_noise(name, kw):
-    """The fused CUDA kernels, end to end: index_dtype does not reach them, so the forward is bit-identical and the
-    gradients stay within the kernels' own run-to-run atomics noise."""
+    """The fused classes, end to end: index_dtype does not reach the Manifesto / confidence kernels, and in
+    FusedQuantisedConfidenceLUT it only sets the dtype of the flat read indices (same values), so the forward is
+    bit-identical and the gradients stay within the kernels' own run-to-run atomics noise."""
     from spiky.lutorch_ex.tests._requires_extension import requires_extension
-    requires_extension("confidence" if name == "FusedConfidenceLUT" else "manifesto")
+    requires_extension({"FusedConfidenceLUT": "confidence", "FusedQuantisedConfidenceLUT": "quantised"}.get(name, "manifesto"))
     spec = LUTSpec(**GEOM)
     y64, gx64, g64 = _run(name, kw, torch.int64, "cuda", False, spec)
     y32, gx32, g32 = _run(name, kw, torch.int32, "cuda", False, spec)

@@ -13,7 +13,8 @@ import pytest
 import torch
 import torch.nn as nn
 
-from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec,
+from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, FusedQuantisedConfidenceLUT,
+                              LUTSpec,
                               ManifestoHardLUT, ManifestoSoftLUT, QuantisedConfidenceLUT, cell_tv_penalty)
 from spiky.lutorch_ex.tests._requires_extension import requires_extension
 from spiky.lutorch_ex.tests._weights import softsign
@@ -71,25 +72,30 @@ def _spec(H=2, TPH=4, NAP=4, D=6):
 
 def _build(Cls, spec, device, dtype, rate):
     kw = dict(seed=0, weight_init_std=1.0, table_dropout_rate=rate)
-    if Cls in (ConfidenceLUT, QuantisedConfidenceLUT):
+    if Cls in (ConfidenceLUT, QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT):
         kw["read_top_n"] = 2
     return Cls(spec, **kw).to(device=device, dtype=dtype)
 
 
 ALL = [ManifestoHardLUT, ManifestoSoftLUT, softsign(ManifestoHardLUT), softsign(ManifestoSoftLUT),
        FusedManifestoHardLUT, FusedManifestoSoftLUT, softsign(FusedManifestoHardLUT), softsign(FusedManifestoSoftLUT),
-       ConfidenceLUT, QuantisedConfidenceLUT]
+       ConfidenceLUT, QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT]
 
 
 def _is_fused(Cls):
     return getattr(Cls, "cls", Cls).__name__.startswith("Fused")
 
 
+def _ext(Cls):
+    """The CUDA extension a fused class needs (tests/_requires_extension.py)."""
+    return "quantised" if Cls is FusedQuantisedConfidenceLUT else "manifesto"
+
+
 def _devs_dtypes(Cls=None):
     """The (device, dtype) cases for ``Cls``: the reference classes CPU fp64 (+ CUDA fp32); a fused class CUDA fp32
     only, after the extension gate (skip without a CUDA device, fail without the extension)."""
     if Cls is not None and _is_fused(Cls):
-        requires_extension("manifesto")
+        requires_extension(_ext(Cls))
         return [("cuda", torch.float32)]
     out = [("cpu", torch.float64)]
     if _CUDA:
@@ -121,7 +127,7 @@ def test_dropout_unbiased_in_expectation(Cls):
     # inverted dropout: E[output] over masks == the no-dropout output.
     device, dtype = ("cuda", torch.float32) if _CUDA else ("cpu", torch.float64)
     if _is_fused(Cls):
-        requires_extension("manifesto")
+        requires_extension(_ext(Cls))
     spec = _spec()
     m = _build(Cls, spec, device, dtype, 0.25); m.train()
     m0 = _build(Cls, spec, device, dtype, 0.0); m0.load_state_dict(m.state_dict()); m0.train()
@@ -178,12 +184,12 @@ def test_fused_matches_pure_with_dropout_value_and_grad(Fused, Pure):
 
 
 @pytest.mark.parametrize("Cls", [ManifestoHardLUT, ConfidenceLUT, QuantisedConfidenceLUT,
-                                 FusedManifestoHardLUT])
+                                 FusedManifestoHardLUT, FusedQuantisedConfidenceLUT])
 def test_dropped_table_gets_zero_grad(Cls):
     # A table dropped (mask 0) for ALL samples must receive zero weight gradient at its addressed cells.
     device, dtype = ("cuda", torch.float32) if _CUDA else ("cpu", torch.float64)
     if _is_fused(Cls):
-        requires_extension("manifesto")
+        requires_extension(_ext(Cls))
     spec = _spec()
     m = _build(Cls, spec, device, dtype, 0.3); m.train()
     B = 8
