@@ -50,7 +50,7 @@ class BenchRow:
     min_ms: Optional[float] = None
     throughput_rows_per_s: Optional[float] = None
     note: str = ""
-    backend: str = ""                 # the backend that actually ran (cartridges._fallback.backend_of)
+    backend: str = ""                 # the implementation: 'cuda' (a Fused* class) or 'reference'
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -161,14 +161,18 @@ def benchmark(
 ) -> list[BenchRow]:
     """Benchmark a cartridge over the (operation x batch x device) grid. See module docstring.
 
-    An involuntary fallback to a slow path raises (cartridges/_fallback.py), so it is an error cell, never a silently
-    slow timing; every ok row carries the backend that actually ran."""
+    A fused class has no fallback: a case its kernels do not cover, or a missing extension, raises, so it is an error
+    cell, never a silently slow timing. Every ok row carries the implementation ('cuda' or 'reference')."""
     return _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats,
                       measure_cuda)
 
 
+def implementation_of(cart) -> str:
+    """'cuda' for a fused cartridge (its kernels are its only implementation), else 'reference'."""
+    return "cuda" if type(cart).__name__.startswith("Fused") else "reference"
+
+
 def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats, measure_cuda):
-    from .cartridges._fallback import backend_of
     make_input = make_input or _default_make_input
     rows: list[BenchRow] = []
     for label in devices:
@@ -185,7 +189,7 @@ def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, device
                     times, note = _measure_cell(cart, make_input, op, batch, device, warmup, repeats)
                     med, mn, thr = _stats(times, batch)
                     rows.append(BenchRow(name, label, op, batch, "ok", med, mn, thr, note,
-                                         backend=backend_of(cart)))   # raises (-> error row) if unknown
+                                         backend=implementation_of(cart)))
                 except Exception as e:  # OOM, etc. — one cell failing must not kill the grid
                     rows.append(BenchRow(name, label, op, batch, "error", note=f"{type(e).__name__}: {e}"))
                 finally:

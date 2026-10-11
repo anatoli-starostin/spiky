@@ -4,9 +4,9 @@ table_dropout_rate (whole-table inverted dropout, folded into every cartridge's 
 cell_tv: bit-for-bit vs an explicit Hamming-1 pair enumeration (the reference formula), + the
 model-level mean aggregator. table dropout: has real effect in train, is a no-op at eval, is
 unbiased in expectation (inverted rescale), gates the backward (dropped table -> zero grad), and --
-crucially -- the FUSED / native-kernel read paths produce the SAME dropout-aware value AND gradient
-as the pure oracle (so the mask folded into per-sample-weights / scaled into the native grad is not
-silently dropped or mis-scaled). CPU fp64 (oracle / tier1) + H100 fp32 (native kernels)."""
+crucially -- the FUSED kernels produce the SAME dropout-aware value AND gradient as the reference
+class (so the mask scaled into the kernels' value and grads is not silently dropped or mis-scaled).
+Reference classes: CPU fp64 + CUDA fp32; fused classes: CUDA fp32 only (they run only on their kernels)."""
 import math
 
 import pytest
@@ -15,6 +15,7 @@ import torch.nn as nn
 
 from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec,
                               ManifestoHardLUT, ManifestoSoftLUT, QuantisedConfidenceLUT, cell_tv_penalty)
+from spiky.lutorch_ex.tests._requires_extension import requires_extension
 from spiky.lutorch_ex.tests._weights import softsign
 
 _CUDA = torch.cuda.is_available()
@@ -80,7 +81,16 @@ ALL = [ManifestoHardLUT, ManifestoSoftLUT, softsign(ManifestoHardLUT), softsign(
        ConfidenceLUT, QuantisedConfidenceLUT]
 
 
-def _devs_dtypes():
+def _is_fused(Cls):
+    return getattr(Cls, "cls", Cls).__name__.startswith("Fused")
+
+
+def _devs_dtypes(Cls=None):
+    """The (device, dtype) cases for ``Cls``: the reference classes CPU fp64 (+ CUDA fp32); a fused class CUDA fp32
+    only, after the extension gate (skip without a CUDA device, fail without the extension)."""
+    if Cls is not None and _is_fused(Cls):
+        requires_extension("manifesto")
+        return [("cuda", torch.float32)]
     out = [("cpu", torch.float64)]
     if _CUDA:
         out.append(("cuda", torch.float32))
@@ -89,7 +99,7 @@ def _devs_dtypes():
 
 @pytest.mark.parametrize("Cls", ALL)
 def test_dropout_effect_and_eval_noop(Cls):
-    for device, dtype in _devs_dtypes():
+    for device, dtype in _devs_dtypes(Cls):
         if Cls is QuantisedConfidenceLUT and device == "cpu":
             continue  # quant native-op path is CUDA; CPU quant is covered by the fused==pure test below
         spec = _spec()
@@ -114,6 +124,8 @@ def test_dropout_unbiased_in_expectation(Cls):
     device, dtype = ("cuda", torch.float32) if _CUDA else ("cpu", torch.float64)
     if Cls is QuantisedConfidenceLUT and device == "cpu":
         pytest.skip("quant native path is CUDA-only")
+    if _is_fused(Cls):
+        requires_extension("manifesto")
     spec = _spec()
     m = _build(Cls, spec, device, dtype, 0.25); m.train()
     m0 = _build(Cls, spec, device, dtype, 0.0); m0.load_state_dict(m.state_dict()); m0.train()
@@ -136,8 +148,8 @@ def _inject_mask(m, mask):
     m._table_dropout_mask = lambda B, device, dtype: mask.to(device=device, dtype=dtype)
 
 
-# Fused/native cartridge  <->  its pure oracle (SAME weights + SAME injected mask): value AND grads
-# must agree. This is the native-kernel dropout-threading check (fused vs eager).
+# Fused class  <->  its reference class (SAME weights + SAME injected mask): value AND grads
+# must agree. This is the kernels' dropout-threading check (fused vs eager).
 PAIRS = [(FusedManifestoHardLUT, ManifestoHardLUT),
          (FusedManifestoSoftLUT, ManifestoSoftLUT),
          (softsign(FusedManifestoHardLUT), softsign(ManifestoHardLUT)),
@@ -146,7 +158,7 @@ PAIRS = [(FusedManifestoHardLUT, ManifestoHardLUT),
 
 @pytest.mark.parametrize("Fused,Pure", PAIRS)
 def test_fused_matches_pure_with_dropout_value_and_grad(Fused, Pure):
-    for device, dtype in _devs_dtypes():
+    for device, dtype in _devs_dtypes(Fused):
         spec = _spec()
         atol = 1e-9 if dtype == torch.float64 else 2e-3
         pf = _build(Fused, spec, device, dtype, 0.3); pf.train()
@@ -176,6 +188,8 @@ def test_dropped_table_gets_zero_grad(Cls):
     device, dtype = ("cuda", torch.float32) if _CUDA else ("cpu", torch.float64)
     if Cls is QuantisedConfidenceLUT and device == "cpu":
         pytest.skip("quant native path is CUDA-only")
+    if _is_fused(Cls):
+        requires_extension("manifesto")
     spec = _spec()
     m = _build(Cls, spec, device, dtype, 0.3); m.train()
     B = 8

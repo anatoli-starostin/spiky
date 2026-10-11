@@ -3,12 +3,12 @@ ManifestoLUT._addresses.
 
 What is bit-identical (torch.equal on the output and on EVERY gradient: tables, score / blend / temperature
 parameters, ProjectionMHL compress/decompress, input), measured 2026-10-09:
-  * TRAINING, every cartridge, CPU and CUDA, under torch.use_deterministic_algorithms(True). Without it the int64
-    baseline itself is not run-to-run reproducible (atomic scatters in the input-grad and, on the pure CPU path,
+  * TRAINING, every reference cartridge, CPU and CUDA, under torch.use_deterministic_algorithms(True). Without it the
+    int64 baseline itself is not run-to-run reproducible (atomic scatters in the input-grad and, on the CPU path,
     the table-grad index_put accumulate, ~1e-7 relative), so two int64 runs already differ.
-  * The fused twins on their tier1 (embedding_bag) path. Their NATIVE CUDA kernels read int32 indices directly
-    (templated on the index type) and are nondeterministic in their own baseline (custom-kernel atomics), so there
-    only closeness within that baseline noise is asserted; exact per-kernel parity is in test_native_index_dtype.py.
+  * The fused classes' CUDA kernels recompute the addressing from the input (int16 anchors) and never read the stored
+    indices, so index_dtype cannot change their forward (bit-identical); their backward uses atomics and is not
+    reproducible run-to-run, so there only closeness within that baseline noise is asserted.
   * EVAL: bit-identical, CPU and CUDA, every cartridge. The compiled CUDA comparison is built with Inductor's
     pointwise autotuning off, so both sides get the same kernel configs -- see test_eval_int32_vs_int64.
 """
@@ -23,7 +23,7 @@ from spiky.lutorch_ex import LUTSpec, ProjectionMHL
 GEOM = dict(h_in=4, h_out=4, tph=16, nap=8, d_in=16, d_out=12)     # flat index up to 4*16*256-1 = 16383
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
-# (class name, extra kwargs). Fused twins pinned to tier1 here; their native path is checked separately below.
+# (class name, extra kwargs): the reference cartridges; the fused classes are checked separately below.
 CARTRIDGES = [
     ("ManifestoHardLUT", {}),
     ("ManifestoSoftLUT", {}),
@@ -33,12 +33,10 @@ CARTRIDGES = [
     ("ConfidenceLUT", dict(read_top_n=2)),
     ("QuantisedConfidenceLUT", dict(read_top_n=1)),
     ("QuantisedConfidenceLUT", dict(read_top_n=2)),
-    ("FusedManifestoHardLUT", dict(backend="tier1")),
-    ("FusedManifestoSoftLUT", dict(backend="tier1")),
-    ("FusedManifestoHardLUT", dict(backend="tier1", weight="softsign")),
-    ("FusedManifestoSoftLUT", dict(backend="tier1", weight="softsign")),
 ]
-FUSED = [n for n, _ in CARTRIDGES if n.startswith("Fused")]
+FUSED = [("FusedManifestoHardLUT", {}), ("FusedManifestoSoftLUT", {}),
+         ("FusedManifestoHardLUT", dict(weight="softsign")), ("FusedManifestoSoftLUT", dict(weight="softsign")),
+         ("FusedConfidenceLUT", dict(read_top_n=1)), ("FusedConfidenceLUT", dict(read_top_n=2))]
 
 
 @contextlib.contextmanager
@@ -54,7 +52,9 @@ def _deterministic(on):
 
 def _run(name, kw, index_dtype, device, wrap, spec):
     torch.manual_seed(0)
-    cart = getattr(lx, name)(spec, seed=1, table_dropout_rate=0.2, index_dtype=index_dtype, **kw)
+    from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
+    cls = FusedConfidenceLUT if name == "FusedConfidenceLUT" else getattr(lx, name)
+    cart = cls(spec, seed=1, table_dropout_rate=0.2, index_dtype=index_dtype, **kw)
     gen = torch.Generator().manual_seed(1)
     if wrap:
         m = ProjectionMHL(cart, d_model=64).to(device).train()
@@ -87,18 +87,16 @@ def test_int32_bit_identical_to_int64(device, name, kw, wrap):
         assert torch.equal(g64[n], g32[n]), f"grad of {n} differs"
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="the native kernels are CUDA-only")
-@pytest.mark.parametrize("name", FUSED)
-def test_fused_native_close_within_baseline_noise(name):
-    """Native kernels, end to end: they now read the int32 indices directly. int64 is not reproducible run-to-run
-    (custom-kernel atomics); int32 must stay within the same noise (measured: both ~4-7e-9 absolute on table grads
-    ~5e-2). Exact per-kernel parity: test_native_index_dtype.py."""
-    from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_available
-    from spiky.lutorch_ex.tests._native_required import require_extension
-    require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)   # fail (see _native_required)
+@pytest.mark.parametrize("name,kw", FUSED, ids=[f"{n}{''.join(f'-{k}{v}' for k, v in kw.items())}"
+                                                  for n, kw in FUSED])
+def test_fused_close_within_baseline_noise(name, kw):
+    """The fused CUDA kernels, end to end: index_dtype does not reach them, so the forward is bit-identical and the
+    gradients stay within the kernels' own run-to-run atomics noise."""
+    from spiky.lutorch_ex.tests._requires_extension import requires_extension
+    requires_extension("confidence" if name == "FusedConfidenceLUT" else "manifesto")
     spec = LUTSpec(**GEOM)
-    y64, gx64, g64 = _run(name, dict(backend="native"), torch.int64, "cuda", False, spec)
-    y32, gx32, g32 = _run(name, dict(backend="native"), torch.int32, "cuda", False, spec)
+    y64, gx64, g64 = _run(name, kw, torch.int64, "cuda", False, spec)
+    y32, gx32, g32 = _run(name, kw, torch.int32, "cuda", False, spec)
     assert torch.equal(y64, y32)
     torch.testing.assert_close(gx32, gx64, rtol=1e-6, atol=1e-7)
     for n in g64:

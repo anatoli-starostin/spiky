@@ -1,59 +1,39 @@
-"""Hard errors when a cartridge's fast CUDA path is unavailable and it would fall back to a slow path involuntarily.
+"""The error a fused cartridge raises when its CUDA extension is unavailable (spec rule 3), with the classified cause.
 
-The CUDA extensions (``lutorch_ex_lprojection`` for the FusedManifesto* native backends,
-``lutorch_ex_fused_manifesto`` for the Manifesto 'cuda' backend, ``lutorch_ex_fused_confidence`` for
-FusedConfidenceLUT) are JIT-built at first use and never raise on a failed build: the cartridges could fall back to
-correct but far slower pure-torch / tier-1 paths. Silently, that hid a real bug (setuptools missing from a pinned
-venv) and produces invalid timings, so an involuntary fallback is an error.
+The CUDA extensions (``lutorch_ex_fused_manifesto`` for FusedManifestoHardLUT / FusedManifestoSoftLUT,
+``lutorch_ex_fused_confidence`` for FusedConfidenceLUT) are JIT-built at first use. A fused class has no other
+implementation, so when its extension cannot be built or loaded it raises :class:`NativeUnavailableError` naming why.
+There is no fallback and no switch to get one: to run without the extension (a CPU-only box, a CI job), construct
+the reference class instead.
 
-* :func:`record_build_failure` is called by the extension loaders when a build/load fails (or is skipped). It
-  classifies the CAUSE once, from the exception torch raised plus direct checks, and stores it.
-* :func:`report_involuntary_fallback` is called by a cartridge at the point where it would have used the CUDA path
-  for a CUDA input but cannot. It raises :class:`NativeUnavailableError` with a multi-line banner naming the cause,
-  the remedy and the cost. This is not configurable: a guard you can forget to set is not a guard.
-
-Deliberate choices stay quiet and fall back: ``LUTORCH_EX_NO_CUDA_EXT=1`` (the one escape hatch; it disables every
-extension), an explicit ``backend=`` other than the CUDA one, a CPU input, or a geometry / dtype the kernels do not
-support by design (that is not a failure of the fast path).
+* :func:`record_build_failure` is called by the extension loader when a build/load fails. It classifies the CAUSE
+  once, from the exception torch raised plus direct checks, and stores it.
+* :func:`raise_unavailable` is called by a fused cartridge that needs the extension: it raises with a multi-line
+  banner naming the cause and the remedy.
 """
 from __future__ import annotations
 
-import logging
 import os
 import re
 import tempfile
-import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
 
-log = logging.getLogger("spiky.lutorch_ex")
-
 MIN_TORCH = (2, 1)
 
-# The canonical LUT-FFN geometry, RTX 5090, fp32 (PR #158): h16 d48 tph64 nap8, batch 32,768 vectors.
-COST_TEXT = (
-    "a fallback stays CORRECT but is much SLOWER. Measured on the RTX 5090 at h16 d48 tph64 nap8,\n"
-    "            32,768 vectors, fp32: FusedManifestoHard train step 6.6 ms ('cuda') vs 53.9 ms (native, ~8x),\n"
-    "            peak 0.45 vs 9.2 GiB; FusedConfidenceLUT n=2 eval 2.1 ms ('cuda') vs 14.4 ms (the\n"
-    "            ConfidenceLUT path, ~7x), peak 0.19 vs 6.75 GiB.\n"
-    "            ANY PERFORMANCE NUMBER MEASURED IN THIS STATE IS INVALID."
-)
-
-
 class NativeUnavailableError(RuntimeError):
-    """Raised when a cartridge would fall back involuntarily (CUDA input, a supported case, extension missing)."""
+    """Raised when a fused cartridge's CUDA extension is unavailable."""
 
 
 @dataclass
 class Cause:
-    """Why an extension is unavailable. ``kind`` is one of the CAUSES keys; ``deliberate`` causes never warn."""
+    """Why an extension is unavailable. ``kind`` is one of the CAUSES keys."""
     kind: str
     detail: str = ""
     remedy: str = ""
     log_path: Optional[str] = None
-    deliberate: bool = False
 
 
 # kind -> (headline, remedy). Each entry is only produced when the evidence for it is present (see classify()).
@@ -82,34 +62,13 @@ CAUSES = {
         "upgrade torch to >= %d.%d." % MIN_TORCH),
     "no_cuda_device": (
         "torch sees no CUDA device.",
-        "run on a CUDA machine (CPU runs use the pure path by design)."),
+        "run on a CUDA machine, or construct the reference class (it needs no extension)."),
     "unclassified": (
         "the extension failed to build or load for a reason this check does not recognise.",
         "read the error below and the build log."),
-    "disabled": ("disabled by LUTORCH_EX_NO_CUDA_EXT=1 (deliberate).", ""),
 }
 
 _RECORDED: dict = {}          # extension name -> Cause
-_WARNED: set = set()           # (extension, cause kind) already reported in this process
-
-
-def strict() -> bool:
-    """Always True: an involuntary fallback raises. Not configurable; a seam for tests only (monkeypatch it to False
-    to exercise the once-per-cause log + warning path, which nothing else reaches)."""
-    return True
-
-
-def disabled_on_purpose() -> bool:
-    """LUTORCH_EX_NO_CUDA_EXT=1: every extension is disabled deliberately, so any fallback is a deliberate one. Read
-    directly, not only through the recorded cause: a loader records 'disabled' once per process, and the escape hatch
-    must not depend on that record surviving."""
-    return os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1"
-
-
-def is_deliberate(ext_name: str) -> bool:
-    """The extension is unavailable on purpose (LUTORCH_EX_NO_CUDA_EXT=1), not because it failed."""
-    cause = _RECORDED.get(ext_name)
-    return disabled_on_purpose() or (cause is not None and cause.deliberate)
 
 
 def _torch_version() -> tuple:
@@ -175,13 +134,10 @@ def classify(exc: Optional[BaseException], ext_name: str = "extension") -> Cause
                  log_path=_write_log(ext_name, msg) if msg else None)
 
 
-def record_build_failure(ext_name: str, exc: Optional[BaseException] = None, *, disabled: bool = False) -> Cause:
+def record_build_failure(ext_name: str, exc: Optional[BaseException] = None) -> Cause:
     """Called by an extension loader when it returns None. Classifies and stores the cause (no output here: the
-    banner fires where a cartridge actually falls back, so a deliberately unused extension stays silent)."""
-    if disabled:
-        cause = Cause("disabled", deliberate=True)
-    else:
-        cause = classify(exc, ext_name)
+    banner fires where a fused cartridge actually needs the extension)."""
+    cause = classify(exc, ext_name)
     cause.remedy = cause.remedy or CAUSES[cause.kind][1]
     _RECORDED[ext_name] = cause
     return cause
@@ -191,13 +147,13 @@ def recorded(ext_name: str) -> Optional[Cause]:
     return _RECORDED.get(ext_name)
 
 
-def banner(cartridge: str, ext_name: str, wanted: str, used: str, cause: Cause) -> str:
+def banner(cartridge: str, ext_name: str, cause: Cause) -> str:
     headline = CAUSES[cause.kind][0]
     lines = [
         "=" * 100,
-        "LUTORCH_EX: THE FAST CUDA PATH IS NOT AVAILABLE - REFUSING AN INVOLUNTARY FALLBACK TO A SLOW PATH",
+        "LUTORCH_EX: THE CUDA EXTENSION THIS FUSED CARTRIDGE RUNS ON IS NOT AVAILABLE",
         "=" * 100,
-        f"Cartridge : {cartridge} (backend '{wanted}' -> '{used}' because the CUDA extension is unavailable)",
+        f"Cartridge : {cartridge} (a fused class: it runs only on its CUDA kernels)",
         f"Extension : {ext_name}",
         f"Cause     : [{cause.kind}] {headline}",
         f"Remedy    : {cause.remedy or CAUSES[cause.kind][1]}",
@@ -208,49 +164,20 @@ def banner(cartridge: str, ext_name: str, wanted: str, used: str, cause: Cause) 
     if cause.log_path:
         lines.append(f"Build log : {cause.log_path}")
     lines += [
-        f"Cost      : {COST_TEXT}",
-        "Escape    : to run the slow fallback on purpose, set LUTORCH_EX_NO_CUDA_EXT=1 (disables every extension).",
+        "Without   : construct the reference class (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT), which needs no",
+        "            extension.",
         "=" * 100,
     ]
     return "\n".join(lines)
 
 
-def report_involuntary_fallback(cartridge: str, ext_name: str, wanted: str, used: str) -> None:
-    """A cartridge wanted the CUDA path for a CUDA input and cannot have it: raise NativeUnavailableError, unless the
-    cause is deliberate (LUTORCH_EX_NO_CUDA_EXT=1), which stays quiet. (With strict() patched off in tests: a log +
-    warning once per extension and cause.)"""
-    if is_deliberate(ext_name):
-        return
+def raise_unavailable(cartridge: str, ext_name: str) -> None:
+    """A fused cartridge needs ``ext_name`` and it is unavailable: raise NativeUnavailableError with the cause."""
     cause = _RECORDED.get(ext_name)
     if cause is None:          # the loader never recorded anything: say so rather than guess
-        cause = Cause("unclassified", "the extension loader did not record a cause",
-                      remedy=CAUSES["unclassified"][1])
-    text = banner(cartridge, ext_name, wanted, used, cause)
-    if strict():
-        raise NativeUnavailableError(text)
-    key = (ext_name, cause.kind)
-    if key in _WARNED:
-        return
-    _WARNED.add(key)
-    log.error("\n%s", text)
-    warnings.warn("\n" + text, RuntimeWarning, stacklevel=3)
-
-
-def backend_of(module) -> str:
-    """The backend that actually ran in ``module``'s last forward, for labelling measurements. Raises ValueError when
-    it cannot be determined, so a harness never reports a timing of unknown provenance."""
-    if not hasattr(module, "_BACKENDS"):                 # a plain cartridge has exactly one implementation
-        return "pure (single implementation)"
-    used = getattr(module, "last_backend", None)
-    if used is not None:
-        return used
-    chosen = getattr(module, "backend", None)
-    if chosen not in (None, "auto"):                     # an explicit choice runs that backend (or raises)
-        return chosen
-    raise ValueError(f"cannot determine which backend {type(module).__name__} ran (backend='auto' and no "
-                     f"last_backend recorded); refusing to report the timing")
+        cause = Cause("unclassified", "the extension loader did not record a cause", remedy=CAUSES["unclassified"][1])
+    raise NativeUnavailableError(banner(cartridge, ext_name, cause))
 
 
 def _reset_for_tests() -> None:
     _RECORDED.clear()
-    _WARNED.clear()

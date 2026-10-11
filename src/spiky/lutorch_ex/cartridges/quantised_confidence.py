@@ -343,7 +343,6 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         self.table_dropout_rate = 0.0
         self._compiled = None
         self._compiled_train = None
-        self._compiled_addr = None
         dev = torch.device(device) if device is not None else None
         self.register_buffer("packed", tensors["packed"].to(dev) if dev else tensors["packed"])  # int8 [n_tables,K,d_out]
         names = ["anchor_a", "powers", "in_head", "out_head", "confidence_log_beta", "confidence_log_gamma",
@@ -359,12 +358,9 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     def decompress_scale(self) -> Optional[torch.Tensor]:
         return None   # the pow2 output scale is already folded (statically) into the stored decompress weight
 
-    def _supports_low_precision(self) -> bool:
-        return False
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference; fp32/fp64
-        # This class has no fp32 ``weights`` Parameter (int8 ``packed`` instead), so the base
-        # ManifestoLUT.forward low-precision guard (which reads ``self.weights.dtype``) cannot run on
+        # This class has no fp32 ``weights`` Parameter (int8 ``packed`` instead), so the reference
+        # forward's low-precision guard (ReferenceForward) (which reads ``self.weights.dtype``) cannot run on
         # it -- hence the override. We keep the bf16/fp16 rejection on the *input* dtype alone (int8
         # deploy inference is fp32/fp64 only), then mirror the base compile-on-CUDA path: eval is
         # always torch.compiled (built lazily per instance), so the int8 read is fused by inductor

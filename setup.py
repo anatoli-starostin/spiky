@@ -22,6 +22,6 @@ if __name__ == '__main__':
         ],
         package_data={"spiky.lutorch_ex.cartridges": ["csrc/*.cu", "csrc/*.cuh", "csrc/*.cpp", "csrc/*.h"]},
         # ninja is required by torch.utils.cpp_extension.load to JIT-build lutorch_ex's co-located
-        # CUDA extensions (lutorch_ex_lprojection / pow2_int8 / single_anchor / softsign).
+        # CUDA extensions (lutorch_ex_fused_manifesto / fused_confidence / pow2_int8).
         install_requires=['ninja'],
     )

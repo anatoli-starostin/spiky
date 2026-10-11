@@ -25,11 +25,12 @@ language-model sweep against a dense baseline, is the report
 `lutorch_ex` is part of the `spiky` package; follow the [repository README](../../../README.md)
 (`pip install -e .` from the repository root). The library itself is pure PyTorch and runs on CPU.
 
-On CUDA, some cartridges have native kernels that are compiled on first use with
-`torch.utils.cpp_extension`. This needs `nvcc` and `ninja`. On CPU every cartridge runs its pure-PyTorch
-path. On CUDA, a fused cartridge whose kernel cannot be built raises `NativeUnavailableError` naming the
-cause, rather than silently running a slower path; set `LUTORCH_EX_NO_CUDA_EXT=1` to run the pure-PyTorch
-paths on purpose (same mathematics, not bit-identical: summation order differs).
+The `Fused…` classes run on hand-written CUDA kernels, compiled on first use with
+`torch.utils.cpp_extension` (this needs `nvcc` and `ninja`). They have no fallback: a fused class whose
+extension cannot be built raises `NativeUnavailableError` naming the cause, and a case its kernels do not
+cover (a CPU input, an fp64 input, ...) raises naming the case. Construct the reference class
+(`ManifestoHardLUT`, `ManifestoSoftLUT`, `ConfidenceLUT`) for those: same mathematics and state_dict, plain
+PyTorch, runs anywhere.
 
 ## Quickstart
 
@@ -184,16 +185,16 @@ only int32 and int64, so int16 and int8 are rejected.
 
 - **The rule:** `index_dtype=None` (the default) uses int32 when `n_groups·tph·2^nap − 1` fits it and int64
   otherwise. An explicit `torch.int32` that doesn't fit raises; an explicit `torch.int64` is always accepted.
-- **Only storage narrows.** Offset arithmetic (inside the native kernels too), the bit-powers buffer and bag
-  offsets stay int64, and the state_dict is unchanged.
+- **Only storage narrows.** Offset arithmetic, the bit-powers buffer and bag offsets stay int64, and the
+  state_dict is unchanged.
 - **Large eval calls widen automatically:** in auto mode, a call whose read could exceed 2^31 − 1 index
   entries uses int64, because PyTorch's CUDA `embedding_bag` forward fails above that with int32.
 
 What int32 gives you:
 - It halves the stored index tensors, including those saved for the backward.
 - It narrows the radix-sort keys in `embedding_bag`'s weight gradient.
-- The fused twins' native CUDA kernels read int32 directly (they template on the index type) and create no
-  int64 copy. Their host functions reject any other index dtype.
+- The fused classes' kernels do not read the stored indices at all: they recompute the addressing from the
+  input (int16 anchors).
 - Training gradients are bit-identical to int64 under `torch.use_deterministic_algorithms(True)`.
 
 Manifesto (`ManifestoHardLUT`, `ManifestoSoftLUT` and their fused twins):
@@ -254,36 +255,35 @@ This is a known upstream constraint. lutorch_ex documents it but doesn't enforce
   tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
   (~10× and ~5× headroom).
 - **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
-  ConfidenceLUT's eager read (CPU, `LUTORCH_EX_NO_COMPILE=1`), QuantisedConfidenceLUT, the Manifesto references' train reads, and the
-  fused twins' `tier1` reads.
+  ConfidenceLUT's eager read (CPU, `LUTORCH_EX_NO_COMPILE=1`), QuantisedConfidenceLUT and the Manifesto
+  references' train reads.
 - **Not exposed:** ConfidenceLUT's compiled read (its table gradient is an `index_add_`; verified correct on the
-  compiled n=2 path past the cliff, to 819M entries where memory ran out first), the native backends,
-  `FusedHardSTE`, and every eval / `no_grad` path.
+  compiled n=2 path past the cliff, to 819M entries where memory ran out first), the fused classes'
+  kernels, and every eval / `no_grad` path.
 - **Workaround:** reduce the micro-batch size and raise gradient accumulation.
 
 ## Reference and fused cartridges
 
-The plain cartridges, `ManifestoHardLUT` and `ManifestoSoftLUT` (either weight),
-are readable PyTorch. They are the **oracle**: `tests/test_fused_equivalence.py` and
-`tests/test_fused_manifesto_softsign.py` check that the fused twins give the same values and gradients.
+Each class has exactly one implementation; there is no `backend=` argument (ARCHITECTURE.md, rules 3 and 5).
+The reference cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT` (either weight) and `ConfidenceLUT`, are
+readable PyTorch (compiled on CUDA) and run anywhere. They are the **oracle**: `tests/test_fused_equivalence.py`,
+`tests/test_fused_manifesto_softsign.py`, `tests/test_fused_manifesto_cuda.py` and `tests/test_fused_confidence.py`
+check that the fused twins give the same values and gradients.
 
-The `Fused…` twins have identical mathematics but pick the fastest available implementation for each
-call on their own: an `F.embedding_bag` read that runs anywhere, or, on CUDA, the native
-`lutorch_ex_lprojection` kernels when they are available.
-
-`FusedManifestoHardLUT` and `FusedManifestoSoftLUT` also have a `backend="cuda"`: one hand-written
-forward and one backward kernel (`cartridges/csrc/fused_manifesto.cu`, the `lutorch_ex_fused_manifesto`
-extension), built like `FusedConfidenceLUT`'s. The kernels do the addressing, the read summed over each
-head's tables, the table-gradient scatter (fp32 vector atomics) and the margin gradient. Nothing per
-table goes through global memory, and the backward recomputes the addressing from the input. `auto` picks
-it for every CUDA step, training and eval, with an fp32 or bf16 table, nap ≤ 16, d_in ≤ 32767 and a d_out
-one CTA can cover; other cases take the earlier backends.
+`FusedManifestoHardLUT` and `FusedManifestoSoftLUT` run one hand-written forward and one backward kernel
+(`cartridges/csrc/fused_manifesto.cu`, the `lutorch_ex_fused_manifesto` extension). The kernels do the
+addressing, the read summed over each head's tables, the table-gradient scatter (fp32 vector atomics) and the
+margin gradient. Nothing per table goes through global memory, and the backward recomputes the addressing from
+the input. They cover a CUDA input with an fp32 or bf16 table, nap ≤ 16, d_in ≤ 32767 and a d_out one CTA can
+cover; anything else raises, naming the case and the reference class.
 Launch knobs: `knobs=ManifestoCudaKnobs(...)` (from `cartridges._fused_manifesto_cuda`) or the
 `LUTORCH_EX_MANI_CUDA_*` variables. The table
 gradient is accumulated with atomics, so it is not bit-reproducible run to run (the forward is).
 
-The Gen-3 `ConfidenceLUT` has the hand-written twin `FusedConfidenceLUT` (`cartridges/fused_confidence.py`);
-`QuantisedConfidenceLUT` has none (its compiled `embedding_bag` read is its fast path).
+The Gen-3 `ConfidenceLUT` has the hand-written twin `FusedConfidenceLUT` (`cartridges/fused_confidence.py`,
+the `lutorch_ex_fused_confidence` extension), with the same coverage and errors; neither inherits the other's
+forward (both build on `ConfidenceBase`). `QuantisedConfidenceLUT` has no twin (its compiled `embedding_bag`
+read is its fast path).
 
 **Precision.** The plain cartridges, `ConfidenceLUT` and `QuantisedConfidenceLUT` run in fp32 or fp64,
 and raise a `TypeError` on bf16/fp16. The three fused classes (`FusedManifestoHardLUT`, `FusedManifestoSoftLUT`,
@@ -293,21 +293,19 @@ once.
 
 **Compilation and kernels.**
 
-- Through the base forward, eval is `torch.compile`d on CUDA, and training too for Gen-3; CPU always runs
-  eager. The hand-written `cuda` backends (`FusedManifesto*`, `FusedConfidenceLUT`) bypass compile: they call
-  their kernels directly.
-- Native extensions are built lazily, on first use. The build is cached in `TORCH_EXTENSIONS_DIR`, which
+- The reference cartridges' forward (`cartridges/reference_base.py`) is `torch.compile`d on CUDA in eval,
+  and in training too for Gen-3; CPU always runs eager. The fused classes bypass compile: they call their
+  kernels directly.
+- CUDA extensions are built lazily, on first use. The build is cached in `TORCH_EXTENSIONS_DIR`, which
   defaults to `~/.cache/torch_extensions_lutorch_ex`.
-- A fused cartridge that wants its kernel for a CUDA input, for a case the kernel covers, and cannot have it
-  raises `NativeUnavailableError` with the classified cause (setuptools / ninja / toolkit missing, a compile
-  error, ...). Explicit backends, CPU inputs and shapes or dtypes the kernels do not cover are deliberate and
-  stay quiet. With `LUTORCH_EX_NO_CUDA_EXT=1` every fused cartridge runs its pure-PyTorch path: the same
-  mathematics, equal to fp32 re-association (not bit-identical).
+- A fused class whose extension cannot be built raises `NativeUnavailableError` with the classified cause
+  (setuptools / ninja / toolkit missing, a compile error, ...), every call. A case its kernels do not cover
+  raises a `RuntimeError` naming the case and the reference class.
 
 | environment variable | effect |
 | --- | --- |
 | `LUTORCH_EX_NO_COMPILE=1` | disable `torch.compile` everywhere |
-| `LUTORCH_EX_NO_CUDA_EXT=1` | skip every native extension (`lprojection`, single-anchor, soft-sign surrogate, `fused_manifesto`, `fused_confidence` and the int8 read); the fused cartridges then run their pure-PyTorch paths on purpose |
+| `LUTORCH_EX_NO_CUDA_EXT=1` | skip the int8 read extension (`QuantisedConfidenceLUT` / Deployed then use their torch read); it does not affect the fused classes, which have no fallback |
 | `SPIKY_P2_CUDA_DISABLE=1` | deprecated alias, still honoured: skips the int8 read extension only |
 
 ## The wrapper: `ProjectionMHL`
@@ -524,10 +522,12 @@ lutorch_ex/
 │   ├── quantised_confidence.py      QuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
 │   ├── _pow2.py, _pow2_int8.py      power-of-two quantisation maths and its CUDA read
 │   ├── fused_confidence.py          FusedConfidenceLUT (glue for csrc/fused_confidence.cu)
-│   ├── _fused_ops.py, _native_ops.py, _native_softsign.py   tier-1 ops and native-extension glue
-│   ├── _fused_manifesto_cuda.py     the FusedManifesto* 'cuda' backend (glue for csrc/fused_manifesto.cu)
+│   ├── reference_base.py            ReferenceForward: the reference classes' (compiled) forward
+│   ├── confidence_base.py           ConfidenceBase: ConfidenceLUT / FusedConfidenceLUT parameters and scaffolding
+│   ├── _fused_ops.py                the reference reads (embedding_bag)
+│   ├── _fused_manifesto_cuda.py     FusedManifesto* glue for csrc/fused_manifesto.cu
 │   ├── _cuda_ext.py                 the JIT build of every extension, the kernel launch knobs and launch fit
-│   ├── _fallback.py                 classified "fast path unavailable" errors (NativeUnavailableError), provenance
+│   ├── _fallback.py                 classified "extension unavailable" errors (NativeUnavailableError)
 │   ├── uncertainty.py               rational_uncertainty
 │   └── csrc/                        CUDA / C++ kernel sources
 └── tests/               pytest suite

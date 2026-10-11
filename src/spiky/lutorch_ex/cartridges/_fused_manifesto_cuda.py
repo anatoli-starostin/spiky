@@ -1,14 +1,14 @@
-"""The 'cuda' backend of FusedManifestoHardLUT / FusedManifestoSoftLUT: hand-written forward + backward kernels
-(``csrc/fused_manifesto.cu``), built the way FusedConfidenceLUT's are.
+"""The CUDA implementation of FusedManifestoHardLUT / FusedManifestoSoftLUT, their only one (spec rule 3): hand-written
+forward + backward kernels (``csrc/fused_manifesto.cu``), built the way FusedConfidenceLUT's are. A case the kernels do
+not cover, or a missing extension, raises; the reference classes (ManifestoHardLUT / ManifestoSoftLUT) cover the rest.
 
 One forward and one backward kernel per step run the whole cartridge: addressing (margins, MSB-first address,
 least-confident bit, neighbour), the neighbour weight w (``weight="rational"``: 0.5 / (1 + |u*|); ``"softsign"``: the
 learned-temperature sigmoid, the two temperatures passed in as a device tensor), the (weighted) read summed over the
 group's tables, and on the backward the weight-gradient scatter (vector fp32 atomics), the j*-pair margin gradient into
 z and, for ``softsign``, the two temperatures' gradients (summed per CTA, then one atomic add each).
-Nothing per table goes through global memory; the backward recomputes the addressing from z. Compared with the
-'native' (lprojection) backend this removes the ``[B, G*tph, d_out]`` expanded gradient, the materialised addressing
-tensors, the per-element scalar atomics and most of the launches.
+Nothing per table goes through global memory (no ``[B, G*tph, d_out]`` expanded gradient, no materialised addressing
+tensors); the backward recomputes the addressing from z.
 
 Hard and Soft share the kernels and differ only in the read weights (see the .cu header for the math):
   HARD  value  m W[c]                 table grad on c only        (straight-through: the input / temperature
@@ -35,7 +35,7 @@ _TRIED = False
 
 def fused_manifesto_ext():
     """Build/load the ``lutorch_ex_fused_manifesto`` JIT extension; None if unavailable (never raises; the cause is
-    recorded for the fallback error)."""
+    recorded for the error the cartridge raises)."""
     global _EXT, _TRIED
     if _TRIED:
         return _EXT
@@ -44,8 +44,8 @@ def fused_manifesto_ext():
     return _EXT
 
 
-#: The one remedy every ineligibility message gives (the case is fine on the other backends).
-REMEDY = "Use backend='auto' to run on a supported path."
+#: The one remedy every ineligibility message gives (the case is fine on the reference class).
+REMEDY = "Construct the reference class (ManifestoHardLUT / ManifestoSoftLUT) for this case."
 
 
 def _dt(dtype) -> str:
@@ -53,8 +53,7 @@ def _dt(dtype) -> str:
 
 
 def _ineligible(module, x: torch.Tensor):
-    """``(what, internals)`` when this input / configuration is NOT a case the kernels cover, else None. These are
-    deliberate fallbacks (there is no kernel for that case), not a broken fast path."""
+    """``(what, internals)`` when this input / configuration is NOT a case the kernels cover, else None."""
     if not x.is_cuda:
         if not torch.cuda.is_available():
             return "This machine has no CUDA device, which the fused kernel needs.", "torch.cuda.is_available() is False"
@@ -88,46 +87,14 @@ def ineligible_reason(module, x: torch.Tensor):
     return None if r is None else f"{r[0]} {REMEDY} ({r[1]})"
 
 
-def shape_ok(module, x: torch.Tensor) -> bool:
-    """Everything the kernels need EXCEPT the extension itself (see ineligible_reason)."""
-    return ineligible_reason(module, x) is None
-
-
-def cuda_ok(module, x: torch.Tensor) -> bool:
-    return shape_ok(module, x) and fused_manifesto_ext() is not None
-
-
-def auto_wants_cuda(module, x: torch.Tensor, next_backend: str) -> bool:
-    """'auto' (train and eval): True when the 'cuda' backend can run for this input. Otherwise the three reasons are
-    kept apart:
-    - the extension is missing / failed to build for a case the kernels cover: NativeUnavailableError naming the
-      classified cause (unless disabled on purpose, LUTORCH_EX_NO_CUDA_EXT=1: then quietly ``next_backend``);
-    - not a case the kernels cover (CPU input, fp64, fp16 table, nap > 16, ...): ``next_backend``, a debug log line;
-    - no CUDA device on this machine: ``next_backend``, a debug log line."""
-    r = _ineligible(module, x)
-    if r is None:
-        if fused_manifesto_ext() is not None:
-            return True
-        _fallback.report_involuntary_fallback(type(module).__name__, EXT_NAME, "auto", next_backend)
-        return False
-    # 'auto' already IS the remedy, so the debug line carries what and why, without the remedy sentence.
-    _fallback.log.debug("%s: auto -> %s instead of 'cuda'. %s (%s)", type(module).__name__, next_backend, r[0], r[1])
-    return False
-
-
 def require_cuda(module, x: torch.Tensor) -> None:
-    """backend='cuda' was requested explicitly: raise (with the classified cause when only the extension is missing)
-    rather than silently run something else."""
+    """Raise unless the kernels can run this input: a RuntimeError naming the unsupported case, or the classified
+    NativeUnavailableError when the case is supported but the extension is not available."""
     reason = ineligible_reason(module, x)
-    if reason is None and fused_manifesto_ext() is not None:
-        return
-    name = type(module).__name__
-    if reason is None:
-        cause = _fallback.recorded(EXT_NAME) or _fallback.Cause(
-            "unclassified", "the extension loader did not record a cause", remedy=_fallback.CAUSES["unclassified"][1])
-        raise _fallback.NativeUnavailableError(
-            _fallback.banner(name, EXT_NAME, "cuda", "(none: explicit request)", cause))
-    raise RuntimeError(f"{name}(backend='cuda'): {reason}")
+    if reason is not None:
+        raise RuntimeError(f"{type(module).__name__}: {reason}")
+    if fused_manifesto_ext() is None:
+        _fallback.raise_unavailable(type(module).__name__, EXT_NAME)
 
 
 class _FusedManifesto(torch.autograd.Function):
@@ -160,9 +127,9 @@ class _FusedManifesto(torch.autograd.Function):
                 None, None, None, None, None, None, None, None)
 
 
-def init_cuda_backend(module, knobs) -> None:
-    """Per-instance setup for the 'cuda' backend: launch knobs and int16 copies of the anchors (non-persistent buffers:
-    they follow ``.to()`` / ``.cuda()`` and stay out of the state_dict; the int64 buffers remain the source of truth)."""
+def init_cuda(module, knobs) -> None:
+    """Per-instance setup: launch knobs and int16 copies of the anchors (non-persistent buffers: they follow ``.to()`` /
+    ``.cuda()`` and stay out of the state_dict; the int64 buffers remain the source of truth)."""
     module.knobs = knobs if knobs is not None else ManifestoCudaKnobs()
     if module.spec.d_in <= torch.iinfo(torch.int16).max:
         module.register_buffer("_anc_a16", module.anchor_a.to(torch.int16).contiguous(), persistent=False)
@@ -173,16 +140,18 @@ def init_cuda_backend(module, knobs) -> None:
 
 
 def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
-    """The 'cuda' backend: ``[B, h_in, d_in]`` -> ``[B, h_out, d_out]`` in the input dtype."""
+    """The fused forward: ``[B, h_in, d_in]`` -> ``[B, h_out, d_out]`` in the input dtype. Raises on a case the kernels
+    do not cover or a missing extension (:func:`require_cuda`)."""
     module._check_input(x)
+    require_cuda(module, x)
     # Group g reads input head g % h_in. When h_in == n_groups that map is the identity, so x already IS the per-group
     # input: skip the gather (eager it is a full extra pass + intermediate, which the compiled path used to fuse away).
     zin = x if module.spec.h_in == module.spec.n_groups else x[:, module.in_head, :]
     # A bf16 input goes to the kernels as is: they upconvert it while staging each row (fp32 addressing, no fp32 copy of
     # the input in global memory). fp16 / fp64 are cast to fp32 here as before.
     z = (zin if zin.dtype in (torch.float32, torch.bfloat16) else zin.float()).contiguous()
-    # Table dropout: the cartridge's own mask (one source of truth with the other backends: same draw, and an
-    # overridden _table_dropout_mask is honoured), fp32, applied per table to the value and every gradient.
+    # Table dropout: the cartridge's own mask (one source of truth with the reference classes: same draw,
+    # and an overridden _table_dropout_mask is honoured), fp32, applied per table to the value and every gradient.
     mask = module._table_dropout_mask(x.shape[0], x.device, torch.float32)
     mask = None if mask is None else mask.contiguous()
     # Routing gate: the kernel may store bf16 directly only when _route is the identity (h_out == n_groups: per-head and

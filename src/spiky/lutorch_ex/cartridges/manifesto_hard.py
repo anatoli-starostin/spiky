@@ -30,7 +30,7 @@ Gradient asymmetry (by design).
 
 Read path: in training, ``F.embedding_bag`` (the per-table gather and the tph sum in one kernel) for the hard value,
 plus the two cells' difference, detached, for the surrogate; backward is plain autograd through ``w``. torch.compile
-wraps the eval read on CUDA only (inherited). fp32/fp64 only: the base ``forward`` raises on bf16/fp16 (low precision
+wraps the eval read on CUDA only (ReferenceForward). fp32/fp64 only: the forward raises on bf16/fp16 (low precision
 is the fused cartridges' feature).
 """
 from __future__ import annotations
@@ -39,9 +39,10 @@ import torch
 
 from ._fused_ops import fused_hard_read
 from .manifesto_base import ManifestoLUT
+from .reference_base import ReferenceForward
 
 
-class ManifestoHardLUT(ManifestoLUT):
+class ManifestoHardLUT(ReferenceForward, ManifestoLUT):
     """Hard Manifesto reference cartridge; see module docstring for the math."""
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:

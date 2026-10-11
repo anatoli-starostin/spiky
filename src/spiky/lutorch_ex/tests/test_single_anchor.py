@@ -19,6 +19,7 @@ from spiky.lutorch_ex import (
     ProjectionMHL,
 )
 from spiky.lutorch_ex.addressing import msb_first_powers
+from spiky.lutorch_ex.tests._requires_extension import needs_manifesto_ext, requires_extension  # noqa: F401
 
 ALL_CARTRIDGES = [ManifestoHardLUT, ManifestoSoftLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT]
 PURE_FUSED = [(ManifestoHardLUT, FusedManifestoHardLUT), (ManifestoSoftLUT, FusedManifestoSoftLUT)]
@@ -78,10 +79,14 @@ def test_addressing_is_single_coordinate_vs_zero():
 @pytest.mark.parametrize("Cls", ALL_CARTRIDGES)
 @pytest.mark.parametrize("h_in,h_out", PATTERNS)
 def test_every_cartridge_single_forward_eval_grad(Cls, h_in, h_out):
+    dev = "cpu"
+    if Cls.__name__.startswith("Fused"):          # the fused classes run only on their CUDA kernels
+        requires_extension("manifesto")
+        dev = "cuda"
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=4, nap=3, d_in=6, d_out=5, anchor_mode="single")
-    m = Cls(spec, seed=0, weight_init_std=1.0)
+    m = Cls(spec, seed=0, weight_init_std=1.0).to(dev)
     torch.manual_seed(3)
-    x = torch.randn(32, h_in, 6, requires_grad=True)
+    x = torch.randn(32, h_in, 6, device=dev, requires_grad=True)
     m.train()
     y = m(x)
     assert y.shape == (32, h_out, 5)
@@ -95,23 +100,22 @@ def test_every_cartridge_single_forward_eval_grad(Cls, h_in, h_out):
 
 @pytest.mark.parametrize("PureCls,FusedCls", PURE_FUSED)
 @pytest.mark.parametrize("h_in,h_out", PATTERNS)
-@pytest.mark.parametrize("backend", ["auto", "tier1"])
-def test_single_fused_equals_pure_f64(PureCls, FusedCls, h_in, h_out, backend):
-    """Fused single-mode cartridges are bit-exact (fp64) against the pure oracle."""
+def test_single_fused_equals_reference_f32(PureCls, FusedCls, h_in, h_out, needs_manifesto_ext):
+    """Fused single-mode cartridges (CUDA fp32) match the reference class to fp32 summation-order differences."""
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=4, nap=4, d_in=9, d_out=6, anchor_mode="single")
-    pure = PureCls(spec, seed=0, weight_init_std=1.0).double()
-    fused = FusedCls(spec, seed=0, weight_init_std=1.0, backend=backend).double()
+    pure = PureCls(spec, seed=0, weight_init_std=1.0).cuda()
+    fused = FusedCls(spec, seed=0, weight_init_std=1.0).cuda()
     pure.train(); fused.train()
     torch.manual_seed(5)
-    x = torch.randn(64, h_in, 9, dtype=torch.float64)
+    x = torch.randn(64, h_in, 9, device="cuda")
     xp = x.clone().requires_grad_(True); xf = x.clone().requires_grad_(True)
     yp, yf = pure(xp), fused(xf)
-    assert torch.allclose(yp, yf, atol=1e-10)
+    assert torch.allclose(yp, yf, atol=1e-5, rtol=1e-4)
     go = torch.randn_like(yp)
     gxp, gwp = torch.autograd.grad(yp, (xp, pure.weights), go, retain_graph=True)
     gxf, gwf = torch.autograd.grad(yf, (xf, fused.weights), go)
-    assert torch.allclose(gxp, gxf, atol=1e-9)
-    assert torch.allclose(gwp, gwf, atol=1e-9)
+    assert torch.allclose(gxp, gxf, atol=1e-5, rtol=1e-4)
+    assert torch.allclose(gwp, gwf, atol=1e-5, rtol=1e-4)
 
 
 def test_projection_mhl_wraps_single_cartridge_and_trains():

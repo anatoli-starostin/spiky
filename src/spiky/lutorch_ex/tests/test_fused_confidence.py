@@ -4,19 +4,17 @@ import pytest
 import torch
 
 from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs, fused_confidence_ext
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs
 from spiky.lutorch_ex.lut_spec import LUTSpec
+from spiky.lutorch_ex.tests._requires_extension import requires_extension
 
-from spiky.lutorch_ex.cartridges.fused_confidence import EXT_NAME
-from spiky.lutorch_ex.tests._native_required import require_extension
-
-# No CUDA device: skip. A CUDA device without the extension: fail (skip if disabled on purpose).
+# No CUDA device: skip. A CUDA device without the extension: fail (tests/_requires_extension.py).
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 
 
 @pytest.fixture(autouse=True)
 def _needs_fused_confidence_ext():
-    require_extension(fused_confidence_ext() is not None, EXT_NAME)
+    requires_extension("confidence")
 
 
 def _pair(n, anchor_mode="pairs", rate=0.0, h_in=4, h_out=4, tph=16, nap=6, d=24, knobs=None):
@@ -102,16 +100,18 @@ def test_fan_in_and_d24_geometry():
             _close(o["cuda"][2][k], o["ref"][2][k], f"d24 n={n} grad {k}")
 
 
-def test_falls_back_off_cuda_fp32():
+def test_no_fallback_off_cuda():
+    """No fallback (spec rule 3): a CPU input and an fp64 input raise, naming the case and the reference class."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
-    cud = FusedConfidenceLUT(spec, seed=0).double()
-    ref = ConfidenceLUT(spec, seed=0).double()
-    x = torch.randn(5, 2, 8, dtype=torch.float64)
-    torch.testing.assert_close(cud.eval()(x), ref.eval()(x))
+    with pytest.raises(RuntimeError, match=r"the input is on cpu.*Construct ConfidenceLUT"):
+        FusedConfidenceLUT(spec, seed=0).eval()(torch.randn(5, 2, 8))
+    with pytest.raises(RuntimeError, match=r"input dtype torch.float64.*table dtype torch.float64"):
+        FusedConfidenceLUT(spec, seed=0).cuda().double().eval()(torch.randn(5, 2, 8, device="cuda",
+                                                                            dtype=torch.float64))
 
 
 # -- bf16 tables ------------------------------------------------------------------------------------------------------
-# bf16 keeps 8 significant bits, so its unit roundoff is u = 2**-8 (3.9e-3). On the 'cuda' path every intermediate is
+# bf16 keeps 8 significant bits, so its unit roundoff is u = 2**-8 (3.9e-3). In the kernels every intermediate is
 # fp32; only the leaves are rounded once to bf16: the output (bf16 input), grad x, grad W, grad beta / gamma / tau.
 # One rounding gives a rel-norm error of about u / sqrt(3) (uniform rounding error); BF16_TOL = 2u bounds it with
 # margin. FP32_TOL is the existing fp32 tolerance.
@@ -123,11 +123,19 @@ def _rel(a, b):
     return ((a.double() - b.double()).norm() / b.double().norm().clamp_min(1e-30)).item()
 
 
-def _model(n, dtype, anchor_mode="pairs", backend="auto", knobs=None, h=4, tph=16, nap=6, d=24, rate=0.0):
+def _model(n, dtype, anchor_mode="pairs", knobs=None, h=4, tph=16, nap=6, d=24, rate=0.0):
     spec = LUTSpec(h_in=h, h_out=h, tph=tph, nap=nap, d_in=d, d_out=d, anchor_mode=anchor_mode)
     m = FusedConfidenceLUT(spec, seed=3, read_top_n=n, table_dropout_rate=rate, weight_init_std=0.5, beta_init=1.7,
-                           gamma_init=0.8, read_tau_init=0.6, backend=backend, knobs=knobs)
+                           gamma_init=0.8, read_tau_init=0.6, knobs=knobs)
     return m.to(device="cuda", dtype=dtype).train()
+
+
+def _dense_bf16(cud, x, go):
+    """The dense answer for a bf16 cartridge: ConfidenceLUT in fp32 on the same bf16-stored parameters and bf16 input,
+    every result then rounded to bf16 once (what the kernels' leaves get)."""
+    ref = ConfidenceLUT(cud.spec, seed=3, read_top_n=cud.read_top_n, table_dropout_rate=0.0).cuda().train()
+    ref.load_state_dict({k: v.float() if v.is_floating_point() else v for k, v in cud.state_dict().items()})
+    return {k: v.to(torch.bfloat16) for k, v in _fwd_bwd(ref, x.float(), go.float()).items()}
 
 
 def _fwd_bwd(mod, x, go, eager_ref=False):
@@ -167,16 +175,14 @@ def test_accuracy_vs_fp64_per_dtype(dtype, n, anchor_mode):
 
 @pytest.mark.parametrize("n", [1, 2])
 def test_bf16_cuda_matches_dense_bf16(n):
-    """The CUDA bf16 path against the dense ConfidenceLUT path on the same bf16 table ('pure' backend: the
-    ConfidenceLUT math in fp32 on the bf16-stored parameters). Same storage, so the gap is accumulation order plus
-    the final bf16 rounding of the outputs -- it must not be larger than one bf16 rounding."""
+    """The kernels on a bf16 table against the dense ConfidenceLUT math in fp32 on the same bf16-stored parameters
+    (:func:`_dense_bf16`). Same storage, so the gap is accumulation order plus the final bf16 rounding of the outputs
+    -- it must not be larger than one bf16 rounding."""
     torch.manual_seed(0)
-    cud = _model(n, torch.bfloat16, backend="cuda")
-    dense = _model(n, torch.bfloat16, backend="pure")
-    dense.load_state_dict(cud.state_dict())
+    cud = _model(n, torch.bfloat16)
     x = torch.randn(96, 4, 24, device="cuda").to(torch.bfloat16)
     go = torch.randn(96, 4, 24, device="cuda").to(torch.bfloat16)
-    a, b = _fwd_bwd(cud, x, go), _fwd_bwd(dense, x, go)
+    a, b = _fwd_bwd(cud, x, go), _dense_bf16(cud, x, go)
     errs = {k: _rel(a[k], b[k]) for k in b}
     print(f"\n[bf16 cuda vs dense bf16, n={n}] rel-norm: " + "  ".join(f"{k}={e:.2e}" for k, e in errs.items()))
     for k, e in errs.items():
@@ -213,31 +219,12 @@ def test_grad_w_accumulates_in_fp32_under_heavy_row_collision(dtype):
 def test_bf16_vector_widths_agree(vec, n):
     """Every bf16 vector width (8 = one 16-byte load) gives the dense-bf16 result."""
     torch.manual_seed(0)
-    cud = _model(n, torch.bfloat16, backend="cuda", knobs=CudaKnobs(vec_bf16=vec, rows_per_cta=3))
-    dense = _model(n, torch.bfloat16, backend="pure")
-    dense.load_state_dict(cud.state_dict())
+    cud = _model(n, torch.bfloat16, knobs=CudaKnobs(vec_bf16=vec, rows_per_cta=3))
     x = torch.randn(50, 4, 24, device="cuda").to(torch.bfloat16)
     go = torch.randn(50, 4, 24, device="cuda").to(torch.bfloat16)
-    a, b = _fwd_bwd(cud, x, go), _fwd_bwd(dense, x, go)
+    a, b = _fwd_bwd(cud, x, go), _dense_bf16(cud, x, go)
     for k in b:
         assert _rel(a[k], b[k]) < BF16_TOL, f"vec {vec}: {k}"
-
-
-def test_backend_argument():
-    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
-    with pytest.raises(ValueError, match="backend='native' is not valid here"):
-        FusedConfidenceLUT(spec, backend="native")
-    with pytest.raises(RuntimeError, match="backend='cuda' needs a CUDA input"):
-        FusedConfidenceLUT(spec, backend="cuda")(torch.randn(3, 2, 8))                     # CPU input
-    # 'pure' and 'cuda' agree (fp32).
-    torch.manual_seed(0)
-    x = torch.randn(40, 4, 24, device="cuda")
-    go = torch.randn(40, 4, 24, device="cuda")
-    pure, cuda_ = _model(2, torch.float32, backend="pure"), _model(2, torch.float32, backend="cuda")
-    cuda_.load_state_dict(pure.state_dict())
-    a, b = _fwd_bwd(cuda_, x, go), _fwd_bwd(pure, x, go)
-    for k in b:
-        assert _rel(a[k], b[k]) < FP32_TOL, k
 
 
 def test_confidence_lut_error_names_fused_confidence():
@@ -257,7 +244,7 @@ def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
     h_in, h_out = pattern
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=16, nap=6, d_in=24, d_out=24, anchor_mode="pairs")
     m = FusedConfidenceLUT(spec, seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
-                           read_tau_init=0.6, backend="cuda").to(device="cuda", dtype=table)
+                           read_tau_init=0.6).to(device="cuda", dtype=table)
     torch.manual_seed(0)
     xb = torch.randn(70, h_in, 24, device="cuda").to(torch.bfloat16)
     go = torch.randn(70, h_out, 24, device="cuda").to(torch.bfloat16).float()   # same go for both runs
@@ -281,8 +268,8 @@ def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
 @pytest.mark.parametrize("n", [1, 2])
 def test_d_out_not_divisible_by_4_or_wider_than_256_runs_on_cuda(d_out, n, mode):
     """d_out 50 (not divisible by the vector width 4) and 260 / 300 (more than 64 threads x 4 per row) used to crash
-    'auto' at launch ("d_out must be divisible by vec" / "threads must be >= d_out / vec"). The launch is now fitted to
-    d_out exactly as for the Manifesto kernels, so they run on 'cuda' and agree with ConfidenceLUT."""
+    the kernels at launch ("d_out must be divisible by vec" / "threads must be >= d_out / vec"). The launch is now
+    fitted to d_out exactly as for the Manifesto kernels, so they run and agree with ConfidenceLUT."""
     spec = LUTSpec(h_in=2, h_out=2, tph=8, nap=4, d_in=12, d_out=d_out, anchor_mode="pairs")
     kw = dict(seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6)
     ref = ConfidenceLUT(spec, **kw).cuda()
@@ -295,23 +282,16 @@ def test_d_out_not_divisible_by_4_or_wider_than_256_runs_on_cuda(d_out, n, mode)
     if mode == "eval":
         with torch.no_grad():
             yc, yr = cud(x), ref._forward_impl(x)
-        assert cud.last_backend == "cuda"
         assert _rel(yc, yr) < FP32_TOL
         return
     a, b = _fwd_bwd(cud, x, go), _fwd_bwd(ref, x, go, eager_ref=True)
-    assert cud.last_backend == "cuda"
     for k in b:
         assert _rel(a[k], b[k]) < FP32_TOL, k
 
 
 def test_d_out_one_cta_cannot_cover_is_not_a_cuda_case():
-    """d_out 4100 needs 1056 threads per CTA at vec 4 (> 1024): 'auto' runs the ConfidenceLUT path quietly instead of
-    crashing, and an explicit backend='cuda' says why."""
+    """d_out 4100 needs 1056 threads per CTA at vec 4 (> 1024): it raises saying why, instead of crashing at launch."""
     spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=3, d_in=6, d_out=4100, anchor_mode="pairs")
     x = torch.randn(3, 1, 6, device="cuda")
-    m = FusedConfidenceLUT(spec, seed=0).cuda().eval()
-    with torch.no_grad():
-        m(x)
-    assert m.last_backend == "pure"
-    with pytest.raises(RuntimeError, match="d_out 4100"):
-        FusedConfidenceLUT(spec, seed=0, backend="cuda").cuda()(x)
+    with torch.no_grad(), pytest.raises(RuntimeError, match=r"d_out=4100 needs 1056 threads.*Construct ConfidenceLUT"):
+        FusedConfidenceLUT(spec, seed=0).cuda().eval()(x)

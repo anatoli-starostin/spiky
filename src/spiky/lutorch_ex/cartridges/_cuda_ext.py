@@ -1,11 +1,10 @@
 """Shared plumbing for the co-located CUDA extensions: where the sources live, the JIT build, and the launch knobs of the
-two hand-written kernel families (FusedManifesto* 'cuda' and FusedConfidenceLUT 'cuda').
+two hand-written kernel families (FusedManifesto* and FusedConfidenceLUT).
 
-* :func:`load_extension` is the one JIT build / load every lutorch_ex extension loader calls (lprojection, the
-  single-anchor input-grad, the soft-sign surrogate tail, fused_manifesto, fused_confidence; the p2 int8 extension has
-  its own architecture-gated loader in ``_pow2_int8``). It never raises. What it does when the extension is unavailable
-  is the loader's choice: ``on_failure="record"`` records a classified cause for the fallback error
-  (:mod:`._fallback`), ``on_failure="warn"`` warns once (extensions whose fallback is an eager body with the same result).
+* :func:`load_extension` is the one JIT build / load of the fused cartridges' extensions (fused_manifesto,
+  fused_confidence; the p2 int8 extension has its own architecture-gated loader in ``_pow2_int8``). It never raises:
+  when the extension is unavailable it records the classified cause (:mod:`._fallback`) and returns None, and the
+  fused cartridge that needs it raises with that cause.
 * :class:`KernelKnobs` is the launch configuration of the two kernel families. :class:`ManifestoCudaKnobs` and
   :class:`CudaKnobs` (FusedConfidenceLUT) are the same fields, defaulting from ``LUTORCH_EX_MANI_CUDA_*`` resp.
   ``LUTORCH_EX_CONF_CUDA_*``.
@@ -15,7 +14,6 @@ two hand-written kernel families (FusedManifesto* 'cuda' and FusedConfidenceLUT 
 from __future__ import annotations
 
 import os
-import warnings
 from dataclasses import dataclass
 from typing import ClassVar, Optional, Sequence
 
@@ -29,22 +27,10 @@ CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
 os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
 
 
-def load_extension(name: str, sources: Sequence[str], *, on_failure: str = "record",
-                   extra_ldflags: Optional[Sequence[str]] = None, warn_instead: str = ""):
-    """JIT-build / load extension ``name`` from ``sources`` (file names under ``csrc/``); the module, or None. Never
-    raises.
-
-    ``on_failure="record"``: ``LUTORCH_EX_NO_CUDA_EXT=1``, no CUDA device and a failed build each record a classified
-    cause for the fallback error. ``on_failure="warn"``: ``LUTORCH_EX_NO_CUDA_EXT=1`` returns None silently and a failed
-    build warns once, naming ``warn_instead`` (the eager body that gives the same result); these extensions are only
-    loaded for CUDA tensors.
-    """
-    record = on_failure == "record"
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        if record:
-            _fallback.record_build_failure(name, disabled=True)
-        return None
-    if record and not torch.cuda.is_available():
+def load_extension(name: str, sources: Sequence[str]):
+    """JIT-build / load extension ``name`` from ``sources`` (file names under ``csrc/``); the module, or None after
+    recording the classified cause (no CUDA device, or a failed build). Never raises."""
+    if not torch.cuda.is_available():
         _fallback.record_build_failure(name)
         return None
     try:
@@ -53,16 +39,10 @@ def load_extension(name: str, sources: Sequence[str], *, on_failure: str = "reco
         # the CUDA_HOME include paths and a compatible host compiler, and targets the visible device's architecture.
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
         flags = [f"-std={std}", "-O3"]
-        kw = {"extra_ldflags": list(extra_ldflags)} if extra_ldflags else {}
         return load(name=name, sources=[os.path.join(CSRC, s) for s in sources], extra_cflags=flags,
-                    extra_cuda_cflags=flags, verbose=False, **kw)
+                    extra_cuda_cflags=flags, verbose=False)
     except Exception as e:
-        if record:
-            # Classify WHY; the cartridge that would fall back because of it raises with the cause (_fallback).
-            _fallback.record_build_failure(name, e)
-        else:
-            warnings.warn(f"lutorch_ex: the {name.replace('lutorch_ex_', '')} CUDA extension could not be built/loaded; "
-                          f"using {warn_instead} instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=3)
+        _fallback.record_build_failure(name, e)
         return None
 
 
@@ -119,8 +99,8 @@ def _row_launch(knobs, d_out: int, table_dtype: torch.dtype):
 
 def _launch(knobs, d_out: int, table_dtype: torch.dtype):
     """The knobs, made legal for this d_out (see _row_launch): each thread count is raised to cover one table row. At
-    the default knobs nothing changes for a d_out divisible by 4 and at most 256 (e.g. the canonical 48). Eligibility
-    checks keep 'auto' away from a d_out that needs more than 1024 threads; an explicit request for one fails here."""
+    the default knobs nothing changes for a d_out divisible by 4 and at most 256 (e.g. the canonical 48). The fused
+    cartridges reject a d_out that needs more than 1024 threads before launching (with the reason)."""
     vec, need = _row_launch(knobs, d_out, table_dtype)
     if need > _MAX_CTA_THREADS:
         raise RuntimeError(f"d_out {d_out} needs {need} threads per CTA (> {_MAX_CTA_THREADS}) at vec {vec}")

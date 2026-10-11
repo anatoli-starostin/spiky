@@ -24,8 +24,8 @@ Gradients flow to the weight tables, ``β``, ``γ`` and (``n = 2``) ``τ``.
 
 Scope (locked): **scored-only** (no hard-forward mode / STE stitch / score rescale), **constant
 cells** only (``w_c ∈ R^{d_out}``), both anchor modes (inherited from the base). Precision:
-fp32/fp64 only — like the other pure cartridges it carries no mixed-precision handling, so the
-base ``forward`` raises ``TypeError`` on bf16/fp16.
+fp32/fp64 only — like the other reference cartridges it carries no mixed-precision handling, so its
+``forward`` raises ``TypeError`` on bf16/fp16.
 
 One read, for train and eval and both n: ``y = Σ_k w_k · W[r_k]`` over the flat table rows ``r`` and weights
 ``w`` from :meth:`_cells_and_weights` (``w = s`` at n = 1; ``s(1-v)`` and ``s v`` over ``c`` and ``c'`` at n = 2).
@@ -43,73 +43,23 @@ The two agree to fp32 re-association (≤ 7e-7), not bitwise. Backward is autogr
 """
 from __future__ import annotations
 
-import math
-
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from ._fused_ops import _global_cells
 from ._fused_read import fused_scored_read
-from .manifesto_base import ManifestoLUT
+from .confidence_base import ConfidenceBase
+from .reference_base import ReferenceForward
 
 
-class ConfidenceLUT(ManifestoLUT):
-    """Gen-3 confidence-scored cartridge; see module docstring.
-
-    Args (beyond the shared :class:`ManifestoLUT` ones):
-        read_top_n: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion).
-        beta_init / gamma_init: initial β, γ (stored log-parametrised; champion (β,γ)=(2,1)).
-        read_tau_init: initial τ for read_top_n=2 (champion 0.5).
-        read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer.
-        learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
-    """
+class ConfidenceLUT(ReferenceForward, ConfidenceBase):
+    """Gen-3 confidence-scored reference cartridge; see the module docstring. Arguments: those of
+    :class:`~spiky.lutorch_ex.cartridges.confidence_base.ConfidenceBase`."""
 
     # Compile the TRAIN forward too (not just eval): the score/blend read-out folds into a handful
-    # of fused kernels, cutting the training step and peak memory (see ManifestoLUT.forward). The
-    # whole _forward_impl is compiled, so the addressing is included -- _addresses is called
-    # directly (no separate compiled _addr) to avoid a nested compile.
+    # of fused kernels, cutting the training step and peak memory (see ReferenceForward). The
+    # whole _forward_impl is compiled, so the addressing is included.
     _COMPILE_TRAIN = True
-    _WEIGHTED = False            # scored cells: no neighbour-weight function (weight= / soft-sign temperatures)
-
-    def __init__(
-        self,
-        spec,
-        *,
-        read_top_n: int = 1,
-        beta_init: float = 2.0,
-        gamma_init: float = 1.0,
-        read_tau_init: float = 0.5,
-        read_tau_learnable: bool = True,
-        learnable_score: bool = True,
-        **kw,
-    ):
-        super().__init__(spec, **kw)
-        if read_top_n not in (1, 2):
-            raise ValueError(f"read_top_n must be 1 or 2, got {read_top_n}")
-        if not (beta_init > 0 and gamma_init > 0 and read_tau_init > 0):
-            raise ValueError(
-                f"beta_init, gamma_init, read_tau_init must be > 0, got "
-                f"({beta_init}, {gamma_init}, {read_tau_init})"
-            )
-        self.read_top_n = int(read_top_n)
-
-        # Learned margin-score temperatures, log-parametrised so β, γ stay positive.
-        lb, lg = math.log(float(beta_init)), math.log(float(gamma_init))
-        if learnable_score:
-            self.confidence_log_beta = nn.Parameter(torch.tensor(lb))
-            self.confidence_log_gamma = nn.Parameter(torch.tensor(lg))
-        else:
-            self.register_buffer("confidence_log_beta", torch.tensor(lb))
-            self.register_buffer("confidence_log_gamma", torch.tensor(lg))
-
-        # Two-cell blend temperature τ (only for read_top_n == 2).
-        if self.read_top_n == 2:
-            lt = math.log(float(read_tau_init))
-            if read_tau_learnable:
-                self.log_read_tau = nn.Parameter(torch.tensor(lt))
-            else:
-                self.register_buffer("log_read_tau", torch.tensor(lt))
 
     # -- the Gen-3-specific pieces: the confidence score and the blend weight ---------------
 

@@ -9,9 +9,9 @@ runs the full matrix (every cartridge and alternative, every geometry, fp32 and 
 Methodology:
 - Every cell is built with a fixed seed (``seed=1`` tables, ``torch.manual_seed(0)`` inputs). Eval forward runs in
   eval mode under ``no_grad``; train forward / backward / total run in train mode, ``y.backward(go)``.
-- Each class runs with its defaults (``backend='auto'``, default read options), i.e. what a user gets, marked ``*``.
-  Every implementation choice the class offers is also measured as its own row, so each default is checked against
-  its alternatives: the explicit backends of the fused classes. The backend that actually ran is recorded.
+- Each class runs with its defaults, i.e. what a user gets. A class has exactly one implementation: the fused classes
+  their CUDA kernels (a case those do not cover is an error cell), the reference classes plain PyTorch, compiled on
+  CUDA. The implementation is recorded per row.
 - Every cell runs in its own fresh Python process (``--no-isolate`` runs them all in this one).
 - Per mode, the first call (build / compile) and ``--warmup`` iterations are discarded. Then ``--repeats``
   iterations are timed one by one with CUDA events, with ``torch.cuda.synchronize()`` around each, and reported as
@@ -57,8 +57,8 @@ def _conf(cls, n, **kw):
     return lambda s: cls(s, seed=1, read_top_n=n, **kw)
 
 
-def _fused(cls, backend, **kw):
-    return lambda s: cls(s, seed=1, backend=backend, **kw)
+def _fused(cls, **kw):
+    return lambda s: cls(s, seed=1, **kw)
 
 
 #: (name, constructor, is the default). Every concrete cartridge class, read from the package (reference and fused),
@@ -68,26 +68,16 @@ def _fused(cls, backend, **kw):
 CARTRIDGES = [
     ("ManifestoHardLUT", lambda s: lx.ManifestoHardLUT(s, seed=1), True),
     ("ManifestoSoftLUT", lambda s: lx.ManifestoSoftLUT(s, seed=1), True),
-    ("FusedManifestoHardLUT", _fused(lx.FusedManifestoHardLUT, "auto"), True),
-    *[(f"FusedManifestoHardLUT backend={b}", _fused(lx.FusedManifestoHardLUT, b), False)
-      for b in ("native", "tier1", "pure_eval")],
-    ("FusedManifestoSoftLUT", _fused(lx.FusedManifestoSoftLUT, "auto"), True),
-    *[(f"FusedManifestoSoftLUT backend={b}", _fused(lx.FusedManifestoSoftLUT, b), False)
-      for b in ("native", "tier1", "pure")],
+    ("FusedManifestoHardLUT", _fused(lx.FusedManifestoHardLUT), True),
+    ("FusedManifestoSoftLUT", _fused(lx.FusedManifestoSoftLUT), True),
     ("ManifestoHardLUT weight=softsign", lambda s: lx.ManifestoHardLUT(s, seed=1, weight="softsign"), True),
     ("ManifestoSoftLUT weight=softsign", lambda s: lx.ManifestoSoftLUT(s, seed=1, weight="softsign"), True),
-    ("FusedManifestoHardLUT weight=softsign", _fused(lx.FusedManifestoHardLUT, "auto", weight="softsign"), True),
-    *[(f"FusedManifestoHardLUT weight=softsign backend={b}", _fused(lx.FusedManifestoHardLUT, b, weight="softsign"),
-       False) for b in ("native", "tier1", "pure_eval")],
-    ("FusedManifestoSoftLUT weight=softsign", _fused(lx.FusedManifestoSoftLUT, "auto", weight="softsign"), True),
-    *[(f"FusedManifestoSoftLUT weight=softsign backend={b}", _fused(lx.FusedManifestoSoftLUT, b, weight="softsign"),
-       False) for b in ("native", "tier1", "pure")],
+    ("FusedManifestoHardLUT weight=softsign", _fused(lx.FusedManifestoHardLUT, weight="softsign"), True),
+    ("FusedManifestoSoftLUT weight=softsign", _fused(lx.FusedManifestoSoftLUT, weight="softsign"), True),
     ("ConfidenceLUT n=1", _conf(lx.ConfidenceLUT, 1), True),
     ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2), True),
     ("FusedConfidenceLUT n=1", _conf(FusedConfidenceLUT, 1), True),
-    ("FusedConfidenceLUT n=1 backend=pure", _conf(FusedConfidenceLUT, 1, backend="pure"), False),
     ("FusedConfidenceLUT n=2", _conf(FusedConfidenceLUT, 2), True),
-    ("FusedConfidenceLUT n=2 backend=pure", _conf(FusedConfidenceLUT, 2, backend="pure"), False),
     ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2), True),
     ("DeployedQuantisedConfidenceLUT", None, True),      # built from QuantisedConfidenceLUT.to_deployment()
 ]
@@ -181,16 +171,8 @@ def _time_train(m, xx, go, warmup: int, repeats: int):
 
 
 def _backend(m, x) -> str:
-    """What ran: the fused cartridges that record it (last_backend); else an explicit backend; else the class's own
-    dispatch (_pick); else the class's single implementation."""
-    be = getattr(m, "last_backend", None)
-    if be:
-        return be
-    if getattr(m, "backend", None) not in (None, "auto"):  # an explicit backend runs as asked (or raises)
-        return m.backend
-    if hasattr(m, "_pick"):
-        return m._pick(x)
-    return "reference"
+    """The implementation: 'cuda' for a fused class (its kernels are its only implementation), else 'reference'."""
+    return "cuda" if type(m).__name__.startswith("Fused") else "reference"
 
 
 def _deployed(spec):

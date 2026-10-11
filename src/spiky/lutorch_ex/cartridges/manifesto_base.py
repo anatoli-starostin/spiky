@@ -101,33 +101,13 @@ _INT32_MAX_ENTRIES = torch.iinfo(torch.int32).max
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
 
-    Abstract: subclasses supply :meth:`_forward_impl`. ``weight`` selects the neighbour-weight function
-    (:meth:`_blend_w`); the temperature arguments exist only with ``weight="softsign"``.
-
-    Dtype contract: this base (the pure cartridges' path) carries **no mixed-precision
-    handling** — it reads, reduces, and routes in the weight/input dtype, and supports only
-    float32/float64. Handed bf16/fp16 params or inputs it **raises** (see :meth:`forward`)
-    rather than run lossy low-precision math. Low precision (fp32 addressing + fp32-accumulated
-    reads) is a fused-cartridge feature
-    (:class:`~spiky.lutorch_ex.cartridges.fused_manifesto_hard.FusedManifestoHardLUT` /
-    :class:`~spiky.lutorch_ex.cartridges.fused_manifesto_soft.FusedManifestoSoftLUT`), which
-    override :meth:`_supports_low_precision`.
+    Scaffolding only (spec amendment A / B): state (tables, anchors, the soft-sign temperatures), validation, the
+    addressing and the neighbour weight (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
+    runnable forward: a reference class gets its forward from
+    :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so a
+    fused class has nothing to fall back to. ``weight`` selects the neighbour-weight function; the temperature arguments
+    exist only with ``weight="softsign"``.
     """
-
-    # Whether to torch.compile the TRAIN forward too (not just eval). Default False: for the
-    # Gen-1/Gen-2 cartridges the train step is memory-bound and eager is fastest. The Gen-3
-    # confidence cartridges set this True -- their score/blend read-out fans out into ~10 tiny
-    # elementwise kernels (abs/logsigmoid/exp/sum/sigmoid/gather/cat/psw) that inductor folds into
-    # 1-2 fused kernels, cutting the train step AND its peak memory substantially. Dynamo captures
-    # each Gen-3 train forward as one graph with no graph break; embedding_bag stays in that graph
-    # but runs as its own ATen kernel (an inductor fallback), so fusion stops at it on both sides.
-    # CUDA-only; see :meth:`forward`.
-    _COMPILE_TRAIN: bool = False
-    # `dynamic=` for the TRAIN compile. True (default) traces one shape-agnostic graph (no recompiles
-    # across batch sizes). A cartridge whose hot train path fuses better when specialised can set
-    # None (torch.compile's auto: specialise on the first shape) -- that produces a cheaper fused
-    # backward for the quant monolith. Only consulted when _COMPILE_TRAIN.
-    _COMPILE_TRAIN_DYNAMIC = True
     # Whether the cartridge has the neighbour-weight function (weight=, the soft-sign temperatures). False for the
     # confidence family, which scores its cells instead.
     _WEIGHTED: bool = True
@@ -221,11 +201,9 @@ class ManifestoLUT(MultiHeadLUT):
                 self.register_buffer("log_soft_score_temp", torch.tensor(ls))
                 self.register_buffer("log_select_temp", torch.tensor(lx))
 
-        # Lazily-built torch.compile of the forward, used only on CUDA (see forward()).
+        # The reference forward's lazily-built torch.compile objects (ReferenceForward; unused by the fused classes).
         self._compiled = None          # eval forward
-        self._compiled_train = None    # train forward (only when _COMPILE_TRAIN; Gen-3)
-        # Lazily-built torch.compile of the addressing, for the native TRAIN path (see _addr()).
-        self._compiled_addr = None
+        self._compiled_train = None    # train forward (only when _COMPILE_TRAIN)
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
@@ -262,7 +240,7 @@ class ManifestoLUT(MultiHeadLUT):
 
     def _softsign_temps(self, dtype):
         """``(T_soft, T_select)`` in ``dtype``, differentiable wrt the log-parametrised leaves (``weight="softsign"``):
-        for the native and 'cuda' backward Functions, which own the temperatures' gradient."""
+        for the fused CUDA backward, which owns the temperatures' gradient."""
         return self.log_soft_score_temp.to(dtype).exp(), self.log_select_temp.to(dtype).exp()
 
     def _star(self, z, u, j_star):
@@ -291,11 +269,6 @@ class ManifestoLUT(MultiHeadLUT):
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover - abstract
         """``[B, h_in, d_in]`` -> ``[B, h_out, d_out]``: the cartridge's read (compiled on CUDA by :meth:`forward`)."""
         raise NotImplementedError
-
-    def _supports_low_precision(self) -> bool:
-        """Whether this cartridge supports bf16/fp16 params/inputs. False on the pure base
-        (see the class docstring); the fused cartridges override it to True."""
-        return False
 
     # -- shared regularisation / dropout (all cartridges inherit) ----------------------------
 
@@ -339,49 +312,9 @@ class ManifestoLUT(MultiHeadLUT):
         return (torch.rand(B, G, tph, device=device, dtype=dtype) < keep_prob).to(dtype) / keep_prob
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Low precision (bf16/fp16) is a fused-cartridge feature; the pure cartridges reject it
-        # with a clear error rather than silently running lossy bf16 math.
-        if not self._supports_low_precision() and (
-            x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
-        ):
-            raise TypeError(
-                f"{type(self).__name__} does not support low precision: got input dtype "
-                f"{x.dtype} and weight dtype {self.weights.dtype}. bf16/fp16 is supported only by "
-                "the fused cartridges (FusedManifestoHardLUT / FusedManifestoSoftLUT / FusedConfidenceLUT); keep this "
-                "cartridge (and ProjectionMHL wrapping it) in float32/float64."
-            )
-        # Compile the forward on CUDA (built lazily on first such call, per instance). EVAL is
-        # always compiled. TRAIN is compiled only for cartridges that opt in via _COMPILE_TRAIN
-        # (the Gen-3 confidence line): there the score/blend read-out is a long chain of tiny
-        # elementwise kernels that inductor fuses, cutting both the train step and its peak memory.
-        # For the Gen-1/Gen-2 cartridges (_COMPILE_TRAIN False) the train step is memory-bound and
-        # eager is fastest, so training stays eager. CPU is always plain eager (keeps CPU tests
-        # eager / bit-identical). Eval and train use separate compiled objects (each traces its own
-        # branch of _forward_impl).
-        if _COMPILE_ENABLED and x.is_cuda:
-            if not self.training:
-                if self._compiled is None:
-                    self._compiled = torch.compile(self._forward_impl, dynamic=True)
-                return self._compiled(x)
-            if self._COMPILE_TRAIN:
-                if self._compiled_train is None:
-                    self._compiled_train = torch.compile(self._forward_impl,
-                                                         dynamic=self._COMPILE_TRAIN_DYNAMIC)
-                return self._compiled_train(x)
-        return self._forward_impl(x)
-
-    def _addr(self, x: torch.Tensor):
-        """Addressing for the native TRAIN path. Identical result to :meth:`_addresses`, but
-        compiled with ``torch.compile`` on CUDA so inductor fuses the margin / sign-bit-pack /
-        argmin steps instead of materialising the big ``[B, G, tph, nap]`` intermediates eagerly
-        (~10x faster at the training batch: 4.4 ms -> 0.4 ms on the champion shape). Eager on CPU
-        or when compile is disabled. NOT used on the eval path (the base ``forward`` already
-        compiles the whole eval ``_forward_impl``), so there is no nested compile."""
-        if _COMPILE_ENABLED and x.is_cuda:
-            if self._compiled_addr is None:
-                self._compiled_addr = torch.compile(self._addresses, dynamic=True)
-            return self._compiled_addr(x)
-        return self._addresses(x)
+        """Abstract (spec amendment B): the shared base never runs a read. Construct a reference class
+        (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT) or a fused one (Fused*)."""
+        raise NotImplementedError(f"{type(self).__name__} is the shared scaffolding base and has no forward")
 
     def _addresses(self, x: torch.Tensor):
         """Shared addressing: input routing + per-table sign-bit address and its neighbour.
@@ -409,8 +342,8 @@ class ManifestoLUT(MultiHeadLUT):
             z_b = z.gather(2, idx_b).reshape(B, G, tph, nap)
             u = z_a - z_b
         # The one place every cartridge's cell index is produced: in index_dtype (int32 by default when the table fits,
-        # else int64; or an explicit choice), so every downstream read (_global_cells keeps c's dtype), the native
-        # kernels and the saved tensors use it. powers stays an int64 buffer; only the stored indices narrow.
+        # else int64; or an explicit choice), so every downstream read (_global_cells keeps c's dtype) and the saved
+        # tensors use it. powers stays an int64 buffer; only the stored indices narrow.
         dt = self.index_dtype
         if dt == torch.int32 and getattr(self, "_index_dtype_auto", False) and \
                 B * G * tph * 2 > _INT32_MAX_ENTRIES:            # auto: widen a call too large for int32 positions

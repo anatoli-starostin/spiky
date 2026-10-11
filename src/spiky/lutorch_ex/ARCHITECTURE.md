@@ -64,19 +64,16 @@ fold, SoftSign's "Smooth" (the same variant as Manifesto's "Soft") becomes `Soft
 
 ## `LUTORCH_EX_NO_CUDA_EXT` under this spec
 
-Today it is read in three places:
-- `_cuda_ext.load_extension` skips building the five JIT extensions (`lprojection`, single-anchor input grad,
-  soft-sign surrogate, `fused_manifesto`, `fused_confidence`);
-- `_fallback.disabled_on_purpose` / `is_deliberate` turn the resulting fallback from a `NativeUnavailableError` into a
-  quiet, deliberate one;
-- `_pow2_int8` skips the p2 / int8 extension (with the deprecated alias `SPIKY_P2_CUDA_DISABLE`).
+Before this spec it was read in three places: `_cuda_ext.load_extension` (skip building every JIT extension),
+`_fallback.disabled_on_purpose` / `is_deliberate` (make the resulting fallback quiet), and `_pow2_int8` (skip the
+p2 / int8 extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`).
 
-Under rules 3 and 5 it **disappears**:
+Under rules 3 and 5 the first two **are gone**:
 - A fused class raises when its kernel cannot load, so there is no fallback left to make quiet.
-- No reference class loads an extension (`ManifestoHard/Soft`, `SoftSignHard/Smooth` and `ConfidenceLUT` import
-  none today).
+- No reference class loads an extension (`ManifestoHard/Soft` and `ConfidenceLUT` import none).
 - **The replacement lever** is explicit class choice (E): to run without the extension (CI, a CPU-only box),
-  construct the reference class. Tests of a fused class skip when its extension cannot load.
+  construct the reference class. Tests of a fused class skip without a CUDA device and fail on one without the
+  extension (`tests/_requires_extension.py`).
 - **One residual, outside this spec's families:** `QuantisedConfidenceLUT` registers the p2 op with a built-in pure
   fallback, and `DeployedQuantisedConfidenceLUT` reads through the int8 extension. Until the quantised-cartridges
   work splits these into a reference and a fused form, the variable (or `SPIKY_P2_CUDA_DISABLE`) still gates that one
@@ -84,19 +81,21 @@ Under rules 3 and 5 it **disappears**:
 
 ## Gaps between `main` and this spec (for the PRs that land it)
 
-**Landed on #160:** rule 1 (the fold: `ManifestoHardLUT` / `ManifestoSoftLUT` and their `Fused` twins take
-`weight="rational" | "softsign"`; the four SoftSign files are gone, with no aliases), and the `fused_manifesto.cu`
-kernels take the soft-sign temperatures (their gradients included). The shared base no longer has the combine-based
-forward (its `_forward_impl` is abstract), but it still carries `forward()`'s compile dispatch.
+**Landed on #160:**
+- **Rule 1** (the fold): `ManifestoHardLUT` / `ManifestoSoftLUT` and their `Fused` twins take
+  `weight="rational" | "softsign"`; the four SoftSign files are gone, with no aliases; the `fused_manifesto.cu`
+  kernels take the soft-sign temperatures (their gradients included).
+- **Rules 3 + 5:** no `backend=` anywhere. The fused classes run only their CUDA kernels and raise otherwise: a
+  case the kernels do not cover names the case and the reference class, a missing extension names the classified
+  cause. The `pure` / `pure_eval` / `tier1` / `native` paths are deleted, with `_native_ops.py`,
+  `_native_softsign.py` and their CUDA sources (`lprojection`, single-anchor input grad, `softsign_surrogate_grad`).
+  `LUTORCH_EX_NO_CUDA_EXT` survives only on the p2 / int8 path (above).
+- **Consequence B:** `ManifestoLUT` is scaffolding only; its `forward()` raises `NotImplementedError`. The
+  reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
+  `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
+  `ConfidenceLUT`'s forward.
 
-- **Rule 5:** the `Fused*` classes have a `backend=` argument and fall back internally:
-  - FusedManifesto*: `pure` / `pure_eval` / `tier1` / `native` / `cuda` (both weights);
-  - FusedConfidenceLUT: `pure` / `cuda`.
-
-  That also breaks rule 3. One consequence measured in #159: an explicit `backend="pure_eval"` trains silently with
-  no input gradient on FusedManifestoHard (either weight). Removing the `native` backend also retires
-  `_native_softsign.py` and `softsign_surrogate_grad.cu`, which only it uses.
-- **Consequence B:** `ManifestoLUT` (the shared base) still owns the compile dispatch in `forward()`.
+**Still open:**
 - **Consequence C:** the reference classes raise on bf16.
 - **Consequence D:** fused-vs-reference equivalence tests exist (`test_fused_equivalence`,
   `test_fused_manifesto_softsign`, `test_fused_confidence`, `test_fused_manifesto_cuda`), but not uniformly per

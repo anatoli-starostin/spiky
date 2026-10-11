@@ -85,3 +85,27 @@ def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):
         cls(spec, seed=0, table_droput_rate=0.5)
     with _pytest.raises(TypeError, match=r"\['also_bogus', 'bogus'\]"):
         cls(spec, seed=0, bogus=1, also_bogus=2)
+
+
+# ---- spec amendment B: the shared base has no runnable forward; no fused class inherits a reference forward ----------
+from spiky.lutorch_ex.cartridges.confidence_base import ConfidenceBase  # noqa: E402
+from spiky.lutorch_ex.cartridges.manifesto_base import ManifestoLUT  # noqa: E402
+from spiky.lutorch_ex.cartridges.reference_base import ReferenceForward  # noqa: E402
+
+
+@_pytest.mark.parametrize("base", [ManifestoLUT, ConfidenceBase])
+def test_the_shared_bases_have_no_forward(base):
+    spec = _lx.LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8)
+    class Bare(base):          # implements the abstract _forward_impl, inherits the base's forward
+        def _forward_impl(self, x):
+            return x
+
+    with _pytest.raises(NotImplementedError, match="shared scaffolding base and has no forward"):
+        Bare(spec, seed=0)(torch.randn(3, 2, 8))
+
+
+def test_no_fused_class_inherits_a_reference_forward():
+    for fused, ref in ((_lx.FusedManifestoHardLUT, _lx.ManifestoHardLUT), (_lx.FusedManifestoSoftLUT, _lx.ManifestoSoftLUT),
+                       (_FusedConfidenceLUT, _lx.ConfidenceLUT)):
+        assert not issubclass(fused, ref) and not issubclass(fused, ReferenceForward), fused.__name__
+        assert issubclass(ref, ReferenceForward), ref.__name__

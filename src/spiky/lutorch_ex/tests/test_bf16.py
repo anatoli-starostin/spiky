@@ -1,7 +1,7 @@
 """bf16/fp16 dtype coverage.
 
 bf16/fp16 is a **fused-cartridge feature** (FusedManifestoHardLUT / FusedManifestoSoftLUT and
-ProjectionMHL wrapping them). There it is mixed precision: the discrete addressing (margins,
+ProjectionMHL wrapping them; CUDA only -- the fused classes run only on their kernels). There it is mixed precision: the discrete addressing (margins,
 argmin j*, packed cell index) runs in fp32 and every reduction accumulates in fp32; only the
 stored LUT table, the inputs, and the final output carry bf16. So against an fp32 reference
 *fed the same input values* the only differences are bf16 storage round-off and the final
@@ -26,6 +26,7 @@ from spiky.lutorch_ex import (
     ManifestoSoftLUT,
     ProjectionMHL,
 )
+from spiky.lutorch_ex.tests._requires_extension import needs_manifesto_ext  # noqa: F401 (fixture)
 
 FUSED = [FusedManifestoHardLUT, FusedManifestoSoftLUT]
 PURE = [ManifestoHardLUT, ManifestoSoftLUT]
@@ -38,12 +39,12 @@ def _rel(a, b):
     return (a.float() - b.float()).norm().item() / max(b.float().norm().item(), 1e-12)
 
 
-@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 @pytest.mark.parametrize("Cls", FUSED)
 @pytest.mark.parametrize("h_in,h_out", PATTERNS)
 @pytest.mark.parametrize("B", [1, 128])
-def test_fused_bf16_matches_fp32_reference(device, anchor_mode, Cls, h_in, h_out, B):
+def test_fused_bf16_matches_fp32_reference(anchor_mode, Cls, h_in, h_out, B, needs_manifesto_ext):
+    device = "cuda"
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=6, nap=5, d_in=12, d_out=8, anchor_mode=anchor_mode)
     ref = Cls(spec, seed=0, weight_init_std=1.0).to(device)                   # fp32
     bf = Cls(spec, seed=0, weight_init_std=1.0).to(device).to(torch.bfloat16)  # bf16
@@ -72,9 +73,9 @@ def test_fused_bf16_matches_fp32_reference(device, anchor_mode, Cls, h_in, h_out
     assert _rel(yeb, yer) < TOL, f"eval rel={_rel(yeb, yer):.2e}"
 
 
-@pytest.mark.parametrize("device", DEVICES)
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
-def test_fused_bf16_projection_mhl(device, anchor_mode):
+def test_fused_bf16_projection_mhl(anchor_mode, needs_manifesto_ext):
+    device = "cuda"
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=4, d_in=6, d_out=5, anchor_mode=anchor_mode)
     refc = FusedManifestoHardLUT(spec, seed=0, weight_init_std=1.0)
     bfc = FusedManifestoHardLUT(spec, seed=0, weight_init_std=1.0)
@@ -97,11 +98,10 @@ def test_fused_bf16_projection_mhl(device, anchor_mode):
     assert _rel(bfc.weights.grad, refc.weights.grad) < TOL
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
 @pytest.mark.parametrize("Cls", FUSED)
-def test_fused_bf16_cuda_native_training_step(Cls):
-    """On CUDA a bf16 training step runs end-to-end through the native lprojection kernels
-    (bf16 template specializations, fp32 accumulators) and stays bf16 with finite grads."""
+def test_fused_bf16_cuda_training_step(Cls, needs_manifesto_ext):
+    """A bf16 training step runs end-to-end through the fused kernels (bf16 table upconverted in registers, fp32
+    accumulators) and stays bf16 with finite grads."""
     spec = LUTSpec(h_in=4, h_out=4, tph=6, nap=5, d_in=12, d_out=8)
     m = Cls(spec, seed=0, weight_init_std=1.0).cuda().to(torch.bfloat16).train()
     x = torch.randn(256, 4, 12, device="cuda", dtype=torch.bfloat16, requires_grad=True)
@@ -131,11 +131,15 @@ def test_pure_cartridge_rejects_low_precision(device, Cls, dtype):
 @pytest.mark.parametrize("device", DEVICES)
 def test_projection_pure_rejects_bf16_fused_allows(device):
     """ProjectionMHL rejects bf16 when it wraps a PURE cartridge (the pure cartridge raises),
-    and allows it when it wraps a FUSED cartridge."""
+    and allows it when it wraps a FUSED cartridge (CUDA only: the fused classes run only on their kernels)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=4, d_in=6, d_out=5)
     pure = ProjectionMHL(ManifestoHardLUT(spec, seed=0), d_model=10, bias=True).to(device).to(torch.bfloat16)
     with pytest.raises(TypeError, match="does not support low precision"):
         pure(torch.randn(4, 10, device=device, dtype=torch.bfloat16))
+    if device != "cuda":
+        return
+    from spiky.lutorch_ex.tests._requires_extension import requires_extension
+    requires_extension("manifesto")
     fused = ProjectionMHL(FusedManifestoHardLUT(spec, seed=0), d_model=10, bias=True).to(device).to(torch.bfloat16)
     y = fused(torch.randn(4, 10, device=device, dtype=torch.bfloat16))
     assert y.dtype == torch.bfloat16 and y.shape == (4, 10)

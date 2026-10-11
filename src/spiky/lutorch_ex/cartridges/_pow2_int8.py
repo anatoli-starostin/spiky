@@ -54,7 +54,7 @@ def load():
     if _tried:
         return _ext
     _tried = True
-    # LUTORCH_EX_NO_CUDA_EXT=1 is the package-wide opt-out (as for the other extensions);
+    # LUTORCH_EX_NO_CUDA_EXT=1 opts out of this extension (the only one that still has a torch fallback);
     # SPIKY_P2_CUDA_DISABLE=1 is kept as a deprecated alias so existing scripts keep working.
     disabled_by = next((v for v in ("LUTORCH_EX_NO_CUDA_EXT", "SPIKY_P2_CUDA_DISABLE")
                         if os.environ.get(v) == "1"), None)

@@ -24,8 +24,8 @@ Only the discrete indices ``c_t, c_t', j*`` are non-differentiable. The value is
 ``u = 0`` the two cells carry equal weight ``1/2`` and simply swap roles).
 
 Read path: training uses one ``F.embedding_bag`` with ``per_sample_weights = [1-w, w]`` (read, scale and tph sum in one
-kernel); eval uses the plain two-cell read and blend, compiled on CUDA (inherited). Backward is plain autograd.
-fp32/fp64 only: the base ``forward`` raises on bf16/fp16 (low precision is the fused cartridges' feature).
+kernel); eval uses the plain two-cell read and blend, compiled on CUDA (ReferenceForward). Backward is plain autograd.
+fp32/fp64 only: the forward raises on bf16/fp16 (low precision is the fused cartridges' feature).
 """
 from __future__ import annotations
 
@@ -33,9 +33,10 @@ import torch
 
 from ._fused_ops import fused_blend_read
 from .manifesto_base import ManifestoLUT
+from .reference_base import ReferenceForward
 
 
-class ManifestoSoftLUT(ManifestoLUT):
+class ManifestoSoftLUT(ReferenceForward, ManifestoLUT):
     """Soft Manifesto reference cartridge; see module docstring for the math."""
 
     def _pure_blend(self, c, c_alt, w):
