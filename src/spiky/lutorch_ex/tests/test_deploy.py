@@ -147,3 +147,57 @@ def test_payload_roundtrip(tmp_path):
     path = str(tmp_path / "roundtrip.lxq")
     _save_payload(path, tensors, meta)
     _assert_same(_load_payload(path), (tensors, meta))
+
+
+# ---- export/load round trips the wrapper and spec options must survive ------------------------------------------
+import pytest  # noqa: E402
+
+
+def _variant_model(anchor_mode="pairs", compress=True, projection_dtype=None):
+    """One quant ProjectionMHL FFN behind a backbone Linear, with the given anchor mode / compress / GEMM dtype."""
+    class Variant(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed = nn.Linear(N_EMBD, N_EMBD)
+            cart = QuantisedConfidenceLUT(LUTSpec(**SPEC, anchor_mode=anchor_mode), seed=1, quant_mode="p2_int8",
+                                          weight_init_std=1e-2, read_top_n=2)
+            self.ff0 = ProjectionMHL(cart, d_model=N_EMBD, compress=compress, projection_dtype=projection_dtype)
+
+        def forward(self, x):
+            x = self.embed(x)
+            return x + self.ff0(x)
+    return Variant
+
+
+@pytest.mark.parametrize("anchor_mode,compress,projection_dtype", [
+    ("single", True, None),                 # B2: single-anchor export used to crash (anchor_b is None)
+    ("pairs", False, None),                 # B4: compress=False (an identity) used to crash the export
+    ("pairs", True, torch.bfloat16),        # B4: projection_dtype used to be dropped on load
+])
+def test_export_load_round_trip_keeps_spec_and_wrapper_options(tmp_path, anchor_mode, compress, projection_dtype):
+    Variant = _variant_model(anchor_mode, compress, projection_dtype)
+    torch.manual_seed(0)
+    m = Variant().eval()
+    with torch.no_grad():
+        m.ff0.cartridge.weights.normal_(0.0, 1e-2)
+        if not compress:                    # a fresh decompress is all-zero; give it values so the output is non-trivial
+            m.ff0.decompress.weight.normal_(0.0, 0.1)
+    x = torch.randn(16, N_EMBD)
+    with torch.no_grad():
+        y_ref = m(x)
+
+    def skeleton():
+        with torch.device("meta"):
+            return Variant()
+    path = str(tmp_path / "variant.lxq")
+    export_deployment(m, path)
+    dep = load_deployment(path, skeleton, device="cpu")
+    ff = dep.ff0
+    assert isinstance(ff.cartridge, DeployedQuantisedConfidenceLUT)
+    assert ff.cartridge.spec.anchor_mode == anchor_mode
+    assert (ff.cartridge.anchor_b is None) == (anchor_mode == "single")
+    assert ff.has_compress == compress and ff.projection_dtype == projection_dtype
+    with torch.no_grad():
+        y_dep = dep(x)
+    rel = (y_dep - y_ref).norm() / y_ref.norm().clamp_min(1e-30)
+    assert rel < 1e-2, f"deployed vs trained output rel diff too large: {rel.item():.3e}"

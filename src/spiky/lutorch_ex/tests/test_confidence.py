@@ -86,20 +86,52 @@ def test_train_eval_value_match(read_top_n, anchor_mode, device):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
 @pytest.mark.parametrize("device", DEVICES)
 def test_bag_eval_read_matches_the_gather_eval_read(read_top_n, anchor_mode, pattern, dtype, device):
-    """bag_eval_read=True reads eval through embedding_bag: same value as the default plain-gather eval read up to
-    summation order (fp32 re-association), and the flag changes nothing in training."""
+    """bag_eval_read=True reads eval through embedding_bag: same value as the plain-gather eval read
+    (bag_eval_read=False) up to summation order (fp32 re-association), and the flag changes nothing in training.
+    The default (None) resolves per n: on for n=2, off for n=1, and its value equals the forced read's bitwise."""
     h_in, h_out = pattern
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=8, nap=4, d_in=6, d_out=5, anchor_mode=anchor_mode)
-    gather = ConfidenceLUT(spec, seed=2, weight_init_std=1.0, read_top_n=read_top_n).to(device=device, dtype=dtype)
-    bag = ConfidenceLUT(spec, seed=2, weight_init_std=1.0, read_top_n=read_top_n, bag_eval_read=True)
-    bag = bag.to(device=device, dtype=dtype)
+    mk = lambda **kw: ConfidenceLUT(spec, seed=2, weight_init_std=1.0, read_top_n=read_top_n, **kw).to(
+        device=device, dtype=dtype)
+    gather, bag, default = mk(bag_eval_read=False), mk(bag_eval_read=True), mk()
     assert gather.bag_eval_read is False and bag.bag_eval_read is True
+    assert default.bag_eval_read is (read_top_n == 2)
     x = torch.randn(64, h_in, 6, device=device, dtype=dtype)
     with torch.no_grad():
-        ye_g, ye_b = gather.eval()(x), bag.eval()(x)
+        ye_g, ye_b, ye_d = gather.eval()(x), bag.eval()(x), default.eval()(x)
         yt_g, yt_b = gather.train()(x), bag.train()(x)
+    # max |a-b| / max |b|, the measure the n-dependent default was decided on (fp32 6.7e-7 measured at scale)
+    maxrel = ((ye_b.double() - ye_g.double()).abs().max() / ye_g.double().abs().max()).item()
+    assert maxrel < (1e-6 if dtype == torch.float32 else 1e-14)
     assert _normrel(ye_b, ye_g) < (1e-6 if dtype == torch.float32 else 1e-14)
+    assert torch.equal(ye_d, ye_b if read_top_n == 2 else ye_g)
     assert torch.equal(yt_b, yt_g)
+
+
+@pytest.mark.parametrize("read_top_n", [1, 2])
+@pytest.mark.parametrize("flag", [None, True, False])
+def test_the_eval_read_taken_per_n_and_override(read_top_n, flag, monkeypatch):
+    """Which read eval actually runs: the default takes embedding_bag at n=2 and the plain gather at n=1; an explicit
+    bag_eval_read=True / False forces either for both n; fused_read=True overrides all of them. CPU (eager), so the
+    spied methods are really called."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    calls = []
+    for name in ("_scored_read", "_scored_blend_read", "_read", "_read_pair", "_fused_read"):
+        orig = getattr(ConfidenceLUT, name)
+        monkeypatch.setattr(ConfidenceLUT, name,
+                            lambda self, *a, _n=name, _o=orig, **k: (calls.append(_n), _o(self, *a, **k))[1])
+    kw = {} if flag is None else {"bag_eval_read": flag}
+    m = ConfidenceLUT(spec, seed=0, read_top_n=read_top_n, **kw).eval()
+    x = torch.randn(8, 2, 6)
+    with torch.no_grad():
+        m(x)
+    bag = (read_top_n == 2) if flag is None else flag
+    want = ({1: "_scored_read", 2: "_scored_blend_read"} if bag else {1: "_read", 2: "_read_pair"})[read_top_n]
+    assert calls == [want]
+    calls.clear()
+    with torch.no_grad():
+        ConfidenceLUT(spec, seed=0, read_top_n=read_top_n, fused_read=True, **kw).eval()(x)
+    assert calls == ["_fused_read"]
 
 
 @pytest.mark.parametrize("read_top_n", [1, 2])

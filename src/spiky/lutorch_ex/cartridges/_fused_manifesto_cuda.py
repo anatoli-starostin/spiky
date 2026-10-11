@@ -16,13 +16,10 @@ with the table-dropout factor m.
 """
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
-
 import torch
 
 from . import _fallback
-from ._native_ops import _CSRC
+from ._cuda_ext import _MAX_CTA_THREADS, ManifestoCudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
 
 EXT_NAME = "lutorch_ex_fused_manifesto"
 MODE_HARD, MODE_SOFT = 0, 1
@@ -30,62 +27,23 @@ CUDA_TABLE_DTYPES = (torch.float32, torch.bfloat16)
 CUDA_INPUT_DTYPES = (torch.float32, torch.bfloat16, torch.float16)
 MAX_NAP = 16
 
-
-def _env_int(name: str, default: int) -> int:
-    return int(os.environ.get(name, default))
-
-
-@dataclass
-class ManifestoCudaKnobs:
-    """Launch configuration of the Manifesto kernels (explicit; env overrides ``LUTORCH_EX_MANI_CUDA_*``)."""
-    fwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_MANI_CUDA_FWD_THREADS", 64))
-    bwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_MANI_CUDA_BWD_THREADS", 64))
-    rows_per_cta: int = field(default_factory=lambda: _env_int("LUTORCH_EX_MANI_CUDA_ROWS_PER_CTA", 4))
-    vec: int = field(default_factory=lambda: _env_int("LUTORCH_EX_MANI_CUDA_VEC", 4))
-    vec_bf16: int = field(default_factory=lambda: _env_int("LUTORCH_EX_MANI_CUDA_VEC_BF16", 4))
-    vec_atomics: bool = field(default_factory=lambda: _env_int("LUTORCH_EX_MANI_CUDA_VEC_ATOMICS", 1) == 1)
-
-
 _EXT = None
 _TRIED = False
 
 
 def fused_manifesto_ext():
     """Build/load the ``lutorch_ex_fused_manifesto`` JIT extension; None if unavailable (never raises; the cause is
-    recorded for the fallback banner)."""
+    recorded for the fallback error)."""
     global _EXT, _TRIED
     if _TRIED:
         return _EXT
     _TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        _fallback.record_build_failure(EXT_NAME, disabled=True)
-        return None
-    if not torch.cuda.is_available():
-        _fallback.record_build_failure(EXT_NAME)
-        return None
-    try:
-        from torch.utils.cpp_extension import load
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        _EXT = load(name=EXT_NAME, sources=[os.path.join(_CSRC, "fused_manifesto.cu")],
-                    extra_cflags=[f"-std={std}", "-O3"], extra_cuda_cflags=[f"-std={std}", "-O3"], verbose=False)
-    except Exception as e:
-        _fallback.record_build_failure(EXT_NAME, e)
-        _EXT = None
+    _EXT = load_extension(EXT_NAME, ["fused_manifesto.cu"])
     return _EXT
-
-
-def _row_launch(knobs, d_out: int, table_dtype: torch.dtype):
-    """(vec, threads needed to cover one table row): the vector width is halved until it divides d_out (an odd d_out
-    reads one element per load); one row needs d_out / vec threads, rounded up to a warp."""
-    vec = knobs.vec if table_dtype == torch.float32 else knobs.vec_bf16
-    while vec > 1 and d_out % vec:
-        vec //= 2
-    return vec, -(-(d_out // vec) // 32) * 32
 
 
 #: The one remedy every ineligibility message gives (the case is fine on the other backends).
 REMEDY = "Use backend='auto' to run on a supported path."
-_MAX_CTA_THREADS = 1024
 
 
 def _dt(dtype) -> str:
@@ -168,16 +126,6 @@ def require_cuda(module, x: torch.Tensor) -> None:
         raise _fallback.NativeUnavailableError(
             _fallback.banner(name, EXT_NAME, "cuda", "(none: explicit request)", cause))
     raise RuntimeError(f"{name}(backend='cuda'): {reason}")
-
-
-def _launch(knobs, d_out: int, table_dtype: torch.dtype):
-    """The knobs, made legal for this d_out (see _row_launch): each thread count is raised to cover one table row. At
-    the canonical d_out 48 the defaults pass through unchanged. ineligible_reason keeps 'auto' away from a d_out that
-    needs more than 1024 threads; an explicit request for one fails here."""
-    vec, need = _row_launch(knobs, d_out, table_dtype)
-    if need > 1024:
-        raise RuntimeError(f"fused_manifesto: d_out {d_out} needs {need} threads per CTA (> 1024) at vec {vec}")
-    return max(knobs.fwd_threads, need), max(knobs.bwd_threads, need), vec
 
 
 class _FusedManifesto(torch.autograd.Function):

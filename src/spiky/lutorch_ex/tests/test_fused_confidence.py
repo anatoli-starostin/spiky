@@ -273,3 +273,45 @@ def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
     # are compared to one bf16 rounding of the fp32 run.
     for k in a:
         assert _rel(a[k], b[k].to(a[k].dtype)) < BF16_TOL, k
+
+
+# -- d_out the kernels cannot launch at the default knobs: fitted (vec halved, threads raised) or not a cuda case -----
+@pytest.mark.parametrize("mode", ["train", "eval"])
+@pytest.mark.parametrize("d_out", [50, 260, 300])
+@pytest.mark.parametrize("n", [1, 2])
+def test_d_out_not_divisible_by_4_or_wider_than_256_runs_on_cuda(d_out, n, mode):
+    """d_out 50 (not divisible by the vector width 4) and 260 / 300 (more than 64 threads x 4 per row) used to crash
+    'auto' at launch ("d_out must be divisible by vec" / "threads must be >= d_out / vec"). The launch is now fitted to
+    d_out exactly as for the Manifesto kernels, so they run on 'cuda' and agree with ConfidenceLUT."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=8, nap=4, d_in=12, d_out=d_out, anchor_mode="pairs")
+    kw = dict(seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6)
+    ref = ConfidenceLUT(spec, **kw).cuda()
+    cud = FusedConfidenceLUT(spec, **kw).cuda()
+    cud.load_state_dict(ref.state_dict())
+    torch.manual_seed(0)
+    x = torch.randn(33, 2, 12, device="cuda")
+    go = torch.randn(33, 2, d_out, device="cuda")
+    getattr(ref, mode)(); getattr(cud, mode)()
+    if mode == "eval":
+        with torch.no_grad():
+            yc, yr = cud(x), ref._forward_impl(x)
+        assert cud.last_backend == "cuda"
+        assert _rel(yc, yr) < FP32_TOL
+        return
+    a, b = _fwd_bwd(cud, x, go), _fwd_bwd(ref, x, go, eager_ref=True)
+    assert cud.last_backend == "cuda"
+    for k in b:
+        assert _rel(a[k], b[k]) < FP32_TOL, k
+
+
+def test_d_out_one_cta_cannot_cover_is_not_a_cuda_case():
+    """d_out 4100 needs 1056 threads per CTA at vec 4 (> 1024): 'auto' runs the ConfidenceLUT path quietly instead of
+    crashing, and an explicit backend='cuda' says why."""
+    spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=3, d_in=6, d_out=4100, anchor_mode="pairs")
+    x = torch.randn(3, 1, 6, device="cuda")
+    m = FusedConfidenceLUT(spec, seed=0).cuda().eval()
+    with torch.no_grad():
+        m(x)
+    assert m.last_backend == "pure"
+    with pytest.raises(RuntimeError, match="d_out 4100"):
+        FusedConfidenceLUT(spec, seed=0, backend="cuda").cuda()(x)
