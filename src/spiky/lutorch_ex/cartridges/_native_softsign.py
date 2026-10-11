@@ -37,11 +37,9 @@ the pure cartridge on CPU or when the native extension is unavailable (handled b
 """
 from __future__ import annotations
 
-import os
-import warnings
-
 import torch
 
+from ._cuda_ext import load_extension
 from ._fused_ops import _acc_dtype, fused_blend_read, fused_hard_read
 from ._native_ops import _THREADS, _table_indices, native_manager
 
@@ -57,25 +55,9 @@ def _ss_ext():
     if _SS_TRIED:
         return _SS_EXT
     _SS_TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        return None
-    try:
-        from torch.utils.cpp_extension import load
-
-        _csrc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
-        src = os.path.join(_csrc, "softsign_surrogate_grad.cu")
-        # Same standard as _native_ops._lprojection_ext: torch's default -std=c++17 does not compile its own
-        # headers here (ATen/core/List_inl.h).
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        cpp = [f"-std={std}", "-O3"]
-        cuda = [f"-std={std}", "-O3"]
-        _SS_EXT = load(name="lutorch_ex_softsign_surrogate_grad", sources=[src],
-                       extra_cflags=cpp, extra_cuda_cflags=cuda, verbose=False)
-    except Exception as e:
-        # Still never raises (the eager tail gives the same result), but say so once: _SS_TRIED makes this run once.
-        warnings.warn(f"lutorch_ex: the softsign_surrogate_grad CUDA extension could not be built/loaded; using the "
-                      f"eager surrogate tail instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
-        _SS_EXT = None
+    # The eager tail gives the same result, so a failed build only warns (once: _SS_TRIED).
+    _SS_EXT = load_extension("lutorch_ex_softsign_surrogate_grad", ["softsign_surrogate_grad.cu"],
+                             on_failure="warn", warn_instead="the eager surrogate tail")
     return _SS_EXT
 
 

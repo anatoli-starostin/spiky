@@ -33,15 +33,12 @@ distribution does not.
 """
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
-
 import torch
 from torch.nn.utils.stateless import _reparametrize_module
 
 from . import _fallback
+from ._cuda_ext import _MAX_CTA_THREADS, CudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
 from ._fused_ops import validate_backend
-from ._native_ops import _CSRC
 from .confidence import ConfidenceLUT
 
 EXT_NAME = "lutorch_ex_fused_confidence"
@@ -49,50 +46,18 @@ EXT_NAME = "lutorch_ex_fused_confidence"
 _LOW_PREC = (torch.bfloat16, torch.float16)
 _CUDA_TABLE_DTYPES = (torch.float32, torch.bfloat16)
 
-
-def _env_int(name: str, default: int) -> int:
-    return int(os.environ.get(name, default))
-
-
-@dataclass
-class CudaKnobs:
-    """Launch configuration for the CUDA kernels (all explicit; sweep them with ``bench_fused_confidence.py``)."""
-    # Defaults = the sweep winner on both the RTX 5090 (sm_120) and the H100 (sm_90) at the d24 geometry.
-    fwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_FWD_THREADS", 64))
-    bwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_BWD_THREADS", 64))
-    rows_per_cta: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_ROWS_PER_CTA", 4))
-    vec: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC", 4))
-    vec_atomics: bool = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC_ATOMICS", 1) == 1)
-    # Vector width for a bf16 table (1, 2, 4 or 8; 8 bf16 = the same 16-byte load as 4 fp32). 4 is the RTX 5090 sweep
-    # winner: 8 is slower, mostly in the backward (two float4 grad-W atomics per thread instead of one).
-    vec_bf16: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC_BF16", 4))
-
-
 _EXT = None
 _TRIED = False
 
 
 def fused_confidence_ext():
-    """Build/load the ``lutorch_ex_fused_confidence`` JIT extension; None if unavailable (never raises)."""
+    """Build/load the ``lutorch_ex_fused_confidence`` JIT extension; None if unavailable (never raises; the cause is
+    recorded for the fallback error)."""
     global _EXT, _TRIED
     if _TRIED:
         return _EXT
     _TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        _fallback.record_build_failure(EXT_NAME, disabled=True)
-        return None
-    if not torch.cuda.is_available():
-        _fallback.record_build_failure(EXT_NAME)
-        return None
-    try:
-        from torch.utils.cpp_extension import load
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        _EXT = load(name=EXT_NAME, sources=[os.path.join(_CSRC, "fused_confidence.cu")],
-                    extra_cflags=[f"-std={std}", "-O3"], extra_cuda_cflags=[f"-std={std}", "-O3"], verbose=False)
-    except Exception as e:
-        # Never raise here; classify WHY. FusedConfidenceLUT reports it loudly where it actually falls back.
-        _fallback.record_build_failure(EXT_NAME, e)
-        _EXT = None
+    _EXT = load_extension(EXT_NAME, ["fused_confidence.cu"])
     return _EXT
 
 
@@ -104,22 +69,25 @@ class _FusedConfidence(torch.autograd.Function):
         # kernels read it in place). The output is fp32, or bf16 when out_bf16 (bf16 z only).
         ext = fused_confidence_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
-        vec = knobs.vec if weights.dtype == torch.float32 else knobs.vec_bf16
+        # The knobs made legal for this d_out, as for the Manifesto kernels: the vector width is halved until it divides
+        # d_out and each thread count is raised to cover one table row (a no-op at the default knobs for d_out <= 256
+        # divisible by 4, so those launches are unchanged).
+        fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
         out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-                                 nap, eps, n, knobs.fwd_threads, knobs.rows_per_cta, vec, out_bf16)
+                                 nap, eps, n, fwd_threads, knobs.rows_per_cta, vec, out_bf16)
         ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep)
-        ctx.cfg = (keep_scale, nap, eps, n, knobs, vec)
+        ctx.cfg = (keep_scale, nap, eps, n, knobs, vec, bwd_threads)
         return out
 
     @staticmethod
     def backward(ctx, go):
         z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
-        keep_scale, nap, eps, n, knobs, vec = ctx.cfg
+        keep_scale, nap, eps, n, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
         # The kernel reads go in fp32 (a bf16 go from the bf16-output mode is upcast: exact). gz comes back in z's dtype.
         gW, gz, gscal = fused_confidence_ext().confidence_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-            nap, eps, n, knobs.bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
+            nap, eps, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         g = gscal.sum(0)
         g_tau = g[2] if n == 2 else None
         # gW is accumulated in fp32 whatever the table dtype; a bf16 Parameter must receive a bf16 .grad, so it is
@@ -158,10 +126,12 @@ class FusedConfidenceLUT(ConfidenceLUT):
         return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads ('cuda' and 'pure')
 
     def _shape_ok(self, x: torch.Tensor) -> bool:
-        """Everything the CUDA kernels need EXCEPT the extension itself (a CUDA input, fp32/bf16 table, nap <= 16).
-        Failing this is a deliberate design fallback (no kernel for that case), not a broken fast path."""
+        """Everything the CUDA kernels need EXCEPT the extension itself (a CUDA input, fp32/bf16 table, nap <= 16, and a
+        d_out one CTA can cover: at most 1024 threads after the vector width is fitted to d_out, as for the Manifesto
+        kernels). Failing this is a deliberate design fallback (no kernel for that case), not a broken fast path."""
         return (x.is_cuda and x.dtype in (torch.float32,) + _LOW_PREC and self.weights.dtype in _CUDA_TABLE_DTYPES
-                and self.spec.nap <= 16)
+                and self.spec.nap <= 16
+                and _row_launch(self.knobs, self.spec.d_out, self.weights.dtype)[1] <= _MAX_CTA_THREADS)
 
     def _cuda_ok(self, x: torch.Tensor) -> bool:
         return self._shape_ok(x) and fused_confidence_ext() is not None
@@ -188,10 +158,13 @@ class FusedConfidenceLUT(ConfidenceLUT):
                     remedy=_fallback.CAUSES["unclassified"][1])
                 raise _fallback.NativeUnavailableError(
                     _fallback.banner(type(self).__name__, EXT_NAME, "cuda", "(none: explicit request)", cause))
+            vec, need = _row_launch(self.knobs, self.spec.d_out, self.weights.dtype)
             raise RuntimeError(
-                f"{type(self).__name__}: backend='cuda' needs a CUDA input, an fp32 or bf16 table, nap <= 16 and the "
-                f"fused_confidence extension; got input {x.dtype} on {x.device}, table {self.weights.dtype}, "
-                f"nap {self.spec.nap}, extension {'loaded' if fused_confidence_ext() is not None else 'unavailable'}")
+                f"{type(self).__name__}: backend='cuda' needs a CUDA input, an fp32 or bf16 table, nap <= 16, a d_out "
+                f"one CTA can cover and the fused_confidence extension; got input {x.dtype} on {x.device}, table "
+                f"{self.weights.dtype}, nap {self.spec.nap}, d_out {self.spec.d_out} (needs {need} threads per CTA, "
+                f"limit {_MAX_CTA_THREADS}, vec {vec}), extension "
+                f"{'loaded' if fused_confidence_ext() is not None else 'unavailable'}")
         self.last_backend = be                                   # provenance for benchmarks (what actually ran)
         if be == "pure":
             return self._pure_forward(x)

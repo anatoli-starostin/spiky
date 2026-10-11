@@ -29,11 +29,11 @@ batch. If that kernel cannot be built/loaded, the eager body is used (identical 
 from __future__ import annotations
 
 import os
-import warnings
 
 import torch
 
 from . import _fallback
+from ._cuda_ext import load_extension
 from ._fused_ops import _acc_dtype, fused_hard_read
 
 LPROJ_EXT_NAME = "lutorch_ex_lprojection"
@@ -42,71 +42,21 @@ _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
 _TRIED = False
 
-# Co-located CUDA sources and a stable, persistent extension cache so the ~117 KB lprojection nvcc compile is paid once across processes.
-_CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
-os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
-
-
-def _pick_gpp():
-    """A host compiler for nvcc --compiler-bindir; None if none."""
-    import shutil
-    for c in ("g++-13", "g++-12", "g++-11", "g++-10", "g++-9", "g++-8", "g++"):
-        p = shutil.which(c)
-        if p:
-            return p
-    return None
-
-
 _LPROJ_EXT = None
 _LPROJ_TRIED = False
 
 
 def _lprojection_ext():
     """Build/load the co-located ``lutorch_ex_lprojection`` JIT extension (the lprojection / anchor_pairs
-    kernels + LUTorchManager). Mirrors the ``lutorch_ex_pow2_int8_read`` setup: lazy, cached, device-gated,
-    never raises -> ``None`` falls through to the pure-torch path."""
+    kernels + LUTorchManager): lazy, cached, never raises; ``None`` (with a recorded cause) when unavailable.
+    ``-lcuda``: the manager uses the driver API."""
     global _LPROJ_EXT, _LPROJ_TRIED
     if _LPROJ_TRIED:
         return _LPROJ_EXT
     _LPROJ_TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        _fallback.record_build_failure(LPROJ_EXT_NAME, disabled=True)
-        return None
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            _fallback.record_build_failure(LPROJ_EXT_NAME)
-            return None
-        from torch.utils.cpp_extension import load
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        # Mirror the working pow2_int8 build: cpp_extension
-        # already supplies the correct CUDA_HOME include paths and a compatible host compiler, so we do
-        # NOT hardcode -I/usr/local/cuda/include or --compiler-bindir (a stray -I mixes toolkits and
-        # breaks the build: "CUDA compiler and CUDA toolkit headers are incompatible"). -lcuda matches
-        # setup.py's libraries=["cuda"] (driver API); arch is auto-detected from the visible device.
-        cpp = [f"-std={std}", "-O3"]
-        cuda = [f"-std={std}", "-O3"]
-        _LPROJ_EXT = load(name="lutorch_ex_lprojection",
-                          sources=[os.path.join(_CSRC, "lprojection.cu"),
-                                   os.path.join(_CSRC, "lprojection_py.cpp"),
-                                   os.path.join(_CSRC, "common_misc.cpp")],
-                          extra_cflags=cpp, extra_cuda_cflags=cuda, extra_ldflags=["-lcuda"],
-                          verbose=False)
-    except Exception as e:
-        # Never raise here (the pure / tier-1 paths are correct), but classify WHY; the cartridge that falls back
-        # because of it reports the cause loudly (cartridges/_fallback.py).
-        _fallback.record_build_failure(LPROJ_EXT_NAME, e)
-        _LPROJ_EXT = None
+    _LPROJ_EXT = load_extension(LPROJ_EXT_NAME, ["lprojection.cu", "lprojection_py.cpp", "common_misc.cpp"],
+                                extra_ldflags=["-lcuda"])
     return _LPROJ_EXT
-
-
-def warm_up_native():
-    """Eagerly build/load the lprojection extension so the nvcc compile is paid once up front (e.g. at
-    model build), not on the first forward. Never raises; a failure just leaves the fallbacks in place."""
-    try:
-        _lprojection_ext()
-    except Exception:
-        pass
 
 # The single-anchor input gradient is a short elementwise chain + one scatter_add. In eager
 # PyTorch that is ~10 tiny kernel launches and, at small batch, the backward is launch-bound
@@ -125,25 +75,9 @@ def _single_ig_ext():
     if _SINGLE_IG_TRIED:
         return _SINGLE_IG_EXT
     _SINGLE_IG_TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        return None
-    try:
-        from torch.utils.cpp_extension import load
-
-        src = os.path.join(_CSRC, "single_anchor_input_grad.cu")
-        # Same standard as _lprojection_ext: torch's default -std=c++17 does not compile its own headers here
-        # (ATen/core/List_inl.h).
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        cpp = [f"-std={std}", "-O3"]
-        cuda = [f"-std={std}", "-O3"]
-        _SINGLE_IG_EXT = load(name="lutorch_ex_single_anchor_ig", sources=[src],
-                              extra_cflags=cpp, extra_cuda_cflags=cuda, verbose=False)
-    except Exception as e:
-        # Still never raises (the eager body gives the same result), but say so once: _SINGLE_IG_TRIED makes this
-        # run once.
-        warnings.warn(f"lutorch_ex: the single_anchor_input_grad CUDA extension could not be built/loaded; using the "
-                      f"eager input-grad body instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
-        _SINGLE_IG_EXT = None
+    # The eager body gives the same result, so a failed build only warns (once: _SINGLE_IG_TRIED).
+    _SINGLE_IG_EXT = load_extension("lutorch_ex_single_anchor_ig", ["single_anchor_input_grad.cu"],
+                                    on_failure="warn", warn_instead="the eager input-grad body")
     return _SINGLE_IG_EXT
 
 
@@ -180,7 +114,8 @@ def raise_if_forced_native_unavailable(cartridge: str, x: torch.Tensor) -> None:
 
 def require_native_or_report(cartridge: str, x: torch.Tensor, wanted: str, used: str) -> None:
     """Call where a cartridge picks a non-native backend for a CUDA input only because native is unavailable:
-    reports the classified cause (warn once / raise in strict mode). CPU inputs are a deliberate path: no-op."""
+    raises NativeUnavailableError with the classified cause (quiet when disabled on purpose with
+    LUTORCH_EX_NO_CUDA_EXT=1). CPU inputs are a deliberate path: no-op."""
     if x.is_cuda:
         _fallback.report_involuntary_fallback(cartridge, LPROJ_EXT_NAME, wanted, used)
 

@@ -11,21 +11,21 @@ Option 2.
 Dispatch (``backend`` forces a path; 'auto' is the hybrid):
 * eval  -> pure compiled gather read (fastest on the inference path, inherited);
 * train -> 'native' whenever native_available(): a CUDA device with the native ops loaded (any
-  architecture the extension builds for -- e.g. H100 or RTX 5090), else 'tier1' (pure embedding_bag path,
-  CPU / no ext). FusedSoftSignSmoothLUT overrides this: its 'auto' always trains on 'tier1' (native is no
-  faster there); 'native' stays reachable with backend="native".
+  architecture the extension builds for -- e.g. H100 or RTX 5090), else 'tier1' (pure embedding_bag path).
+  On a CUDA input that 'tier1' is an involuntary fallback: NativeUnavailableError naming the cause, unless
+  LUTORCH_EX_NO_CUDA_EXT=1; on CPU it is the deliberate path. FusedSoftSignSmoothLUT overrides this: its
+  'auto' always trains on 'tier1' (native is no faster there); 'native' stays reachable with
+  backend="native", which raises when the extension is unavailable.
 
 bf16/fp16: addressing runs in fp32 (so the discrete bit decisions don't drift), reads/reductions
-accumulate in fp32, output cast back once. Kept only if it is a real H100 speedup (evaluated in
-the bf16 grid); otherwise ``_supports_low_precision`` is flipped to False and these raise like the
-pure cartridges. fp32/fp64 are the correctness oracle.
+accumulate in fp32, output cast back once. fp32/fp64 are the correctness oracle.
 """
 from __future__ import annotations
 
 import torch
 
 from ._fused_ops import _acc_dtype, _global_cells, fused_blend_read, fused_hard_read, validate_backend
-from ._native_ops import native_available
+from ._native_ops import native_available, raise_if_forced_native_unavailable, require_native_or_report
 from ._native_softsign import NativeSoftSignHard, NativeSoftSignSmooth
 from .softsign_base import SoftSignLUT
 
@@ -34,9 +34,6 @@ _LOW_PREC = (torch.bfloat16, torch.float16)
 
 class FusedSoftSignLUT(SoftSignLUT):
     """Shared dispatch/addressing for the fused soft-sign twins. Abstract (no ``_forward_impl``)."""
-
-    #: bf16/fp16 support — a real H100 speedup keeps it True, otherwise flipped to False (drop).
-    _SUPPORTS_LOW_PRECISION = True
 
     #: Every backend the twins' _forward_impl dispatches on ('auto' picks one of the others per call).
     _BACKENDS = ("auto", "pure_eval", "tier1", "native")
@@ -47,7 +44,7 @@ class FusedSoftSignLUT(SoftSignLUT):
         self.backend = backend
 
     def _supports_low_precision(self) -> bool:
-        return self._SUPPORTS_LOW_PRECISION
+        return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1 / pure_eval)
 
     def _needs_alt(self) -> bool:
         return self.training
@@ -86,6 +83,10 @@ class FusedSoftSignLUT(SoftSignLUT):
             return "pure_eval"
         if native_available(x.device):
             return "native"
+        # Native was the choice and is unavailable: on a CUDA input that is an involuntary fallback, reported like the
+        # Manifesto twins' (NativeUnavailableError naming the cause; quiet when disabled on purpose with
+        # LUTORCH_EX_NO_CUDA_EXT=1). A CPU input is a deliberate path.
+        require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1"
 
     def _temps(self, dtype):
@@ -101,6 +102,8 @@ class FusedSoftSignHardLUT(FusedSoftSignLUT):
         low = x.dtype in _LOW_PREC
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if self.backend == "native":                      # an explicit request is never silently downgraded
+            raise_if_forced_native_unavailable(type(self).__name__, x)
         dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             W = self.weights.float() if low else self.weights
@@ -142,6 +145,8 @@ class FusedSoftSignSmoothLUT(FusedSoftSignLUT):
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x.float() if low else x)
         w = self._blend_w(u_abs_star)
         be = self._pick(x) if self.backend == "auto" else self.backend
+        if self.backend == "native":                      # an explicit request is never silently downgraded
+            raise_if_forced_native_unavailable(type(self).__name__, x)
         dmask = self._table_dropout_mask(x.shape[0], self.weights.device, _acc_dtype(self.weights.dtype))
         if be == "pure_eval":
             W = self.weights.float() if low else self.weights

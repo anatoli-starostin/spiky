@@ -119,9 +119,12 @@ def export_deployment(model: nn.Module, path: str) -> dict:
         dec_w = (mod.decompress.weight.detach().cpu() * scale.reshape(1, -1).cpu()).contiguous()  # EXACT pow2 fold
         for key, t in payload["tensors"].items():
             tensors[f"{name}::{key}"] = t
-        tensors[f"{name}::compress.weight"] = mod.compress.weight.detach()
-        if mod.compress.bias is not None:
-            tensors[f"{name}::compress.bias"] = mod.compress.bias.detach()
+        has_compress_bias = False
+        if mod.has_compress:                                     # compress=False: an identity, nothing to store
+            tensors[f"{name}::compress.weight"] = mod.compress.weight.detach()
+            if mod.compress.bias is not None:
+                tensors[f"{name}::compress.bias"] = mod.compress.bias.detach()
+                has_compress_bias = True
         tensors[f"{name}::decompress.weight"] = dec_w
         if mod.decompress.bias is not None:
             tensors[f"{name}::decompress.bias"] = mod.decompress.bias.detach()
@@ -130,8 +133,13 @@ def export_deployment(model: nn.Module, path: str) -> dict:
         dims = {"input_dim": mod.input_dim, "output_dim": mod.output_dim}
         if mod.input_dim == mod.output_dim:
             dims["d_model"] = mod.input_dim
-        meta["ffns"][name] = {**payload["meta"], "format": payload["format"], **dims,
-                              "has_compress_bias": mod.compress.bias is not None,
+        # The wrapper's own options, so the rebuilt ProjectionMHL runs its GEMMs exactly as the exported one did.
+        wrapper = {"has_compress": mod.has_compress,
+                   "projection_dtype": _dtype_name(mod.projection_dtype),
+                   "fp8_projections": sorted(mod.fp8_projections),
+                   "compress_fp8_out_dtype": _dtype_name(mod.compress_fp8_out_dtype)}
+        meta["ffns"][name] = {**payload["meta"], "format": payload["format"], **dims, **wrapper,
+                              "has_compress_bias": has_compress_bias,
                               "has_decompress_bias": mod.decompress.bias is not None}
         compacted.append(name)
     # backbone: everything NOT inside a compacted FFN (the compacted FFNs are rebuilt from the int8 payload)
@@ -141,6 +149,16 @@ def export_deployment(model: nn.Module, path: str) -> dict:
         tensors[f"__backbone__::{n}"] = p.detach()
     _save_payload(path, tensors, meta)
     return meta
+
+
+def _dtype_name(dtype):
+    """A torch dtype as a JSON-able string ("bfloat16"), or None."""
+    return None if dtype is None else str(dtype).replace("torch.", "")
+
+
+def _dtype_from_name(name):
+    """The inverse of :func:`_dtype_name`."""
+    return None if name is None else getattr(torch, name)
 
 
 def _set_submodule(root: nn.Module, dotted: str, new: nn.Module) -> None:
@@ -167,8 +185,10 @@ def load_deployment(path: str, make_skeleton: Callable[[], nn.Module], device=No
     tensors, meta = _load_payload(path)
     model = make_skeleton()
     for name, ff in meta["ffns"].items():
+        # Files written before anchor_mode was recorded are pairs-mode (the only mode that could be exported then).
         spec = LUTSpec(h_in=ff["spec"]["h_in"], h_out=ff["spec"]["h_out"], tph=ff["spec"]["tph"],
-                       nap=ff["spec"]["nap"], d_in=ff["spec"]["d_in"], d_out=ff["spec"]["d_out"])
+                       nap=ff["spec"]["nap"], d_in=ff["spec"]["d_in"], d_out=ff["spec"]["d_out"],
+                       anchor_mode=ff["spec"].get("anchor_mode", "pairs"))
         # Collect this FFN's cartridge tensors by prefix (everything under "{name}::" except the
         # ProjectionMHL compress/decompress weights); the cartridge's from_deployment knows its keys.
         prefix = f"{name}::"
@@ -177,13 +197,19 @@ def load_deployment(path: str, make_skeleton: Callable[[], nn.Module], device=No
                         and not k.startswith(prefix + "compress.")
                         and not k.startswith(prefix + "decompress.")}
         dep = get_rebuilder(ff["format"])(spec, cart_tensors, ff, device=device)
-        # Files written before input_dim/output_dim existed carry only "d_model" (square wrappers).
+        # Files written before input_dim/output_dim existed carry only "d_model" (square wrappers); files written before
+        # the wrapper options were recorded had compress on and the default GEMM dtypes.
         in_dim = ff.get("input_dim", ff.get("d_model"))
         out_dim = ff.get("output_dim", ff.get("d_model"))
-        proj = ProjectionMHL(dep, input_dim=in_dim, output_dim=out_dim,
-                             bias=ff["has_decompress_bias"], device=device)
+        has_compress = ff.get("has_compress", True)
+        proj = ProjectionMHL(dep, input_dim=in_dim, output_dim=out_dim, compress=has_compress,
+                             bias=ff["has_decompress_bias"], device=device,
+                             fp8_projections=tuple(ff.get("fp8_projections", ())),
+                             compress_fp8_out_dtype=_dtype_from_name(ff.get("compress_fp8_out_dtype", "float32")),
+                             projection_dtype=_dtype_from_name(ff.get("projection_dtype")))
         with torch.no_grad():
-            proj.compress.weight.copy_(tensors[f"{name}::compress.weight"].to(proj.compress.weight.device))
+            if has_compress:
+                proj.compress.weight.copy_(tensors[f"{name}::compress.weight"].to(proj.compress.weight.device))
             if ff["has_compress_bias"]:
                 proj.compress.bias.copy_(tensors[f"{name}::compress.bias"].to(proj.compress.bias.device))
             proj.decompress.weight.copy_(tensors[f"{name}::decompress.weight"].to(proj.decompress.weight.device))

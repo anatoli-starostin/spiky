@@ -195,7 +195,7 @@ def banner(cartridge: str, ext_name: str, wanted: str, used: str, cause: Cause) 
     headline = CAUSES[cause.kind][0]
     lines = [
         "=" * 100,
-        "LUTORCH_EX: THE FAST CUDA PATH IS NOT AVAILABLE - THIS CARTRIDGE IS RUNNING A SLOW FALLBACK",
+        "LUTORCH_EX: THE FAST CUDA PATH IS NOT AVAILABLE - REFUSING AN INVOLUNTARY FALLBACK TO A SLOW PATH",
         "=" * 100,
         f"Cartridge : {cartridge} (backend '{wanted}' -> '{used}' because the CUDA extension is unavailable)",
         f"Extension : {ext_name}",

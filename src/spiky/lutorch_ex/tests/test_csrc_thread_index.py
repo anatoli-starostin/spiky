@@ -25,5 +25,6 @@ def test_every_thread_index_is_widened_before_the_multiply():
                 seen += 1
                 if not WIDENED.search(code):
                     offenders.append(f"{src.name}:{n}: {line.strip()}")
-    assert seen >= 20, f"expected the ~22 kernel thread-id lines, found {seen}"
+    # 16 thread-id lines since the uncalled lprojection kernels were removed (29 before); a drop means the scan broke.
+    assert seen >= 16, f"expected the ~16 kernel thread-id lines, found {seen}"
     assert not offenders, "32-bit thread-id products (widen blockIdx.x first):\n" + "\n".join(offenders)
