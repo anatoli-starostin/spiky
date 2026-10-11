@@ -14,6 +14,8 @@ Methodology:
   (inputs and parameters excluded).
 - A cell that runs out of memory, or that the class refuses (the reference cartridges reject bf16), is recorded as
   such, never dropped.
+- ``torch._dynamo.reset()`` before every cell: all cartridges of a class compile the same ``_forward_impl``, so without
+  it the cells after the first eight compiles hit Dynamo's recompile limit and silently measure eager execution.
 - The environment (commit, torch / CUDA / driver, GPU and VRAM, observed SM clock, power limit and draw,
   temperature, other processes on the card) is captured at the start and after each geometry, so a later run can
   be compared like for like. Clocks are not locked (that needs root); the observed range is recorded instead.
@@ -27,6 +29,7 @@ import subprocess
 import time
 
 import torch
+import torch._dynamo
 
 import spiky.lutorch_ex as lx
 from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
@@ -136,6 +139,10 @@ def _deployed(spec):
 
 def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
     row = {"cartridge": name, "dtype": str(dtype).replace("torch.", ""), "batch": B}
+    # Every cartridge of a class compiles the same _forward_impl code; across geometries and train / eval that exceeds
+    # Dynamo's recompile limit (8) within one process and later cells would silently run EAGER. Each cell starts from
+    # an empty compile cache, as a fresh process would.
+    torch._dynamo.reset()
     torch.cuda.empty_cache()
     try:
         m = (_deployed(spec) if make is None else make(spec)).cuda()
