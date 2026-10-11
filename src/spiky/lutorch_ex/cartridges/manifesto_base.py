@@ -126,7 +126,6 @@ class ManifestoLUT(MultiHeadLUT):
         weight_init_std: float = 1e-3,
         cmp_eps: float = 0.0,
         table_dropout_rate: float = 0.0,
-        device: Optional[torch.device] = None,
         index_dtype: Optional[torch.dtype] = None,
         **unknown,
     ):
@@ -170,6 +169,8 @@ class ManifestoLUT(MultiHeadLUT):
         self.register_buffer("powers", msb_first_powers(nap))
         # Group -> input/output head maps (the routing invariant).
         self.register_buffer("in_head", torch.arange(G, dtype=torch.long) % spec.h_in)
+        # out_head is not read by any forward (_route needs only h_out); it stays a buffer because it is in every
+        # saved state_dict and in the deployment export.
         self.register_buffer("out_head", torch.arange(G, dtype=torch.long) % spec.h_out)
 
         # Learnable cell tables W[g, t, c, :], c in [0, K). Default init: per-head CPU generator seeded
@@ -216,14 +217,10 @@ class ManifestoLUT(MultiHeadLUT):
 
     def _route(self, grp_out: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """Map per-group outputs ``[B, G, d_out]`` to ``[B, h_out, d_out]`` per the invariant."""
-        spec = self.spec
-        if spec.h_out == spec.n_groups:
+        # LUTSpec allows only these two cases: h_out == n_groups (per-head, fan-out) or h_out == 1 (fan-in).
+        if self.spec.h_out == self.spec.n_groups:
             return grp_out                                    # bijection (per-head / fan-out): no scatter
-        if spec.h_out == 1:
-            return grp_out.sum(dim=1, keepdim=True)           # fan-in: plain sum over groups
-        # Unreachable for valid specs (validated in LUTSpec); kept correct as a fallback.
-        y = grp_out.new_zeros(grp_out.shape[0], spec.h_out, spec.d_out)
-        return y.index_add_(1, self.out_head, grp_out)
+        return grp_out.sum(dim=1, keepdim=True)               # fan-in: plain sum over groups
 
     @abstractmethod
     def _combine(

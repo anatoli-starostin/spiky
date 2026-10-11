@@ -33,16 +33,12 @@ distribution does not.
 """
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
-
 import torch
 from torch.nn.utils.stateless import _reparametrize_module
 
 from . import _fallback
-from ._fused_manifesto_cuda import _MAX_CTA_THREADS, _launch, _row_launch
+from ._cuda_ext import _MAX_CTA_THREADS, CudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
 from ._fused_ops import validate_backend
-from ._native_ops import _CSRC
 from .confidence import ConfidenceLUT
 
 EXT_NAME = "lutorch_ex_fused_confidence"
@@ -50,50 +46,18 @@ EXT_NAME = "lutorch_ex_fused_confidence"
 _LOW_PREC = (torch.bfloat16, torch.float16)
 _CUDA_TABLE_DTYPES = (torch.float32, torch.bfloat16)
 
-
-def _env_int(name: str, default: int) -> int:
-    return int(os.environ.get(name, default))
-
-
-@dataclass
-class CudaKnobs:
-    """Launch configuration for the CUDA kernels (all explicit; sweep them with ``bench_fused_confidence.py``)."""
-    # Defaults = the sweep winner on both the RTX 5090 (sm_120) and the H100 (sm_90) at the d24 geometry.
-    fwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_FWD_THREADS", 64))
-    bwd_threads: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_BWD_THREADS", 64))
-    rows_per_cta: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_ROWS_PER_CTA", 4))
-    vec: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC", 4))
-    vec_atomics: bool = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC_ATOMICS", 1) == 1)
-    # Vector width for a bf16 table (1, 2, 4 or 8; 8 bf16 = the same 16-byte load as 4 fp32). 4 is the RTX 5090 sweep
-    # winner: 8 is slower, mostly in the backward (two float4 grad-W atomics per thread instead of one).
-    vec_bf16: int = field(default_factory=lambda: _env_int("LUTORCH_EX_CONF_CUDA_VEC_BF16", 4))
-
-
 _EXT = None
 _TRIED = False
 
 
 def fused_confidence_ext():
-    """Build/load the ``lutorch_ex_fused_confidence`` JIT extension; None if unavailable (never raises)."""
+    """Build/load the ``lutorch_ex_fused_confidence`` JIT extension; None if unavailable (never raises; the cause is
+    recorded for the fallback error)."""
     global _EXT, _TRIED
     if _TRIED:
         return _EXT
     _TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
-        _fallback.record_build_failure(EXT_NAME, disabled=True)
-        return None
-    if not torch.cuda.is_available():
-        _fallback.record_build_failure(EXT_NAME)
-        return None
-    try:
-        from torch.utils.cpp_extension import load
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        _EXT = load(name=EXT_NAME, sources=[os.path.join(_CSRC, "fused_confidence.cu")],
-                    extra_cflags=[f"-std={std}", "-O3"], extra_cuda_cflags=[f"-std={std}", "-O3"], verbose=False)
-    except Exception as e:
-        # Never raise here; classify WHY. FusedConfidenceLUT reports it loudly where it actually falls back.
-        _fallback.record_build_failure(EXT_NAME, e)
-        _EXT = None
+    _EXT = load_extension(EXT_NAME, ["fused_confidence.cu"])
     return _EXT
 
 

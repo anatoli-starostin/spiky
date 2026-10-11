@@ -35,9 +35,6 @@ _LOW_PREC = (torch.bfloat16, torch.float16)
 class FusedSoftSignLUT(SoftSignLUT):
     """Shared dispatch/addressing for the fused soft-sign twins. Abstract (no ``_forward_impl``)."""
 
-    #: bf16/fp16 support — a real H100 speedup keeps it True, otherwise flipped to False (drop).
-    _SUPPORTS_LOW_PRECISION = True
-
     #: Every backend the twins' _forward_impl dispatches on ('auto' picks one of the others per call).
     _BACKENDS = ("auto", "pure_eval", "tier1", "native")
 
@@ -47,7 +44,7 @@ class FusedSoftSignLUT(SoftSignLUT):
         self.backend = backend
 
     def _supports_low_precision(self) -> bool:
-        return self._SUPPORTS_LOW_PRECISION
+        return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads (native / tier-1 / pure_eval)
 
     def _needs_alt(self) -> bool:
         return self.training
