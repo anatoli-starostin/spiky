@@ -105,7 +105,8 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     a CUDA device.
   - The reference quantised path is slower than the old default, which took the op for n=2 eval and the monolith for
     n=2 training on CUDA; that speed now lives in `FusedQuantisedConfidenceLUT`. Measured in the #160 snapshot of
-    record; not to be fixed in #160.
+    record (`benchmarks/snapshot_160.md`): at 32,768 vectors eval 9.66 -> 10.09 ms (+4.5%), train total 48.56 ->
+    49.22 ms (+1.4%), train peak 3.64 -> 4.38 GiB; at 8,192 within 1%. Not to be fixed in #160.
 - **Consequence B:** `ManifestoLUT` is scaffolding only; its `forward()` raises `NotImplementedError`. The
   reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits

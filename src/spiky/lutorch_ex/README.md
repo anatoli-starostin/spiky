@@ -459,6 +459,9 @@ Scope today:
 
 ## Benchmarking
 
+The performance snapshot of record (every class, fp32 and bf16, 8k and 32k vectors, RTX 5090) is
+`benchmarks/snapshot_160.md`, made by `python -m spiky.lutorch_ex.bench_snapshot`.
+
 `spiky.lutorch_ex.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
 grid of batch sizes and devices. It reports the median and minimum milliseconds and the throughput:
 
