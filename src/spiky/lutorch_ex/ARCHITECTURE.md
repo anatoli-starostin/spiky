@@ -40,46 +40,47 @@
 - **E. The API is explicit class choice at construction.** You import and instantiate the fused cartridge, and it
   raises if the extension is not there. So the class names ARE the public API and need a convention we will not
   regret.
-  - **Naming: OPEN, Anatoly's call.** See the proposal below.
+  - **Naming: DECIDED, scheme 1 (the `Fused` prefix).** See below.
 
-## Naming - OPEN (proposal for Anatoly to accept or overrule)
+## Naming - DECIDED: the `Fused` prefix
 
-Class names in the code today:
+`<Family><Variant>LUT` for the reference, the same name with a `Fused` prefix for the CUDA implementation. After the
+fold, SoftSign's "Smooth" (the same variant as Manifesto's "Soft") becomes `Soft`.
 
-| | reference | fused |
+| family | reference | fused (CUDA only) |
 |---|---|---|
-| Gen-1 | `ManifestoHardLUT`, `ManifestoSoftLUT` (base `ManifestoLUT`) | `FusedManifestoHardLUT`, `FusedManifestoSoftLUT` |
-| Gen-2 | `SoftSignHardLUT`, `SoftSignSmoothLUT` (base `SoftSignLUT`) | `FusedSoftSignHardLUT`, `FusedSoftSignSmoothLUT` (base `FusedSoftSignLUT`) |
-| Gen-3 | `ConfidenceLUT`, `QuantisedConfidenceLUT`, `DeployedQuantisedConfidenceLUT` (inference only) | `FusedConfidenceLUT` (not exported from the package `__init__`) |
+| Manifesto, hard read + surrogate gradient | `ManifestoHardLUT(weight="rational" \| "softsign")` | `FusedManifestoHardLUT(weight=...)` |
+| Manifesto, blended read | `ManifestoSoftLUT(weight="rational" \| "softsign")` | `FusedManifestoSoftLUT(weight=...)` |
+| Confidence | `ConfidenceLUT` | `FusedConfidenceLUT` |
+| Confidence, quantised | `QuantisedConfidenceLUT` | none yet (`DeployedQuantisedConfidenceLUT` stays the inference-only deploy form) |
 
-SoftSign's "Smooth" is the same variant as Manifesto's "Soft" (the blend is the value), so after the fold every
-scheme keeps one word, `Soft`.
+- **Rejected:** an implementation suffix (`ManifestoHardRefLUT` / `ManifestoHardCudaLUT`), which renames every class,
+  and namespaces (`lutorch_ex.reference.X` / `lutorch_ex.cuda.X`), which change every import and make the two forms
+  identical in a `repr`.
+- **The `SoftSign*` names: no deprecated aliases** (Anatoly's preference) unless something outside the package
+  depends on them. No checkpoint and no model code does (state_dicts hold no class names; the learned temperatures
+  stay `log_soft_score_temp` / `log_select_temp`). The only references are documentation and experiment / profiling
+  scripts, listed in #160; final call pending.
 
-**Scheme 1 - `Fused` prefix (preferred).** `<Family><Variant>LUT` for the reference, the same name with a `Fused`
-prefix for the CUDA implementation:
-- `ManifestoHardLUT(weight=...)` / `FusedManifestoHardLUT(weight=...)`
-- `ManifestoSoftLUT(weight=...)` / `FusedManifestoSoftLUT(weight=...)`
-- `ConfidenceLUT` / `FusedConfidenceLUT`
-- `QuantisedConfidenceLUT` / no fused form yet; `DeployedQuantisedConfidenceLUT` unchanged
-- Migration: `SoftSign*` and `FusedSoftSign*` become deprecated aliases (`weight="softsign"`) for one release.
+## `LUTORCH_EX_NO_CUDA_EXT` under this spec
 
-**Scheme 2 - implementation suffix.** Both forms say what they are:
-- `ManifestoHardRefLUT` / `ManifestoHardCudaLUT`
-- `ManifestoSoftRefLUT` / `ManifestoSoftCudaLUT`
-- `ConfidenceRefLUT` / `ConfidenceCudaLUT`
-- `QuantisedConfidenceRefLUT`; `DeployedQuantisedConfidenceLUT`
-- Migration: every current name becomes a deprecated alias.
+Today it is read in three places:
+- `_cuda_ext.load_extension` skips building the five JIT extensions (`lprojection`, single-anchor input grad,
+  soft-sign surrogate, `fused_manifesto`, `fused_confidence`);
+- `_fallback.disabled_on_purpose` / `is_deliberate` turn the resulting fallback from a `NativeUnavailableError` into a
+  quiet, deliberate one;
+- `_pow2_int8` skips the p2 / int8 extension (with the deprecated alias `SPIKY_P2_CUDA_DISABLE`).
 
-**Scheme 3 - namespaces.** Same class name, the choice made by the import:
-- `lutorch_ex.reference.ManifestoHardLUT` / `lutorch_ex.cuda.ManifestoHardLUT`
-- `lutorch_ex.reference.ConfidenceLUT` / `lutorch_ex.cuda.ConfidenceLUT`, and so on
-- Migration: every import path changes, and the two forms look identical in a model's `repr`.
-
-**Argument for Scheme 1:** five classes already use it. Apart from the SoftSign fold it renames nothing, and the
-`Fused` prefix stays visible in every `repr` and checkpoint log.
-
-State_dict keys do not change under any scheme. The learned temperatures stay `log_soft_score_temp` /
-`log_select_temp`, present only with `weight="softsign"`.
+Under rules 3 and 5 it **disappears**:
+- A fused class raises when its kernel cannot load, so there is no fallback left to make quiet.
+- No reference class loads an extension (`ManifestoHard/Soft`, `SoftSignHard/Smooth` and `ConfidenceLUT` import
+  none today).
+- **The replacement lever** is explicit class choice (E): to run without the extension (CI, a CPU-only box),
+  construct the reference class. Tests of a fused class skip when its extension cannot load.
+- **One residual, outside this spec's families:** `QuantisedConfidenceLUT` registers the p2 op with a built-in pure
+  fallback, and `DeployedQuantisedConfidenceLUT` reads through the int8 extension. Until the quantised-cartridges
+  work splits these into a reference and a fused form, the variable (or `SPIKY_P2_CUDA_DISABLE`) still gates that one
+  path.
 
 ## Gaps between `main` and this spec (for the PRs that land it)
 
