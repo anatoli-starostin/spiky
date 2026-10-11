@@ -1,17 +1,22 @@
-"""Current performance metrics snapshot of every lutorch_ex cartridge on one CUDA device: forward latency,
-forward+backward latency and peak memory, at four geometries, in fp32 and (where the class accepts it) bf16.
+"""Current performance metrics snapshot of every lutorch_ex cartridge on one CUDA device, at four geometries, in fp32
+and (where the class accepts it) bf16. Four measurements per cell, each as median latency and peak memory:
+eval forward, train forward, train backward, train total (forward + backward).
 
     python -m spiky.lutorch_ex.bench_snapshot --out snapshot.json --md snapshot.md
 
 Methodology:
-- Every cell is built with a fixed seed (``seed=1`` tables, ``torch.manual_seed(0)`` inputs), in train mode for
-  forward+backward and in eval mode under ``no_grad`` for the forward.
+- Every cell is built with a fixed seed (``seed=1`` tables, ``torch.manual_seed(0)`` inputs). Eval forward runs in
+  eval mode under ``no_grad``; train forward / backward / total run in train mode, ``y.backward(go)``.
 - ``backend='auto'``, i.e. what a user gets; the backend that actually ran is recorded.
-- Per measurement, ``--warmup`` iterations are discarded. Then ``--repeats`` iterations are timed one by one with
-  CUDA events, with ``torch.cuda.synchronize()`` around each, and reported as the median and the inter-quartile
-  range (p25-p75).
-- Peak memory is ``max_memory_allocated`` during one extra forward+backward, above what was allocated before it
-  (inputs and parameters excluded).
+- Per mode, the first call (build / compile) and ``--warmup`` iterations are discarded. Then ``--repeats``
+  iterations are timed one by one with CUDA events, with ``torch.cuda.synchronize()`` around each, and reported as
+  the median and the inter-quartile range (p25-p75). A train iteration records three events (before the forward,
+  between forward and backward, after the backward), so train forward, train backward and train total come from the
+  same iterations.
+- Peak memory is ``max_memory_allocated`` above what was allocated before the step (inputs, parameters and their
+  gradients excluded), measured on one extra iteration: eval forward; train forward (including what it saves for
+  the backward); train backward (the peak while the backward runs, which still holds those saved tensors); train
+  total = the larger of the two.
 - A cell that runs out of memory, or that the class refuses (the reference cartridges reject bf16), is recorded as
   such, never dropped.
 - ``torch._dynamo.reset()`` before every cell: all cartridges of a class compile the same ``_forward_impl``, so without
@@ -56,6 +61,9 @@ CARTRIDGES = [
     ("FusedSoftSignSmoothLUT", lambda s: lx.FusedSoftSignSmoothLUT(s, seed=1)),
     ("ConfidenceLUT n=1", lambda s: lx.ConfidenceLUT(s, seed=1, read_top_n=1)),
     ("ConfidenceLUT n=2", lambda s: lx.ConfidenceLUT(s, seed=1, read_top_n=2)),
+    # The eval read the n-dependent default does NOT pick, forced, to keep the default checked against its alternative.
+    ("ConfidenceLUT n=1 bag_eval_read=True", lambda s: lx.ConfidenceLUT(s, seed=1, read_top_n=1, bag_eval_read=True)),
+    ("ConfidenceLUT n=2 bag_eval_read=False", lambda s: lx.ConfidenceLUT(s, seed=1, read_top_n=2, bag_eval_read=False)),
     ("FusedConfidenceLUT n=1", lambda s: FusedConfidenceLUT(s, seed=1, read_top_n=1)),
     ("FusedConfidenceLUT n=2", lambda s: FusedConfidenceLUT(s, seed=1, read_top_n=2)),
     ("QuantisedConfidenceLUT n=2", lambda s: lx.QuantisedConfidenceLUT(s, seed=1, read_top_n=2)),
@@ -116,8 +124,38 @@ def _time(fn, warmup: int, repeats: int):
         e1.record()
         torch.cuda.synchronize()
         ts.append(e0.elapsed_time(e1))
+    return _stats(ts)
+
+
+def _stats(ts):
     q = statistics.quantiles(ts, n=4)
     return {"median_ms": statistics.median(ts), "p25_ms": q[0], "p75_ms": q[2]}
+
+
+def _time_train(m, xx, go, warmup: int, repeats: int):
+    """Train forward, train backward and train total from the same timed iterations."""
+    def step(ev=None):
+        if ev:
+            ev[0].record()
+        y = m(xx)
+        if ev:
+            ev[1].record()
+        y.backward(go.to(y.dtype))
+        if ev:
+            ev[2].record()
+    for _ in range(warmup):
+        step()
+    torch.cuda.synchronize()
+    f, b, t = [], [], []
+    for _ in range(repeats):
+        ev = [torch.cuda.Event(enable_timing=True) for _ in range(3)]
+        torch.cuda.synchronize()
+        step(ev)
+        torch.cuda.synchronize()
+        f.append(ev[0].elapsed_time(ev[1]))
+        b.append(ev[1].elapsed_time(ev[2]))
+        t.append(ev[0].elapsed_time(ev[2]))
+    return _stats(f), _stats(b), _stats(t)
 
 
 def _backend(m, x) -> str:
@@ -157,29 +195,37 @@ def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
             with torch.no_grad():
                 return m(x)
         fwd()                                              # first call: build / compile outside the timing
-        row["forward"] = _time(fwd, warmup, repeats)
+        row["eval_forward"] = _time(fwd, warmup, repeats)
         row["backend_eval"] = _backend(m, x)
+        torch.cuda.synchronize()
+        base = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        fwd()
+        torch.cuda.synchronize()
+        row["eval_forward"]["peak_gib"] = (torch.cuda.max_memory_allocated() - base) / 2 ** 30
         if make is None:                                   # inference-only
-            row["forward_backward"] = None
-            row["peak_gib"] = None
             return row
         m.train()
         xx = x.clone().requires_grad_(True)
-
-        def fwd_bwd():
-            y = m(xx)
-            y.backward(go.to(y.dtype))
-        fwd_bwd()
-        row["forward_backward"] = _time(fwd_bwd, warmup, repeats)
+        y = m(xx)                                          # first call: build / compile outside the timing
+        y.backward(go.to(y.dtype))
+        del y
+        tf, tb, tt = _time_train(m, xx, go, warmup, repeats)
         row["backend_train"] = _backend(m, x)
+        # Peak memory: the gradients exist from here on, so they are part of the base, as in a training loop.
         torch.cuda.synchronize()
-        m.zero_grad(set_to_none=True)
-        xx.grad = None
         base = torch.cuda.memory_allocated()
         torch.cuda.reset_peak_memory_stats()
-        fwd_bwd()
+        y = m(xx)
         torch.cuda.synchronize()
-        row["peak_gib"] = (torch.cuda.max_memory_allocated() - base) / 2 ** 30
+        tf["peak_gib"] = (torch.cuda.max_memory_allocated() - base) / 2 ** 30
+        torch.cuda.reset_peak_memory_stats()
+        y.backward(go.to(y.dtype))
+        del y
+        torch.cuda.synchronize()
+        tb["peak_gib"] = (torch.cuda.max_memory_allocated() - base) / 2 ** 30
+        tt["peak_gib"] = max(tf["peak_gib"], tb["peak_gib"])
+        row["train_forward"], row["train_backward"], row["train_total"] = tf, tb, tt
     except torch.OutOfMemoryError:
         row["status"] = "out of memory"
     except TypeError as e:
@@ -191,19 +237,19 @@ def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
     return row
 
 
+MEASUREMENTS = ("eval_forward", "train_forward", "train_backward", "train_total")
+
+
 def markdown(env, rows, obs) -> str:
+    """One line per cell: median ms and peak GiB for each of the four measurements (the IQRs are in the JSON)."""
     def cell(t):
-        return "-" if not t else f"{t['median_ms']:.3f} ({t['p25_ms']:.3f}-{t['p75_ms']:.3f})"
-    out = ["| geometry | cartridge | dtype | backend (train / eval) | forward ms, median (IQR) | fwd+bwd ms, median (IQR) "
-           "| peak GiB |", "|---|---|---|---|---|---|---|"]
+        return "- | -" if not t or "peak_gib" not in t else f"{t['median_ms']:.3f} | {t['peak_gib']:.3f}"
+    head = " | ".join(f"{m.replace('_', ' ')} ms | GiB" for m in MEASUREMENTS)
+    out = [f"| geometry | cartridge | dtype | backend (train / eval) | {head} |", "|---" * (4 + 2 * len(MEASUREMENTS)) + "|"]
     for r in rows:
-        if "status" in r:
-            out.append(f"| {r['geometry']} | {r['cartridge']} | {r['dtype']} | - | {r['status']} | | |")
-            continue
-        be = f"{r.get('backend_train', '') or '-'} / {r.get('backend_eval', '') or '-'}"
-        pk = "-" if r.get("peak_gib") is None else f"{r['peak_gib']:.3f}"
-        out.append(f"| {r['geometry']} | {r['cartridge']} | {r['dtype']} | {be} | {cell(r['forward'])} | "
-                   f"{cell(r.get('forward_backward'))} | {pk} |")
+        be = r.get("status") or f"{r.get('backend_train', '') or '-'} / {r.get('backend_eval', '') or '-'}"
+        out.append(f"| {r['geometry']} | {r['cartridge']} | {r['dtype']} | {be} | "
+                   + " | ".join(cell(r.get(m)) for m in MEASUREMENTS) + " |")
     return "\n".join(out)
 
 
@@ -214,6 +260,8 @@ def main():
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--repeats", type=int, default=30)
     ap.add_argument("--geometries", default=",".join(GEOMETRIES))
+    ap.add_argument("--cartridges", default="", help="comma-separated cartridge names to keep (exact); default: all")
+    ap.add_argument("--dtypes", default="float32,bfloat16")
     a = ap.parse_args()
     env = environment()
     obs = {"start": observe()}
@@ -221,8 +269,11 @@ def main():
     for g in a.geometries.split(","):
         kw, B = GEOMETRIES[g]
         spec = LUTSpec(**kw)
+        keep = set(filter(None, a.cartridges.split(",")))
         for name, make in CARTRIDGES:
-            for dtype in (torch.float32, torch.bfloat16):
+            if keep and name not in keep:
+                continue
+            for dtype in (getattr(torch, d) for d in a.dtypes.split(",")):
                 r = measure(name, make, spec, B, dtype, a.warmup, a.repeats)
                 r["geometry"] = g
                 rows.append(r)
