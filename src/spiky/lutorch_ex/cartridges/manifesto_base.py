@@ -243,21 +243,6 @@ class ManifestoLUT(MultiHeadLUT):
         for the fused CUDA backward, which owns the temperatures' gradient."""
         return self.log_soft_score_temp.to(dtype).exp(), self.log_select_temp.to(dtype).exp()
 
-    def _star(self, z, u, j_star):
-        """``(a_local, b_local, a_global, b_global, u_signed_star)`` at the deciding bit ``j*``: the anchor
-        coordinates (local to the group's input row, and offset into the flat ``[B, G * d_in]`` row) and the signed
-        margin. Single mode: ``b`` is a placeholder (= ``a``); the input gradient scatters to ``a`` only."""
-        G, tph, nap, d_in = self.spec.n_groups, self.spec.tph, self.spec.nap, self.spec.d_in
-        B = z.shape[0]
-        je = j_star.unsqueeze(-1)
-        u_signed = u.gather(-1, je).squeeze(-1)
-        al = self.anchor_a.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        bl = al if self.single else (
-            self.anchor_b.unsqueeze(0).expand(B, G, tph, nap).gather(-1, je).squeeze(-1)
-        )
-        off = torch.arange(G, device=z.device).view(1, G, 1) * d_in
-        return al, bl, al + off, bl + off, u_signed
-
     def _route(self, grp_out: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         """Map per-group outputs ``[B, G, d_out]`` to ``[B, h_out, d_out]`` per the invariant."""
         # LUTSpec allows only these two cases: h_out == n_groups (per-head, fan-out) or h_out == 1 (fan-in).

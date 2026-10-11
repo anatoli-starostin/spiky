@@ -71,25 +71,9 @@ def log2_score(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torc
     return torch.log2(m.sum(dim=-1)) + (g + gamma * F.logsigmoid(beta * m).sum(dim=-1)) / LN2
 
 
-def q_exponent(mv: torch.Tensor, tau: torch.Tensor) -> torch.Tensor:
-    """q = clamp(floor(2 u* / (tau ln 2) + 1/2), 0, J) as a float tensor of integers. mv = u* (the smallest margin)."""
-    return torch.clamp(torch.floor(mv * (2.0 / (tau * LN2)) + 0.5), 0, J)
-
-
 def c_q(q: torch.Tensor) -> torch.Tensor:
     """c_q = log2(1 + 2^-q) for q < C, else 0."""
     return torch.where(q < C, torch.log2(1.0 + torch.pow(2.0, -q)), torch.zeros_like(q))
-
-
-def blend_candidates(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor):
-    """The two cells a table reads. d [..., NAP] margins (differentiable), index [...] packed address (MSB-first).
-    Returns m = |d| [..., NAP], mv = min margin [..., 1] (differentiable), idx [..., 2] = [c1, c2] where c2 flips the
-    least certain bit."""
-    m = d.abs()
-    mv, mj = m.min(dim=-1, keepdim=True)
-    bsel = (torch.gather(d, -1, mj) > 0).to(torch.int64)
-    idx = torch.cat([index.unsqueeze(-1), index.unsqueeze(-1) + powers[mj] * (1 - 2 * bsel)], dim=-1)
-    return m, mv, idx
 
 
 def _left_fold(t: torch.Tensor) -> torch.Tensor:
