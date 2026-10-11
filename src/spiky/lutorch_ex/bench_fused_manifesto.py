@@ -8,21 +8,18 @@ dtype (table and input in that dtype): forward with grad enabled, and forward + 
 (first round). An arm whose backend is not offered by the installed cartridge class is skipped and said so; an arm
 that fails (OOM, dtype refusal) is reported with its error, never silently dropped.
 
-SPIKY_LUTORCH_REQUIRE_NATIVE=1 is set by default, so an involuntary fallback raises instead of being timed; every row
-carries the backend that actually ran (``_fallback.backend_of``).
+An involuntary fallback raises (cartridges/_fallback.py) instead of being timed; every row carries the backend that
+actually ran (``_fallback.backend_of``).
 """
 import argparse
-import os
 import statistics
 
-os.environ.setdefault("SPIKY_LUTORCH_REQUIRE_NATIVE", "1")
+import torch
 
-import torch  # noqa: E402
-
-import spiky.lutorch_ex as lx  # noqa: E402
-from spiky.lutorch_ex.cartridges._fallback import backend_of  # noqa: E402
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT  # noqa: E402
-from spiky.lutorch_ex.lut_spec import LUTSpec  # noqa: E402
+import spiky.lutorch_ex as lx
+from spiky.lutorch_ex.cartridges._fallback import backend_of
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
+from spiky.lutorch_ex.lut_spec import LUTSpec
 
 GEOM = dict(h=16, d=48, tph=64, nap=8)
 KW = dict(seed=1, table_dropout_rate=0.2)
@@ -99,8 +96,7 @@ def main():
     arms = [r for r in ARMS if not a.only or any(s in r[0] for s in a.only.split(","))]
     dtypes = [getattr(torch, s) for s in a.dtypes.split(",")]
     print(f"device {torch.cuda.get_device_name()}  torch {torch.__version__}  geometry h{h} d{d} tph{tph} nap{nap}  "
-          f"tokens {a.tokens}  rounds {a.rounds}  table dropout {KW['table_dropout_rate']}  "
-          f"SPIKY_LUTORCH_REQUIRE_NATIVE={os.environ.get('SPIKY_LUTORCH_REQUIRE_NATIVE')}")
+          f"tokens {a.tokens}  rounds {a.rounds}  table dropout {KW['table_dropout_rate']}")
     res, notes = {}, {}
     for r in range(a.rounds):
         for dt in dtypes:

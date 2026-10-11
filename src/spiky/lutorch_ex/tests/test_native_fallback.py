@@ -1,5 +1,7 @@
-"""The loud fallback warning (cartridges/_fallback.py): each cause it claims to detect is detected from the evidence
-for it, explicit backend choices stay quiet, strict mode raises, and the warning fires once per process per cause."""
+"""The involuntary-fallback error (cartridges/_fallback.py): each cause it claims to detect is detected from the
+evidence for it, an involuntary fallback raises NativeUnavailableError, deliberate choices (LUTORCH_EX_NO_CUDA_EXT=1,
+explicit backends, CPU inputs) stay quiet, and the log + warning path (reachable only with strict() patched off)
+fires once per process per cause."""
 import importlib.util
 import logging
 import warnings
@@ -19,9 +21,15 @@ CUDA = torch.cuda.is_available()
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
     _fallback._reset_for_tests()
-    monkeypatch.delenv(_fallback.STRICT_ENV, raising=False)
+    monkeypatch.delenv("LUTORCH_EX_NO_CUDA_EXT", raising=False)   # these tests set the deliberate case themselves
     yield
     _fallback._reset_for_tests()
+
+
+@pytest.fixture
+def lenient(monkeypatch):
+    """Patch strictness off (not a user-facing mode): the only way to reach the once-per-cause log + warning path."""
+    monkeypatch.setattr(_fallback, "strict", lambda: False)
 
 
 @pytest.fixture
@@ -92,13 +100,29 @@ def test_unrecognised_errors_are_not_misattributed(cuda_present, tmp_path, monke
     assert classify(OSError("libcuda.so: cannot open shared object file")).kind == "unclassified"
 
 
-# -- reporting: loud, once per cause, strict raises, deliberate is quiet ---------------------------------------------
+# -- reporting: an involuntary fallback raises; deliberate is quiet; (patched lenient) once per cause --------------
 
 def _report():
     _fallback.report_involuntary_fallback("FusedManifestoHardLUT", "lutorch_ex_lprojection", "auto", "tier1")
 
 
-def test_banner_fires_once_per_cause_via_warnings_and_logging(cuda_present, caplog):
+BANNER_NEEDLES = ("FAST CUDA PATH IS NOT AVAILABLE", "[setuptools_missing]", "pip install setuptools",
+                  "ANY PERFORMANCE NUMBER MEASURED IN THIS STATE IS INVALID", "6.6 ms ('cuda') vs 53.9 ms (native",
+                  "LUTORCH_EX_NO_CUDA_EXT=1")
+
+
+def test_an_involuntary_fallback_raises_by_default_with_the_banner(cuda_present):
+    assert _fallback.strict() is True                           # not configurable
+    record_build_failure("lutorch_ex_lprojection", ModuleNotFoundError("No module named 'setuptools'",
+                                                                       name="setuptools"))
+    for _ in range(2):                                          # every time, not once
+        with pytest.raises(NativeUnavailableError) as e:
+            _report()
+        for needle in BANNER_NEEDLES:
+            assert needle in str(e.value), needle
+
+
+def test_banner_fires_once_per_cause_via_warnings_and_logging(cuda_present, caplog, lenient):
     record_build_failure("lutorch_ex_lprojection", ModuleNotFoundError("No module named 'setuptools'",
                                                                        name="setuptools"))
     with caplog.at_level(logging.ERROR, logger="spiky.lutorch_ex"):
@@ -109,14 +133,12 @@ def test_banner_fires_once_per_cause_via_warnings_and_logging(cuda_present, capl
     msgs = [str(x.message) for x in w if issubclass(x.category, RuntimeWarning)]
     assert len(msgs) == 1
     text = msgs[0]
-    for needle in ("FAST CUDA PATH IS NOT AVAILABLE", "[setuptools_missing]", "pip install setuptools",
-                   "ANY PERFORMANCE NUMBER MEASURED IN THIS STATE IS INVALID", "6.5 ms vs tier1 50.7 ms",
-                   "SPIKY_LUTORCH_REQUIRE_NATIVE=1"):
+    for needle in BANNER_NEEDLES:
         assert needle in text, needle
     assert sum("FAST CUDA PATH" in r.getMessage() for r in caplog.records) == 1
 
 
-def test_a_different_cause_or_extension_warns_again(cuda_present):
+def test_a_different_cause_or_extension_warns_again(cuda_present, lenient):
     record_build_failure("lutorch_ex_lprojection", RuntimeError("Ninja is required to load C++ extensions"))
     record_build_failure("lutorch_ex_fused_confidence", RuntimeError("Ninja is required to load C++ extensions"))
     with warnings.catch_warnings(record=True) as w:
@@ -126,11 +148,21 @@ def test_a_different_cause_or_extension_warns_again(cuda_present):
     assert len([x for x in w if issubclass(x.category, RuntimeWarning)]) == 2
 
 
-def test_strict_mode_raises_with_the_same_text(cuda_present, monkeypatch):
-    monkeypatch.setenv(_fallback.STRICT_ENV, "1")
+def test_the_error_names_each_cause(cuda_present):
     record_build_failure("lutorch_ex_lprojection", RuntimeError("Ninja is required to load C++ extensions"))
     with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
         _report()
+
+
+def test_the_env_escape_hatch_is_quiet_even_without_a_recorded_cause(cuda_present, monkeypatch):
+    """LUTORCH_EX_NO_CUDA_EXT=1 is honoured directly: the loader records 'disabled' only once per process, so the
+    escape hatch must not depend on that record (e.g. after the registry was reset)."""
+    monkeypatch.setenv("LUTORCH_EX_NO_CUDA_EXT", "1")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        _report()                                               # nothing recorded for lutorch_ex_lprojection
+    assert not [x for x in w if issubclass(x.category, RuntimeWarning)]
+    assert _fallback.is_deliberate("lutorch_ex_lprojection")
 
 
 def test_disabled_by_env_is_deliberate_and_quiet():
@@ -162,7 +194,29 @@ def no_native(monkeypatch):
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 @pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT])
-def test_manifesto_auto_fallback_warns_once_and_records_provenance(cls, no_native):
+def test_manifesto_auto_fallback_raises_by_default(cls, no_native):
+    m = cls(_spec(), seed=0).cuda().train()
+    with pytest.raises(NativeUnavailableError, match=r"\[setuptools_missing\]"):
+        m(torch.randn(64, 4, 8, device="cuda"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT])
+def test_manifesto_auto_with_extensions_disabled_falls_back_quietly(cls, no_native):
+    """LUTORCH_EX_NO_CUDA_EXT=1 (recorded as a deliberate cause): the slow path on purpose, no error, no warning."""
+    for ext in ("lutorch_ex_lprojection", _fused_manifesto_cuda.EXT_NAME):
+        record_build_failure(ext, disabled=True)
+    m = cls(_spec(), seed=0).cuda().train()
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        m(torch.randn(64, 4, 8, device="cuda"))
+    assert not [x for x in w if "FAST CUDA PATH" in str(x.message)]
+    assert _fallback.backend_of(m) == "tier1"
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT])
+def test_manifesto_auto_fallback_warns_once_and_records_provenance(cls, no_native, lenient):
     m = cls(_spec(), seed=0).cuda().train()
     x = torch.randn(64, 4, 8, device="cuda")          # small batch: Soft's auto would pick native here
     with warnings.catch_warnings(record=True) as w:
@@ -191,14 +245,6 @@ def test_manifesto_explicit_native_unavailable_raises_with_cause(cls, no_native)
         m(torch.randn(64, 4, 8, device="cuda"))
 
 
-@pytest.mark.skipif(not CUDA, reason="needs CUDA")
-def test_manifesto_strict_mode_raises(no_native, monkeypatch):
-    monkeypatch.setenv(_fallback.STRICT_ENV, "1")
-    m = lx.FusedManifestoHardLUT(_spec(), seed=0).cuda().train()
-    with pytest.raises(NativeUnavailableError):
-        m(torch.randn(64, 4, 8, device="cuda"))
-
-
 def test_cpu_input_is_a_deliberate_path(no_native):
     m = lx.FusedManifestoHardLUT(_spec(), seed=0).train()
     with warnings.catch_warnings(record=True) as w:
@@ -215,7 +261,15 @@ def no_fused_confidence(monkeypatch):
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
-def test_fused_confidence_auto_fallback_warns_with_cause(no_fused_confidence):
+def test_fused_confidence_auto_fallback_raises_by_default(no_fused_confidence):
+    m = fused_confidence.FusedConfidenceLUT(_spec(), seed=0).cuda().train()
+    with pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
+        m(torch.randn(32, 4, 8, device="cuda"))
+    assert "13.0" in str(e.value)
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_fused_confidence_auto_fallback_warns_with_cause(no_fused_confidence, lenient):
     m = lx.FusedConfidenceLUT(_spec(), seed=0).cuda().train() if hasattr(lx, "FusedConfidenceLUT") else \
         fused_confidence.FusedConfidenceLUT(_spec(), seed=0).cuda().train()
     with warnings.catch_warnings(record=True) as w:

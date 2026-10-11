@@ -138,12 +138,12 @@ def cuda_ok(module, x: torch.Tensor) -> bool:
 
 
 def auto_wants_cuda(module, x: torch.Tensor, next_backend: str) -> bool:
-    """'auto' (train and eval): True when the 'cuda' backend can run for this input. Otherwise 'auto' moves on to
-    ``next_backend``, and the three reasons are kept apart:
-    - the extension is missing / failed to build for a case the kernels cover: reported loudly with its classified
-      cause (once per process), or NativeUnavailableError under SPIKY_LUTORCH_REQUIRE_NATIVE=1;
-    - not a case the kernels cover (CPU input, fp64, fp16 table, nap > 16, ...): quiet, a debug log line only;
-    - no CUDA device on this machine: quiet, a debug log line only."""
+    """'auto' (train and eval): True when the 'cuda' backend can run for this input. Otherwise the three reasons are
+    kept apart:
+    - the extension is missing / failed to build for a case the kernels cover: NativeUnavailableError naming the
+      classified cause (unless disabled on purpose, LUTORCH_EX_NO_CUDA_EXT=1: then quietly ``next_backend``);
+    - not a case the kernels cover (CPU input, fp64, fp16 table, nap > 16, ...): ``next_backend``, a debug log line;
+    - no CUDA device on this machine: ``next_backend``, a debug log line."""
     r = _ineligible(module, x)
     if r is None:
         if fused_manifesto_ext() is not None:

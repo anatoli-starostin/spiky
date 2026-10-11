@@ -10,7 +10,7 @@ from spiky.lutorch_ex.lut_spec import LUTSpec
 from spiky.lutorch_ex.cartridges.fused_confidence import EXT_NAME
 from spiky.lutorch_ex.tests._native_required import require_extension
 
-# No CUDA device: skip. A CUDA device without the extension: fail, or skip under SPIKY_LUTORCH_DOESNT_REQUIRE_NATIVE=1.
+# No CUDA device: skip. A CUDA device without the extension: fail (skip if disabled on purpose).
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 
 

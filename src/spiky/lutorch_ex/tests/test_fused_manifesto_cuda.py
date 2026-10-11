@@ -5,6 +5,8 @@ and, inside ProjectionMHL, the projection gradients) for both cartridges, both a
 dropout, fp32 and bf16, at small geometries and at the canonical h16 d48 tph64 nap8. The weight-gradient scatter uses
 fp32 atomics, so run-to-run results differ in summation order; that is measured here, not assumed.
 """
+import warnings
+
 import pytest
 import torch
 
@@ -16,7 +18,7 @@ from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_avail
 from spiky.lutorch_ex.lut_spec import LUTSpec
 from spiky.lutorch_ex.tests._native_required import optional_extension, require_extension
 
-# No CUDA device: skip. A CUDA device without the extension: fail, or skip under SPIKY_LUTORCH_DOESNT_REQUIRE_NATIVE=1.
+# No CUDA device: skip. A CUDA device without the extension: fail (skip if disabled on purpose).
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
 
 
@@ -314,37 +316,47 @@ def test_fp16_table_has_no_kernel_and_auto_falls_back_quietly(recwarn):
     assert not [w for w in recwarn if "FAST CUDA PATH" in str(w.message)]
 
 
-def test_missing_extension_is_reported_then_auto_moves_on(monkeypatch):
-    """The extension 'fails to build': auto reports the classified cause once and runs the next backend; strict mode
-    raises instead; an explicit backend='cuda' raises with the cause."""
+def test_missing_extension_raises_and_deliberate_disable_moves_on(monkeypatch):
+    """The extension 'fails to build': auto raises with the classified cause, in training and in eval, as does an
+    explicit backend='cuda'. Disabled on purpose (LUTORCH_EX_NO_CUDA_EXT=1): auto quietly runs the next backend.
+    With strict() patched off, auto warns once and moves on (the log + warning path)."""
     _fallback._reset_for_tests()
     monkeypatch.setattr(fmc, "_TRIED", True)
     monkeypatch.setattr(fmc, "_EXT", None)
     _fallback.record_build_failure(fmc.EXT_NAME, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
     spec = _spec("mid")
     x = torch.randn(8, spec.h_in, spec.d_in, device="cuda")
-    monkeypatch.delenv(_fallback.STRICT_ENV, raising=False)
-    m = HARD(spec).cuda().train()
-    with pytest.warns(RuntimeWarning, match="lutorch_ex_fused_manifesto"):
-        m(x)
-    assert m.last_backend in ("native", "tier1")
-    monkeypatch.setenv(_fallback.STRICT_ENV, "1")
-    with pytest.raises(_fallback.NativeUnavailableError, match="setuptools_missing"):
-        SOFT(spec).cuda().train()(x)
-    monkeypatch.delenv(_fallback.STRICT_ENV)
+    for cls in (HARD, SOFT):
+        with pytest.raises(_fallback.NativeUnavailableError, match="setuptools_missing"):
+            cls(spec).cuda().train()(x)
+        with torch.no_grad(), pytest.raises(_fallback.NativeUnavailableError, match="setuptools_missing"):
+            cls(spec).cuda().eval()(x)
     with pytest.raises(_fallback.NativeUnavailableError, match="lutorch_ex_fused_manifesto"):
         HARD(spec, backend="cuda").cuda().train()(x)
-    # eval: the same loud fallback (to the previous eval path), and a hard error under the strict flag
-    _fallback._reset_for_tests()
-    _fallback.record_build_failure(fmc.EXT_NAME, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
-    e = SOFT(spec).cuda().eval()
-    with torch.no_grad():
+    # patched lenient: the once-per-cause warning, then the next backend (training: native/tier1; eval: pure)
+    with monkeypatch.context() as mp:
+        mp.setattr(_fallback, "strict", lambda: False)
+        m = HARD(spec).cuda().train()
         with pytest.warns(RuntimeWarning, match="lutorch_ex_fused_manifesto"):
+            m(x)
+        assert m.last_backend in ("native", "tier1")
+        _fallback._reset_for_tests()
+        _fallback.record_build_failure(fmc.EXT_NAME, ModuleNotFoundError("No module named 'setuptools'",
+                                                                         name="setuptools"))
+        e = SOFT(spec).cuda().eval()
+        with torch.no_grad(), pytest.warns(RuntimeWarning, match="lutorch_ex_fused_manifesto"):
             e(x)
         assert e.last_backend == "pure"
-        monkeypatch.setenv(_fallback.STRICT_ENV, "1")
-        with pytest.raises(_fallback.NativeUnavailableError, match="setuptools_missing"):
-            HARD(spec).cuda().eval()(x)
+    # deliberately disabled: quiet, and auto runs the next backend
+    _fallback._reset_for_tests()
+    _fallback.record_build_failure(fmc.EXT_NAME, disabled=True)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        e = SOFT(spec).cuda().eval()
+        with torch.no_grad():
+            e(x)
+    assert not [x_ for x_ in w if "FAST CUDA PATH" in str(x_.message)]
+    assert e.last_backend == "pure"
     _fallback._reset_for_tests()
 
 

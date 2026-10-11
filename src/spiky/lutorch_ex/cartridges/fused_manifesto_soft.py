@@ -87,10 +87,10 @@ class FusedManifestoSoftLUT(ManifestoLUT):
             return "pure"                                    # eval small/mid: compiled read wins
         if native_available(x.device):
             return "native"                                  # train small/mid: native step wins (fp32/bf16/fp16)
-        # Here native was the choice and is unavailable: on a CUDA input that is an involuntary fallback (reported
-        # once per process, or raised under SPIKY_LUTORCH_REQUIRE_NATIVE=1). The large-batch tier1 above is a
-        # deliberate heuristic and stays quiet. Already reported above when the 'cuda' kernels were the first choice
-        # for this input (one banner per fallback).
+        # Here native was the choice and is unavailable: on a CUDA input that is an involuntary fallback
+        # (NativeUnavailableError; quiet if disabled on purpose). The large-batch tier1 above is a deliberate
+        # heuristic and stays quiet. Already reported above when the 'cuda' kernels were the first choice for this
+        # input (one report per fallback).
         if not shape_ok(self, x):
             require_native_or_report(type(self).__name__, x, "auto", "tier1")
         return "tier1" if x.is_cuda else "pure"

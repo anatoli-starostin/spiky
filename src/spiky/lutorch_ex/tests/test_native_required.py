@@ -1,6 +1,7 @@
 """The CUDA-extension test gates (tests/_native_required.py), every branch exercised directly: no CUDA device ->
-skip; a CUDA device with the extension unavailable -> fail by default, naming the extension and its recorded cause,
-or skip under SPIKY_LUTORCH_DOESNT_REQUIRE_NATIVE=1. Runs anywhere (the CUDA probe is patched)."""
+skip; a CUDA device with the extension deliberately disabled (LUTORCH_EX_NO_CUDA_EXT=1) -> skip; with it unavailable
+for any other reason -> fail, naming the extension and its recorded cause. Runs anywhere (the CUDA probe is
+patched)."""
 import pytest
 import torch
 
@@ -12,52 +13,56 @@ EXT = "lutorch_ex_test_ext"
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch):
-    monkeypatch.delenv(nr.OPT_OUT_ENV, raising=False)
-    monkeypatch.delenv(_fallback.STRICT_ENV, raising=False)
     _fallback._reset_for_tests()
+    monkeypatch.delenv("LUTORCH_EX_NO_CUDA_EXT", raising=False)   # the deliberate case is set per test
     yield
     _fallback._reset_for_tests()
 
 
-def _cuda(monkeypatch, present):
-    """Patch the CUDA probe, then record a setuptools build failure for EXT (the cause classifier probes CUDA too)."""
+def _cuda(monkeypatch, present, deliberate=False):
+    """Patch the CUDA probe, then record EXT as unavailable: disabled on purpose, or a setuptools build failure (the
+    cause classifier probes CUDA too, hence the order)."""
     monkeypatch.setattr(torch.cuda, "is_available", lambda: present)
-    _fallback.record_build_failure(EXT, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
+    if deliberate:
+        _fallback.record_build_failure(EXT, disabled=True)
+    else:
+        _fallback.record_build_failure(EXT, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
 
 
-@pytest.mark.parametrize("opt_out", [False, True])
-def test_no_cuda_device_is_always_a_skip(monkeypatch, opt_out):
-    _cuda(monkeypatch, False)
-    if opt_out:
-        monkeypatch.setenv(nr.OPT_OUT_ENV, "1")
+@pytest.mark.parametrize("deliberate", [False, True])
+def test_no_cuda_device_is_always_a_skip(monkeypatch, deliberate):
+    _cuda(monkeypatch, False, deliberate)
     with pytest.raises(pytest.skip.Exception, match="needs a CUDA device"):
         nr.require_extension(False, EXT)
 
 
-def test_cuda_without_the_extension_fails_by_default_naming_extension_and_cause(monkeypatch):
+def test_cuda_without_the_extension_fails_naming_extension_and_cause(monkeypatch):
     _cuda(monkeypatch, True)
     with pytest.raises(pytest.fail.Exception) as e:
         nr.require_extension(False, EXT)
-    msg = str(e.value)
-    assert EXT in msg and "[setuptools_missing]" in msg and nr.OPT_OUT_ENV in msg
+    assert EXT in str(e.value) and "[setuptools_missing]" in str(e.value)
     with pytest.raises(pytest.fail.Exception, match=r"\[setuptools_missing\]"):
         nr.optional_extension(False, EXT)
 
 
-def test_cuda_without_the_extension_skips_under_the_opt_out(monkeypatch):
-    _cuda(monkeypatch, True)
-    monkeypatch.setenv(nr.OPT_OUT_ENV, "1")
-    with pytest.raises(pytest.skip.Exception, match=r"lutorch_ex_test_ext CUDA extension is unavailable: \[setuptools"):
+def test_cuda_with_the_extension_deliberately_disabled_skips(monkeypatch):
+    _cuda(monkeypatch, True, deliberate=True)
+    with pytest.raises(pytest.skip.Exception, match=r"lutorch_ex_test_ext CUDA extension is unavailable: \[disabled\]"):
         nr.require_extension(False, EXT)
     assert nr.optional_extension(False, EXT) is False
 
 
-def test_the_runtime_strict_mode_does_not_change_the_gates(monkeypatch):
-    """SPIKY_LUTORCH_REQUIRE_NATIVE is the library's runtime strict mode, not a test gate."""
-    _cuda(monkeypatch, True)
-    monkeypatch.setenv(_fallback.STRICT_ENV, "1")
-    monkeypatch.setenv(nr.OPT_OUT_ENV, "1")
-    with pytest.raises(pytest.skip.Exception):
+def test_the_env_escape_hatch_skips_even_without_a_recorded_cause(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setenv("LUTORCH_EX_NO_CUDA_EXT", "1")
+    with pytest.raises(pytest.skip.Exception, match="no cause recorded"):
+        nr.require_extension(False, EXT)
+
+
+def test_no_recorded_cause_is_a_failure(monkeypatch):
+    """An unavailable extension whose loader recorded nothing is not deliberate: it fails rather than skips."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    with pytest.raises(pytest.fail.Exception, match="no cause recorded"):
         nr.require_extension(False, EXT)
 
 

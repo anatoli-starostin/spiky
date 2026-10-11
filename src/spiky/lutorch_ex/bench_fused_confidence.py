@@ -12,19 +12,15 @@ from __future__ import annotations
 
 import argparse
 import itertools
-import os
 import statistics
 
 import torch
 
-# A timing run must never silently measure a slow fallback: an involuntary fallback is a hard error here
-# (cartridges/_fallback.py), unless the caller explicitly set the variable.
-os.environ.setdefault("SPIKY_LUTORCH_REQUIRE_NATIVE", "1")
-
-from spiky.lutorch_ex.cartridges._fallback import backend_of  # noqa: E402
-from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT  # noqa: E402
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs  # noqa: E402
-from spiky.lutorch_ex.lut_spec import LUTSpec  # noqa: E402
+# A timing run never silently measures a slow fallback: an involuntary fallback raises (cartridges/_fallback.py).
+from spiky.lutorch_ex.cartridges._fallback import backend_of
+from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
+from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs
+from spiky.lutorch_ex.lut_spec import LUTSpec
 
 
 def provenance(mod) -> str:

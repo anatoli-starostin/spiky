@@ -161,12 +161,10 @@ def benchmark(
 ) -> list[BenchRow]:
     """Benchmark a cartridge over the (operation x batch x device) grid. See module docstring.
 
-    Runs with SPIKY_LUTORCH_REQUIRE_NATIVE=1 unless the caller set it, so an involuntary fallback to a slow path
-    is an error cell, never a silently slow timing; every ok row carries the backend that actually ran."""
-    from .cartridges._fallback import strict_native
-    with strict_native():
-        return _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats,
-                          measure_cuda)
+    An involuntary fallback to a slow path raises (cartridges/_fallback.py), so it is an error cell, never a silently
+    slow timing; every ok row carries the backend that actually ran."""
+    return _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats,
+                      measure_cuda)
 
 
 def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats, measure_cuda):

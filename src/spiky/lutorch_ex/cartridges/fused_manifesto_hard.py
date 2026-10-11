@@ -75,7 +75,7 @@ class FusedManifestoHardLUT(ManifestoLUT):
         if has_native:
             return "native"                           # train: native backward (fp32/bf16/fp16, both modes)
         # train (CPU / no native): embedding_bag + STE. On a CUDA input this is an involuntary fallback: report its
-        # cause loudly (once per process), or raise under SPIKY_LUTORCH_REQUIRE_NATIVE=1. Already reported above when
+        # cause: NativeUnavailableError (quiet if disabled on purpose). Already reported above when
         # the 'cuda' kernels were the first choice for this input (one banner per fallback, naming 'tier1').
         if not shape_ok(self, x):
             require_native_or_report(type(self).__name__, x, "auto", "tier1")
