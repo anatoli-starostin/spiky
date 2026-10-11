@@ -100,8 +100,6 @@ def _devs_dtypes(Cls=None):
 @pytest.mark.parametrize("Cls", ALL)
 def test_dropout_effect_and_eval_noop(Cls):
     for device, dtype in _devs_dtypes(Cls):
-        if Cls is QuantisedConfidenceLUT and device == "cpu":
-            continue  # quant native-op path is CUDA; CPU quant is covered by the fused==pure test below
         spec = _spec()
         m = _build(Cls, spec, device, dtype, 0.3)
         x = torch.randn(8, spec.h_in, spec.d_in, device=device, dtype=dtype, requires_grad=True)
@@ -122,8 +120,6 @@ def test_dropout_effect_and_eval_noop(Cls):
 def test_dropout_unbiased_in_expectation(Cls):
     # inverted dropout: E[output] over masks == the no-dropout output.
     device, dtype = ("cuda", torch.float32) if _CUDA else ("cpu", torch.float64)
-    if Cls is QuantisedConfidenceLUT and device == "cpu":
-        pytest.skip("quant native path is CUDA-only")
     if _is_fused(Cls):
         requires_extension("manifesto")
     spec = _spec()
@@ -186,8 +182,6 @@ def test_fused_matches_pure_with_dropout_value_and_grad(Fused, Pure):
 def test_dropped_table_gets_zero_grad(Cls):
     # A table dropped (mask 0) for ALL samples must receive zero weight gradient at its addressed cells.
     device, dtype = ("cuda", torch.float32) if _CUDA else ("cpu", torch.float64)
-    if Cls is QuantisedConfidenceLUT and device == "cpu":
-        pytest.skip("quant native path is CUDA-only")
     if _is_fused(Cls):
         requires_extension("manifesto")
     spec = _spec()

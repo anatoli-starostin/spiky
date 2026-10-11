@@ -525,6 +525,8 @@ lutorch_ex/
 ├── deploy.py            export_deployment / load_deployment
 ├── deploy_registry.py   format tag -> rebuilder registry
 ├── bench.py             the benchmark harness
+├── bench_snapshot.py    the performance snapshot of record (every class, one fresh process per cell)
+├── bench_fused_confidence.py   FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
 ├── cartridges/
 │   ├── manifesto_base.py            ManifestoLUT: tables, anchors, addressing, routing, cell TV, table dropout
 │   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
@@ -537,6 +539,7 @@ lutorch_ex/
 │   ├── reference_base.py            ReferenceForward: the reference classes' (compiled) forward
 │   ├── confidence_base.py           ConfidenceBase: ConfidenceLUT / FusedConfidenceLUT parameters and scaffolding
 │   ├── _fused_ops.py                the reference reads (embedding_bag)
+│   ├── _fused_read.py               ConfidenceLUT's compiled score-weighted read (one autograd Function)
 │   ├── _fused_manifesto_cuda.py     FusedManifesto* glue for csrc/fused_manifesto.cu
 │   ├── _cuda_ext.py                 the JIT build of every extension, the kernel launch knobs and launch fit
 │   ├── _fallback.py                 classified "extension unavailable" errors (NativeUnavailableError)

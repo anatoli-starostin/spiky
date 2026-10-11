@@ -87,7 +87,12 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   case the kernels do not cover names the case and the reference class, a missing extension names the classified
   cause. The `pure` / `pure_eval` / `tier1` / `native` paths are deleted, with `_native_ops.py`,
   `_native_softsign.py` and their CUDA sources (`lprojection`, single-anchor input grad, `softsign_surrogate_grad`).
-  `LUTORCH_EX_NO_CUDA_EXT` is gone (above).
+  `LUTORCH_EX_NO_CUDA_EXT` is gone (above). `LUTORCH_EX_NO_COMPILE=1` stays, deliberately: it runs the reference
+  classes uncompiled -- the same class and the same maths, no implementation choice -- for when torch.compile is in
+  the way (debugging, an unsupported toolchain, a slow cold compile). It does not select between implementations, so
+  the class still is the implementation (rule 5). The other environment reads are build or launch settings of the
+  same code: `TORCH_EXTENSIONS_DIR`, `SPIKY_CXX_STD`, the `LUTORCH_EX_MANI_CUDA_*` / `LUTORCH_EX_CONF_CUDA_*` kernel
+  launch knobs, and the build-failure log directory.
 - **Rules 3 + 5, the quantised path:** `QuantisedConfidenceLUT` is the reference (the torch definition, `_pow2`, every
   case; no extension, no op, no monolith). `FusedQuantisedConfidenceLUT` (new) carries the `lutorch_ex::p2_scalars`
   op: the n=2 training monolith and the n=2 eval read. It raises without the extension (classified cause, including
@@ -164,10 +169,6 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   rate 0; `tests/test_table_dropout_and_cell_tv.py` covers only the reference class); it is absent from
   `tests/test_index_dtype.py`'s fused list; and two declared mixed-dtype combinations of the Manifesto / confidence
   pairs are not exercised by the harness (a bf16 table with an fp32 input, an fp16 input with a bf16 table).
-- Cleanups found by the same review: `tests/test_table_dropout_and_cell_tv.py` still skips `QuantisedConfidenceLUT`
-  on CPU as "quant native path is CUDA-only" (lines 103-104, 125-126, 189-190) although the reference now runs there,
-  and its comment at line 104 claiming CPU quant is covered by the fused==pure test is false; the README's package
-  layout omits `_fused_read.py`, `bench_snapshot.py` and `bench_fused_confidence.py`. Also: re-measure the snapshot
-  of record on the H100 (it is RTX 5090 only).
+- Re-measure the snapshot of record on the H100 (it is RTX 5090 only).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
   lutorch_ex, and the nanochat profiling scripts (which also pass the removed `backend=`).
