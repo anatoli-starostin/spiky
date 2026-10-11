@@ -34,9 +34,8 @@ table dropout) live in test_fused_manifesto_cuda.py, test_fused_confidence.py an
 import pytest
 import torch
 
-from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec, ManifestoHardLUT,
-                              ManifestoSoftLUT)
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
+from spiky.lutorch_ex import (ConfidenceLUT, FusedConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec,
+                              ManifestoHardLUT, ManifestoSoftLUT)
 from spiky.lutorch_ex.tests._requires_extension import requires_extension
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")

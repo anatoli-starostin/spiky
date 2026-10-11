@@ -158,19 +158,19 @@ def no_confidence_ext(monkeypatch):
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 def test_fused_confidence_without_extension_raises_with_cause(no_confidence_ext):
-    m = fused_confidence.FusedConfidenceLUT(_spec(), seed=0).cuda().train()
+    m = lx.FusedConfidenceLUT(_spec(), seed=0).cuda().train()
     with pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
         m(torch.randn(32, 4, 8, device="cuda"))
     assert "13.0" in str(e.value)
 
 
 def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
-    m = fused_confidence.FusedConfidenceLUT(_spec(), seed=0).train()
+    m = lx.FusedConfidenceLUT(_spec(), seed=0).train()
     with pytest.raises(RuntimeError, match=r"Construct ConfidenceLUT"):
         m(torch.randn(16, 4, 8))
 
 
-@pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, fused_confidence.FusedConfidenceLUT],
+@pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, lx.FusedConfidenceLUT],
                          ids=lambda c: c.__name__)
 def test_no_backend_argument(cls):
     """Spec rule 3: the class is the implementation; there is nothing to select."""

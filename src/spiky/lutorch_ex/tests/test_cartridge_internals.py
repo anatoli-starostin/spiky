@@ -67,7 +67,7 @@ def test_compile_not_used_on_cpu():
 import pytest as _pytest  # noqa: E402
 
 import spiky.lutorch_ex as _lx  # noqa: E402
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT as _FusedConfidenceLUT  # noqa: E402
+_FusedConfidenceLUT = _lx.FusedConfidenceLUT  # the public export (spec amendment E)  # noqa: E305
 from spiky.lutorch_ex.tests._weights import softsign  # noqa: E402
 
 
@@ -109,3 +109,9 @@ def test_no_fused_class_inherits_a_reference_forward():
                        (_FusedConfidenceLUT, _lx.ConfidenceLUT)):
         assert not issubclass(fused, ref) and not issubclass(fused, ReferenceForward), fused.__name__
         assert issubclass(ref, ReferenceForward), ref.__name__
+
+
+def test_every_fused_class_is_exported():
+    """Spec amendment E: the class names are the public API, so every fused class is importable from lutorch_ex."""
+    for name in ("FusedManifestoHardLUT", "FusedManifestoSoftLUT", "FusedConfidenceLUT"):
+        assert name in _lx.__all__ and getattr(_lx, name).__name__ == name

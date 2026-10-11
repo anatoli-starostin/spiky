@@ -1,7 +1,8 @@
 # lutorch_ex: target architecture for the cartridges
 
-**Status:** agreed goal state, not yet implemented. Future PRs land against this spec. The code on `main` (36aa7a13, the
-#159 merge) does not follow it yet; the gaps are listed at the end. Each item below is marked **DECIDED** or **OPEN**.
+**Status:** agreed goal state, implemented on #160 (rules 1-5, amendments A-E). The code on `main` (36aa7a13, the
+#159 merge) does not follow it yet; what #160 lands, and what is deferred, is listed at the end. Each item below is
+marked **DECIDED** or **OPEN**.
 
 ## Anatoly's five rules (the contract) - DECIDED
 
@@ -98,12 +99,17 @@ Under rules 3 and 5 the first two **are gone**:
 - **Consequence C:** the reference classes accept bf16 / fp16: fp32 maths, one rounding per leaf, bit-identical to
   the fp32 run rounded once (`tests/test_reference_low_precision.py`). `QuantisedConfidenceLUT` keeps rejecting low
   precision (outside this spec's families).
-
 - **Consequence D:** `tests/test_fused_vs_reference.py` is the one fused-vs-reference harness: per cartridge (both
   Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2), per dtype (fp32, bf16, fp16 input), per anchor
   mode and head pattern, on every leaf, with explicit tolerances justified in its docstring. It replaced
   `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
   double rounding of a low-precision input's gradient in the fan-out pattern.
+- **Consequence E:** every fused class (`FusedManifestoHardLUT`, `FusedManifestoSoftLUT`, `FusedConfidenceLUT`) is
+  exported from `lutorch_ex/__init__.py`.
 
-**Still open:**
-- **Consequence E:** `FusedConfidenceLUT` is not exported from `lutorch_ex/__init__.py`.
+**Deferred, outside #160 (on purpose):**
+- The quantised cartridges (`QuantisedConfidenceLUT`, `DeployedQuantisedConfidenceLUT`): no reference / fused split
+  yet, so `LUTORCH_EX_NO_CUDA_EXT` still gates their p2 / int8 read and they keep rejecting bf16; Deployed is 2.6x
+  slower than its float twin at 32k tokens. These belong to the quantised-cartridges PR.
+- References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
+  lutorch_ex, and the nanochat profiling scripts.

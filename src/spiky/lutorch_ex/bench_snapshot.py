@@ -42,7 +42,6 @@ import torch
 import torch._dynamo
 
 import spiky.lutorch_ex as lx
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
 #: name -> (spec kwargs, batch of vectors). "reference" is the library's h8 / tph64 / nap8 geometry at r = h*d = 64.
@@ -76,8 +75,8 @@ CARTRIDGES = [
     ("FusedManifestoSoftLUT weight=softsign", _fused(lx.FusedManifestoSoftLUT, weight="softsign"), True),
     ("ConfidenceLUT n=1", _conf(lx.ConfidenceLUT, 1), True),
     ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2), True),
-    ("FusedConfidenceLUT n=1", _conf(FusedConfidenceLUT, 1), True),
-    ("FusedConfidenceLUT n=2", _conf(FusedConfidenceLUT, 2), True),
+    ("FusedConfidenceLUT n=1", _conf(lx.FusedConfidenceLUT, 1), True),
+    ("FusedConfidenceLUT n=2", _conf(lx.FusedConfidenceLUT, 2), True),
     ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2), True),
     ("DeployedQuantisedConfidenceLUT", None, True),      # built from QuantisedConfidenceLUT.to_deployment()
 ]

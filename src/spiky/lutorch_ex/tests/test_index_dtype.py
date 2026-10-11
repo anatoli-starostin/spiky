@@ -52,9 +52,7 @@ def _deterministic(on):
 
 def _run(name, kw, index_dtype, device, wrap, spec):
     torch.manual_seed(0)
-    from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
-    cls = FusedConfidenceLUT if name == "FusedConfidenceLUT" else getattr(lx, name)
-    cart = cls(spec, seed=1, table_dropout_rate=0.2, index_dtype=index_dtype, **kw)
+    cart = getattr(lx, name)(spec, seed=1, table_dropout_rate=0.2, index_dtype=index_dtype, **kw)
     gen = torch.Generator().manual_seed(1)
     if wrap:
         m = ProjectionMHL(cart, d_model=64).to(device).train()
