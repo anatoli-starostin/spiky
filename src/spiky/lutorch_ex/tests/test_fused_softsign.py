@@ -94,6 +94,8 @@ def test_fused_equiv_cpu_f64(PureCls, FusedCls, name, h_in, h_out, backend, anch
 @pytest.mark.parametrize("B", [1, 128, 24576])
 @pytest.mark.parametrize("backend", ["auto", "tier1", "native"])
 def test_fused_equiv_cuda_f32(PureCls, FusedCls, name, h_in, h_out, B, backend, anchor_mode):
+    if backend == "native":       # extension unavailable: fail, or skip if disabled on purpose (see _native_required)
+        require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     _check(PureCls, FusedCls, h_in, h_out, B, "cuda", torch.float32, backend,
            exact=False, anchor_mode=anchor_mode)
 
@@ -104,6 +106,7 @@ def test_fused_equiv_cuda_f32(PureCls, FusedCls, name, h_in, h_out, B, backend, 
 @pytest.mark.parametrize("backend", ["native"])
 def test_fused_equiv_cuda_f64_native(PureCls, FusedCls, name, backend, anchor_mode):
     """fp64 native vs pure: forward value byte-identical, grads within accumulation-order tol."""
+    require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)   # see _native_required
     _check(PureCls, FusedCls, 4, 4, 128, "cuda", torch.float64, backend,
            exact=True, anchor_mode=anchor_mode)
 
