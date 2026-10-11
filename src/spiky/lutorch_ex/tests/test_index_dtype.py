@@ -95,7 +95,7 @@ def test_fused_native_close_within_baseline_noise(name):
     ~5e-2). Exact per-kernel parity: test_native_index_dtype.py."""
     from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_available
     from spiky.lutorch_ex.tests._native_required import require_extension
-    require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)   # skip, or fail when strict
+    require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)   # fail (see _native_required)
     spec = LUTSpec(**GEOM)
     y64, gx64, g64 = _run(name, dict(backend="native"), torch.int64, "cuda", False, spec)
     y32, gx32, g32 = _run(name, dict(backend="native"), torch.int32, "cuda", False, spec)

@@ -89,7 +89,7 @@ _TRAINABLE = {"auto", "tier1", "native", "pure"}       # 'pure_eval' is the eval
 
 
 def _run_backend(FusedCls, backend):
-    # No CUDA device: skip. A CUDA device without the extension: skip, or fail under SPIKY_LUTORCH_REQUIRE_NATIVE=1.
+    # No CUDA device: skip. A CUDA device without the extension: fail (see _native_required).
     if backend == "native":
         require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     if backend == "cuda":

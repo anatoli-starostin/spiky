@@ -160,7 +160,7 @@ _TRAINABLE = {"auto", "tier1", "native"}               # 'pure_eval' is the eval
 @pytest.mark.parametrize("FusedCls,backend",
                          [(C, b) for C in (FusedSoftSignHardLUT, FusedSoftSignSmoothLUT) for b in C._BACKENDS])
 def test_every_accepted_backend_runs(FusedCls, backend):
-    if backend == "native":       # no CUDA device: skip; extension unavailable: skip, or fail when strict
+    if backend == "native":       # no CUDA device: skip; extension unavailable: fail (see _native_required)
         require_extension(native_available(torch.device("cuda")), LPROJ_EXT_NAME)
     dev = "cuda" if backend == "native" else "cpu"
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
