@@ -21,7 +21,7 @@ DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
 
 def _normrel(a, b):
-    return (a.double() - b.double()).norm().item() / max(b.double().norm().item(), 1e-12)
+    return (a - b).norm().item() / max(b.norm().item(), 1e-12)
 
 
 def _param_leaves(m):

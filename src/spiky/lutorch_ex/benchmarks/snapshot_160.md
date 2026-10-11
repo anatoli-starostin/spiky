@@ -16,6 +16,14 @@ reference, without the p2_scalars op (n=2 eval) or the training monolith, which 
 48.56 -> 49.22 ms (+1.4%), train peak 3.64 -> 4.38 GiB (+0.74 GiB). `FusedQuantisedConfidenceLUT` reproduces the old
 numbers (32,768: 9.89 ms eval, 49.41 ms / 3.64 GiB train).
 
+Remeasured after the reference exponents were written in the kernel's operation order (the bit-exact layer 1 of
+tests/test_fused_vs_reference.py): the four fp32 rows of QuantisedConfidenceLUT n=2 and DeployedQuantisedConfidenceLUT
+(both call _pow2.blend_exponents), same methodology, same machine; every other row is unchanged. What moved:
+QuantisedConfidenceLUT 8,192: eval 2.55 -> 2.98 ms, train total 12.50 -> 13.01 ms; 32,768: eval 10.09 -> 11.61 ms,
+train total 49.22 -> 52.43 ms, eval peak 1.19 -> 2.03 GiB. DeployedQuantisedConfidenceLUT eval 8,192: 2.66 -> 2.91 ms
+(peak 0.20 -> 0.41 GiB); 32,768: 25.30 -> 17.05 ms (faster; peak 0.81 -> 1.66 GiB) -- the explicit fold changes how
+Inductor fuses the deployed read. FusedQuantisedConfidenceLUT does not call it and is unchanged.
+
 | geometry | cartridge | dtype | status | eval forward ms | GiB | train forward ms | GiB | train backward ms | GiB | train total ms | GiB |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | champion | ManifestoHardLUT | float32 | ok | 0.664 | 0.055 | 18.225 | 6.712 | 7.521 | 3.517 | 25.838 | 6.712 |
@@ -42,11 +50,11 @@ numbers (32,768: 9.89 ms eval, 49.41 ms / 3.64 GiB train).
 | champion | FusedConfidenceLUT n=1 | bfloat16 | ok | 0.204 | 0.012 | 0.271 | 0.012 | 1.146 | 0.094 | 1.417 | 0.094 |
 | champion | FusedConfidenceLUT n=2 | float32 | ok | 0.474 | 0.023 | 0.540 | 0.023 | 1.929 | 0.094 | 2.466 | 0.094 |
 | champion | FusedConfidenceLUT n=2 | bfloat16 | ok | 0.316 | 0.012 | 0.382 | 0.012 | 1.786 | 0.094 | 2.165 | 0.094 |
-| champion | QuantisedConfidenceLUT n=2 | float32 | ok | 2.550 | 0.297 | 2.688 | 0.509 | 9.804 | 1.095 | 12.497 | 1.095 |
+| champion | QuantisedConfidenceLUT n=2 | float32 | ok | 2.976 | 0.508 | 3.032 | 0.617 | 9.876 | 1.116 | 13.007 | 1.116 |
 | champion | QuantisedConfidenceLUT n=2 | bfloat16 | refused: QuantisedConfidenceLUT does not support low precision | - | - | - | - | - | - | - | - |
 | champion | FusedQuantisedConfidenceLUT n=2 | float32 | ok | 2.524 | 0.415 | 2.499 | 0.352 | 9.873 | 0.946 | 12.525 | 0.946 |
 | champion | FusedQuantisedConfidenceLUT n=2 | bfloat16 | error: RuntimeError: FusedQuantisedConfidenceLUT: not a case the fused op covers: input dtype torch.bfloat16 (float32 only); table dtype torc | - | - | - | - | - | - | - | - |
-| champion | DeployedQuantisedConfidenceLUT | float32 | ok | 2.662 | 0.203 | - | - | - | - | - | - |
+| champion | DeployedQuantisedConfidenceLUT | float32 | ok | 2.910 | 0.414 | - | - | - | - | - | - |
 | champion | DeployedQuantisedConfidenceLUT | bfloat16 | refused: DeployedQuantisedConfidenceLUT is fp32/fp64 inference only; got input dtype torch.bfloat16 | - | - | - | - | - | - | - | - |
 | large | ManifestoHardLUT | float32 | out of memory | 2.554 | 0.219 | - | - | - | - | - | - |
 | large | ManifestoHardLUT | bfloat16 | out of memory | 2.676 | 0.359 | - | - | - | - | - | - |
@@ -72,9 +80,9 @@ numbers (32,768: 9.89 ms eval, 49.41 ms / 3.64 GiB train).
 | large | FusedConfidenceLUT n=1 | bfloat16 | ok | 0.800 | 0.047 | 0.917 | 0.047 | 4.489 | 0.236 | 5.421 | 0.236 |
 | large | FusedConfidenceLUT n=2 | float32 | ok | 1.869 | 0.094 | 1.977 | 0.094 | 7.684 | 0.236 | 9.637 | 0.236 |
 | large | FusedConfidenceLUT n=2 | bfloat16 | ok | 1.216 | 0.047 | 1.380 | 0.047 | 6.951 | 0.236 | 8.319 | 0.236 |
-| large | QuantisedConfidenceLUT n=2 | float32 | ok | 10.090 | 1.188 | 10.093 | 1.895 | 39.134 | 4.379 | 49.220 | 4.379 |
+| large | QuantisedConfidenceLUT n=2 | float32 | ok | 11.608 | 2.031 | 11.517 | 2.328 | 40.821 | 4.169 | 52.433 | 4.169 |
 | large | QuantisedConfidenceLUT n=2 | bfloat16 | refused: QuantisedConfidenceLUT does not support low precision | - | - | - | - | - | - | - | - |
 | large | FusedQuantisedConfidenceLUT n=2 | float32 | ok | 9.890 | 1.658 | 9.590 | 1.406 | 39.861 | 3.641 | 49.409 | 3.641 |
 | large | FusedQuantisedConfidenceLUT n=2 | bfloat16 | error: RuntimeError: FusedQuantisedConfidenceLUT: not a case the fused op covers: input dtype torch.bfloat16 (float32 only); table dtype torc | - | - | - | - | - | - | - | - |
-| large | DeployedQuantisedConfidenceLUT | float32 | ok | 25.295 | 0.812 | - | - | - | - | - | - |
+| large | DeployedQuantisedConfidenceLUT | float32 | ok | 17.048 | 1.656 | - | - | - | - | - | - |
 | large | DeployedQuantisedConfidenceLUT | bfloat16 | refused: DeployedQuantisedConfidenceLUT is fp32/fp64 inference only; got input dtype torch.bfloat16 | - | - | - | - | - | - | - | - |

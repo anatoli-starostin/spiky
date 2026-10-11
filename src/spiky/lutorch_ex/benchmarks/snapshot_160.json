@@ -760,30 +760,31 @@
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
-    "median_ms": 2.5501279830932617,
-    "p25_ms": 2.5464879274368286,
-    "p75_ms": 2.563968002796173,
-    "peak_gib": 0.2968778610229492
+    "median_ms": 2.9759680032730103,
+    "p25_ms": 2.968104064464569,
+    "p75_ms": 3.003711998462677,
+    "peak_gib": 0.5078153610229492
    },
    "train_forward": {
-    "median_ms": 2.688447952270508,
-    "p25_ms": 2.6476480960845947,
-    "p75_ms": 2.7343520522117615,
-    "peak_gib": 0.5087890625
+    "median_ms": 3.0324000120162964,
+    "p25_ms": 2.9780479669570923,
+    "p75_ms": 3.181943893432617,
+    "peak_gib": 0.6171875
    },
    "train_backward": {
-    "median_ms": 9.804272174835205,
-    "p25_ms": 9.568248271942139,
-    "p75_ms": 9.985024213790894,
-    "peak_gib": 1.0947265625
+    "median_ms": 9.875952243804932,
+    "p25_ms": 9.698071956634521,
+    "p75_ms": 10.031847715377808,
+    "peak_gib": 1.1162118911743164
    },
    "train_total": {
-    "median_ms": 12.49678373336792,
-    "p25_ms": 12.225687980651855,
-    "p75_ms": 12.689120054244995,
-    "peak_gib": 1.0947265625
+    "median_ms": 13.007279872894287,
+    "p25_ms": 12.766488075256348,
+    "p75_ms": 13.096343994140625,
+    "peak_gib": 1.1162118911743164
    },
-   "geometry": "champion"
+   "geometry": "champion",
+   "remeasured_at": "mirror-reference commit (see the md header)"
   },
   {
    "cartridge": "QuantisedConfidenceLUT n=2",
@@ -834,12 +835,13 @@
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
-    "median_ms": 2.661855936050415,
-    "p25_ms": 2.658568024635315,
-    "p75_ms": 2.666887938976288,
-    "peak_gib": 0.203125
+    "median_ms": 2.9096319675445557,
+    "p25_ms": 2.89331191778183,
+    "p75_ms": 2.9271440505981445,
+    "peak_gib": 0.4140625
    },
-   "geometry": "champion"
+   "geometry": "champion",
+   "remeasured_at": "mirror-reference commit (see the md header)"
   },
   {
    "cartridge": "DeployedQuantisedConfidenceLUT",
@@ -1505,30 +1507,31 @@
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
-    "median_ms": 10.089663982391357,
-    "p25_ms": 9.91208028793335,
-    "p75_ms": 10.190872192382812,
-    "peak_gib": 1.1875028610229492
+    "median_ms": 11.607935905456543,
+    "p25_ms": 11.400344133377075,
+    "p75_ms": 11.681320190429688,
+    "peak_gib": 2.031252861022949
    },
    "train_forward": {
-    "median_ms": 10.093200206756592,
-    "p25_ms": 10.041911602020264,
-    "p75_ms": 10.28879976272583,
-    "peak_gib": 1.89453125
+    "median_ms": 11.516751766204834,
+    "p25_ms": 11.448087930679321,
+    "p75_ms": 11.658968210220337,
+    "peak_gib": 2.328125
    },
    "train_backward": {
-    "median_ms": 39.13369560241699,
-    "p25_ms": 38.83135223388672,
-    "p75_ms": 39.17646408081055,
-    "peak_gib": 4.37890625
+    "median_ms": 40.82089614868164,
+    "p25_ms": 39.121153831481934,
+    "p75_ms": 44.18328857421875,
+    "peak_gib": 4.169337272644043
    },
    "train_total": {
-    "median_ms": 49.21953582763672,
-    "p25_ms": 49.1094331741333,
-    "p75_ms": 49.279296875,
-    "peak_gib": 4.37890625
+    "median_ms": 52.43294334411621,
+    "p25_ms": 50.61688041687012,
+    "p75_ms": 55.75540733337402,
+    "peak_gib": 4.169337272644043
    },
-   "geometry": "large"
+   "geometry": "large",
+   "remeasured_at": "mirror-reference commit (see the md header)"
   },
   {
    "cartridge": "QuantisedConfidenceLUT n=2",
@@ -1579,12 +1582,13 @@
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
-    "median_ms": 25.295023918151855,
-    "p25_ms": 25.168376445770264,
-    "p75_ms": 25.567287921905518,
-    "peak_gib": 0.8125
+    "median_ms": 17.047679901123047,
+    "p25_ms": 16.953927993774414,
+    "p75_ms": 17.081608295440674,
+    "peak_gib": 1.65625
    },
-   "geometry": "large"
+   "geometry": "large",
+   "remeasured_at": "mirror-reference commit (see the md header)"
   },
   {
    "cartridge": "DeployedQuantisedConfidenceLUT",
@@ -1593,5 +1597,44 @@
    "status": "refused: DeployedQuantisedConfidenceLUT is fp32/fp64 inference only; got input dtype torch.bfloat16",
    "geometry": "large"
   }
- ]
+ ],
+ "remeasured": {
+  "rows": [
+   [
+    "champion",
+    "QuantisedConfidenceLUT n=2",
+    "float32"
+   ],
+   [
+    "champion",
+    "DeployedQuantisedConfidenceLUT",
+    "float32"
+   ],
+   [
+    "large",
+    "QuantisedConfidenceLUT n=2",
+    "float32"
+   ],
+   [
+    "large",
+    "DeployedQuantisedConfidenceLUT",
+    "float32"
+   ]
+  ],
+  "environment": {
+   "commit": "9951d8e5d894cd746c73562b9f98662050b6ca6e",
+   "uncommitted_changes_in_lutorch_ex": true,
+   "torch": "2.9.1+cu130",
+   "cuda_runtime": "13.0",
+   "driver": "595.84",
+   "gpu": "NVIDIA GeForce RTX 5090",
+   "vram_gib": 31.4,
+   "sm": "sm_120",
+   "power_limit_w": "600.00 W",
+   "max_sm_clock": "3210 MHz",
+   "clocks_locked": false,
+   "other_processes": "11203, 140 MiB\n7292, 12 MiB\n655436, 28 MiB",
+   "time": "2026-10-12 01:25:49 +0300"
+  }
+ }
 }

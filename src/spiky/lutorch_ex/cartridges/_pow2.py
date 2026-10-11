@@ -92,13 +92,38 @@ def blend_candidates(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor)
     return m, mv, idx
 
 
+def _left_fold(t: torch.Tensor) -> torch.Tensor:
+    """sum over the last dim as ((t0 + t1) + t2) + ..., the kernel's order (not torch's .sum reduction tree)."""
+    s = t[..., 0]
+    for i in range(1, t.shape[-1]):
+        s = s + t[..., i]
+    return s
+
+
 @torch.no_grad()
 def blend_exponents(m: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, g: torch.Tensor, beta: torch.Tensor,
                     gamma: torch.Tensor, cfg: dict):
     """The note's per-table integers. m [..., NAP], mv [..., 1]. Returns float tensors of integers q, k [...] (k already
-    clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read)."""
-    q = q_exponent(mv.squeeze(-1), tau)
-    kr = round_half_up(log2_score(m, g, beta, gamma) - c_q(q))
+    clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read).
+
+    Written in the CUDA kernel's operation order (csrc/pow2_scalars.cuh), one elementwise op at a time: the nap terms
+    of S and of the logsigmoid sum left-folded, and every division a true fp32 tensor division (a Python-scalar divisor
+    would make torch multiply by its reciprocal instead, and 2.0 / t is reciprocal(t) * 2). Each integer is a floor of
+    these fp32 values, so the same operations in the same order give the kernel's integers, at every nap.
+    Trade-off, accepted on purpose: (1) the reference now partly encodes the kernel's operation order, so agreement
+    between the two is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate
+    than torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7 (measured at
+    the champion geometry); (3) the bit-agreement relies on the same libdevice log2 / log1p / exp in torch's build and in
+    the extension's nvcc build -- measured identical on this toolkit, not guaranteed across a CUDA or torch upgrade.
+    tests/test_fused_vs_reference.py therefore compares the fused class with this reference BIT FOR BIT, with no
+    tolerance and no gate: an upgrade that changes libdevice shows up as a test failure rather than being silently
+    absorbed by a tolerance."""
+    ln2 = torch.full((), LN2, dtype=m.dtype, device=m.device)
+    two = torch.full((), 2.0, dtype=m.dtype, device=m.device)
+    q = torch.clamp(torch.floor(mv.squeeze(-1) * torch.div(two, tau * ln2) + 0.5), 0, J)      # kernel: 2/(tau ln2)
+    S = _left_fold(m)
+    ls = _left_fold(F.logsigmoid(beta * m))                         # min(0, x) - log1p(exp(-|x|)), as in the kernel
+    kr = torch.floor(torch.log2(S) + torch.div(g + gamma * ls, ln2) - c_q(q) + 0.5)
     skip = kr < cfg["lo"]
     k = torch.clamp(kr, cfg["lo"], cfg["hi"])
     drop = q > cfg["Q"]

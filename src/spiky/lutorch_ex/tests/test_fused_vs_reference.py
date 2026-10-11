@@ -28,23 +28,19 @@ Tolerances (relative norm error ``||a - b|| / ||b||``), each from the one way th
 Measured 2026-10-11 (RTX 5090), worst error as a share of its tolerance over the whole matrix: fp32 value 3%, grad x
 2%, grad W 9%, learned scalars at most ~30% (one soft-sign temperature at batch 24576 reached 1.02e-4, which is why
 the scalar bound scales with K); bf16 value 5%, grad x 5%, grad W 3%; fp16-input grad x 7%; quantised vs the eager
-EAGER reference (gated): integers exact, values bit-identical. (The harness found one
+reference: integers and values bit-identical. (The harness found one
 real double rounding: a low-precision input gathered for several groups (fan-out) summed their input gradients in the
 input dtype, 78% of u; the fused classes now cast before the gather.)
 
-The quantised pair, in two layers. Its value is a staircase: the power-of-two exponents
-q = floor(mv*2/(tau ln2) + 1/2) and k' = floor(log2 S + gamma*sum logsigmoid(beta m)/ln2 - c_q + 1/2) are rounded half
-up from fp32 transcendental expressions, and no two fp32 implementations agree on them to the last ulp, so a value
-within a few ulps of a rounding boundary can floor differently (one table's weight changes by a factor 2). Two
-independent sources do that, so they are tested separately (the comment above the champion-scale tests explains why):
-* LAYER 1, the oracle -- fused vs the EAGER (uncompiled) reference. The only difference is the kernel's own
-  log1p / exp / log2 (nvcc, --fmad=false) vs torch's CUDA kernels: measured at the champion scale (8.4M tables per
-  run, 4 seeds, init and after 200 steps) 0-3 integer disagreements per run, all within 1e-7 (fp64) of a boundary.
-  Gated at ``QUANT_MARGIN = 1e-5`` (fp64 distance of both pre-floor values to a boundary; 1e-6 already gave zero in all
-  8 runs, 1e-7 did not; margins relative to ulps fail even at 64 ulps, the pre-floor value being a sum of large terms
-  whose error is absolute): on retained tables the integers are EXACT, and retained output rows are BIT-IDENTICAL
-  (99.73% of rows at the champion scale). The rows below gate the same way (gated rows get a zero output gradient, so
-  they contribute to no gradient; gradients keep the fp32 tolerances above, as the backward's sums differ in order).
+The quantised pair, in two layers. Its value is a staircase: the power-of-two exponents q and k' are floors (round
+half up) of fp32 transcendental expressions, so two implementations that differ by an ulp anywhere in the expression
+can floor a near-boundary value differently (one table's weight then changes by a factor 2). Two independent sources,
+tested separately:
+* LAYER 1, the oracle -- fused vs the EAGER (uncompiled) reference: BIT FOR BIT, no tolerance, no gate. The reference's
+  _pow2.blend_exponents spells out the kernel's operation order (left-fold sums, true fp32 divisions; see its
+  docstring for the trade-off), so the same fp32 operations give the same integers, and the read the same values.
+  Measured: 0 integer disagreements and bit-identical output rows in 28 runs (8.4M tables each; nap 3, 5, 6, 7, 8; two
+  geometries; init and after training). Gradients keep the fp32 tolerances above (the backward's sums differ in order).
 * LAYER 2, compile trust -- the compiled reference vs the eager reference. A TOLERANCE test: Inductor reassociates the
   transcendentals, so the shipped compiled reference flips ~1e-7 of tables; the test asserts compile did not break the
   maths, not that it is bit-reproducible.
@@ -66,7 +62,6 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a C
 FP32_TOL = 1e-5
 FP32_SCALAR_TOL = 1e-4
 U = {torch.bfloat16: 2.0 ** -8, torch.float16: 2.0 ** -11}
-QUANT_MARGIN = 1e-5             # the quantised rows' gate: fp64 distance of each pre-floor value to a boundary
 
 #: (id, fused class, reference class, kwargs, extension)
 CARTRIDGES = [
@@ -158,38 +153,13 @@ class _Eager(torch.nn.Module):
         self.m.zero_grad(set_to_none=set_to_none)
 
 
-def _quantised_row_gate(mod, x, margin=QUANT_MARGIN):
-    """[B, h_out] bool: True where every table feeding the output row is more than ``margin`` (fp64) from a rounding
-    boundary of q and k' (see the module docstring). Test-side only: recomputes the pre-floor values from the module's
-    margins in fp64; the library is not involved beyond _addresses."""
-    import torch.nn.functional as F
-    from spiky.lutorch_ex.cartridges import _pow2
-    with torch.no_grad():
-        z, u, c, j, ustar, calt = mod._addresses(x)
-        m = u.abs().double()
-        tau = mod.log_read_tau.double().exp()
-        beta, gamma = mod.confidence_log_beta.double().exp(), mod.confidence_log_gamma.double().exp()
-        xq = m.min(-1).values * (2.0 / (tau * _pow2.LN2)) + 0.5
-        q = torch.clamp(torch.floor(xq), 0, _pow2.J)
-        cq = torch.where(q < _pow2.C, torch.log2(1.0 + torch.pow(2.0, -q)), torch.zeros_like(q))
-        xk = torch.log2(m.sum(-1)) + gamma * F.logsigmoid(beta * m).sum(-1) / _pow2.LN2 - cq + 0.5
-        clear = ((xq - torch.round(xq)).abs() > margin) & ((xk - torch.round(xk)).abs() > margin)   # [B, G, tph]
-        group_ok = clear.all(-1)                                                                     # [B, G]
-        rows = torch.ones(x.shape[0], mod.spec.h_out, dtype=torch.bool, device=x.device)
-        for g in range(mod.spec.n_groups):                       # a fan-in row sums several groups
-            rows[:, mod.out_head[g]] &= group_ok[:, g]
-    return rows
-
-
 @pytest.mark.parametrize("cart,dt,anchor_mode,geom", list(_cases()))
 def test_fused_matches_reference(cart, dt, anchor_mode, geom):
     name, Fused, Ref, kw, ext = cart
     input_dtype = dt[2]
     ref, fused, x, go = _pair(cart, dt, anchor_mode, geom)
-    oracle, keep = ref, None
-    if Fused is FusedQuantisedConfidenceLUT:        # layer 1: the EAGER reference, away from rounding boundaries
-        oracle, keep = _Eager(ref), _quantised_row_gate(ref, x)
-        go = go * keep.unsqueeze(-1).to(go.dtype)  # a gated row contributes to no gradient
+    quantised = Fused is FusedQuantisedConfidenceLUT
+    oracle = _Eager(ref) if quantised else ref     # quantised: layer 1, the EAGER reference
 
     ref.train(); fused.train()
     a, b = _leaves(fused, x, go), _leaves(oracle, x, go)
@@ -197,12 +167,10 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
     ref.eval(); fused.eval()
     with torch.no_grad():
         a["eval value"], b["eval value"] = fused(x), oracle(x)
-        if keep is not None:
+        if quantised:
             a["eval value (integer read)"], b["eval value (integer read)"] = fused(x), ref.forward_int(x)
-            for leaf in ("value", "eval value", "eval value (integer read)"):
-                a[leaf], b[leaf] = a[leaf][keep], b[leaf][keep]
-            for leaf in ("value", "eval value"):     # layer 1: retained values are bit-identical, not just close
-                assert torch.equal(a[leaf], b[leaf]), f"{name} {leaf}: retained rows differ from the eager reference"
+            for leaf in ("value", "eval value"):     # layer 1: bit for bit, no tolerance
+                assert torch.equal(a[leaf], b[leaf]), f"{name} {leaf}: differs from the eager reference"
     for leaf in b:
         assert a[leaf].dtype == b[leaf].dtype, f"{name} {leaf}: dtype {a[leaf].dtype} vs {b[leaf].dtype}"
         tol = _tol(leaf.replace("eval ", "").replace(" (integer read)", ""), b[leaf].dtype, input_dtype,
@@ -213,26 +181,26 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
 
 # -- the quantised pair at the champion scale: two layers -------------------------------------------------------------
 #
-# Why two layers. The exponents q and k' are floor(x + 1/2) of fp32 transcendental expressions, and two independent
-# sources move such a value by a few ulps: Inductor reassociating log2 / logsigmoid / exp (compiled vs eager
-# reference), and the kernel's nvcc log1p / exp / log2 (--fmad=false) vs torch's CUDA kernels (fused vs eager
-# reference). Near a boundary either one flips an integer: ~1e-7 of tables each, measured at 8.4M tables per run,
-# zero overlap across seeds, zero natural exact ties. The old single comparison (fused vs compiled reference, with an
-# eager-reference variant) confounded the two, and its "fused == eager reference bit for bit" held only at
-# harness-size inputs (<= 0.6M tables, where a ~1e-7 event rarely lands); it is false at scale. So:
-#   layer 1 -- fused vs the EAGER reference: exact (integers, and output rows bit for bit) on every table more than
-#              QUANT_MARGIN from a boundary in fp64; the near-boundary remainder is counted, not asserted;
+# Why two layers. The exponents q and k' are floor(x + 1/2) of fp32 transcendental expressions; a value within an ulp
+# of a boundary floors differently in two implementations that differ by an ulp anywhere. Two independent sources:
+# Inductor reassociating log2 / logsigmoid / exp (compiled vs eager reference), and any difference in operation order
+# between the kernel and the eager reference. The second is removed by construction -- the reference spells out the
+# kernel's order (_pow2.blend_exponents) -- so:
+#   layer 1 -- fused vs the EAGER reference: BIT FOR BIT, integers and output rows, no tolerance, no gate. A CUDA or
+#              torch upgrade that changes libdevice (which both sides call) would fail here, by design;
 #   layer 2 -- compiled vs eager reference: a tolerance test ("compile did not break the maths"), bounds below.
-# All fp32; library code untouched (the gate is recomputed here in fp64; the eager reference is its _forward_impl).
+# All fp32; library code is not switched by any test.
 
 CHAMPION = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
 QUANT_KW = dict(weight_init_std=0.5, read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6)
 #: A flipped exponent moves its row by >= ~6e-5 relative (one of 64 tables, weights within the 2^8 window, x2);
 #: fp32 summation order moves a row by <= 8.8e-8 (measured). Rows above this are flips.
 ROW_FLIP = 1e-6
-#: Layer 2 bounds, compiled vs eager reference. Worst measured over 8 runs at the champion scale: flipped rows 2.4e-7
-#: per table, eval relative norm 3.1e-4, training (value, input and parameter gradients) 2.9e-3; the bounds leave
-#: ~4x, ~3x and ~3x headroom. A broken compile (a wrong op, a dropped term) moves every row, far beyond them.
+#: Layer 2 bounds, compiled vs eager reference. Worst measured at the champion geometry (8 runs): flipped rows
+#: 2.4e-7 per table, eval relative norm 1.6e-4, training (value, input and parameter gradients) 3.6e-3; the bounds
+#: leave ~4x, ~6x and ~3x headroom. A broken compile (a wrong op, a dropped term) moves every row, far beyond them.
+#: Known limit: at nap=3 (otherwise the champion geometry) training reached 8.9e-3 against TRAIN_REL_BOUND = 1e-2;
+#: these tests use the champion geometry only, and the bound must be revisited if a nap=3 geometry is ever added.
 FLIP_RATE_BOUND = 1e-6
 EVAL_REL_BOUND = 1e-3
 TRAIN_REL_BOUND = 1e-2
@@ -249,30 +217,15 @@ def _champion_pair(seed):
     return ref, fused, x
 
 
-def _clear_tables(mod, x, margin=QUANT_MARGIN):
-    """[B, G, tph] bool: both pre-floor values more than ``margin`` (fp64) from a boundary; and the margins u."""
-    import torch.nn.functional as F
-    from spiky.lutorch_ex.cartridges import _pow2
-    z, u, c, j, ustar, calt = mod._addresses(x)
-    m = u.abs().double()
-    tau = mod.log_read_tau.double().exp()
-    beta, gamma = mod.confidence_log_beta.double().exp(), mod.confidence_log_gamma.double().exp()
-    xq = m.min(-1).values * (2.0 / (tau * _pow2.LN2)) + 0.5
-    q = torch.clamp(torch.floor(xq), 0, _pow2.J)
-    cq = torch.where(q < _pow2.C, torch.log2(1.0 + torch.pow(2.0, -q)), torch.zeros_like(q))
-    xk = torch.log2(m.sum(-1)) + gamma * F.logsigmoid(beta * m).sum(-1) / _pow2.LN2 - cq + 0.5
-    return ((xq - torch.round(xq)).abs() > margin) & ((xk - torch.round(xk)).abs() > margin), u
-
-
 @pytest.mark.parametrize("seed", [0, 1])
-def test_quantised_layer1_fused_exact_vs_eager_reference_away_from_boundaries(seed):
-    """LAYER 1 (oracle): on every table clear of QUANT_MARGIN the op's integers (q, k', skip, drop) equal the eager
-    reference definition's (_pow2.blend_exponents on the same margins) exactly, and the eager reference's output rows
-    built only from such tables equal the fused class's bit for bit. The near-boundary remainder is counted."""
+def test_quantised_layer1_fused_bit_exact_vs_eager_reference(seed):
+    """LAYER 1 (oracle): at the champion scale (8.4M tables), the op's integers (q, k', skip, drop) equal the eager
+    reference definition's (_pow2.blend_exponents on the same margins) on EVERY table, and the eager reference's output
+    equals the fused class's bit for bit, in eval and in the training forward. No tolerance, no gate."""
     from spiky.lutorch_ex.cartridges import _pow2, _pow2_int8
     ref, fused, x = _champion_pair(seed)
     with torch.no_grad():
-        clear, u = _clear_tables(ref, x)
+        z, u, c, j, ustar, calt = ref._addresses(x)
         beta, gamma = ref._betagamma(u.dtype)
         tau = ref.log_read_tau.exp()
         g0 = torch.zeros((), device="cuda")
@@ -282,14 +235,10 @@ def test_quantised_layer1_fused_exact_vs_eager_reference_away_from_boundaries(se
         _, cells, kq = torch.ops.lutorch_ex.p2_scalars(u, tau, g0, beta, gamma, cfg["lo"], cfg["hi"], cfg["Q"])
         qo, ko, sko, do = _pow2_int8._integers_from(cells, kq, cfg["Q"])
         differ = (qr != qo) | (kr != ko) | (skr != sko) | (dr != do)
-        assert clear.float().mean() > 0.9999, f"the gate keeps only {clear.float().mean():.6f} of tables"
-        assert int((differ & clear).sum()) == 0, f"{int((differ & clear).sum())} integer disagreements off-boundary"
-        ref.eval(); fused.eval()
-        ye, yf = ref._forward_impl(x), fused(x)            # the EAGER reference
-        rows = clear.all(-1)                               # h_out == n_groups at the champion geometry
-        assert torch.equal(ye[rows], yf[rows]), "retained rows are not bit-identical to the eager reference"
-        print(f"\n[layer 1, seed {seed}] tables {clear.numel()}, clear {clear.float().mean():.6f}, rows kept "
-              f"{rows.float().mean():.5f}, near-boundary integer disagreements (counted) {int((differ & ~clear).sum())}")
+        assert int(differ.sum()) == 0, f"{int(differ.sum())} integer disagreements with the kernel"
+        for train in (False, True):
+            ref.train(train); fused.train(train)
+            assert torch.equal(ref._forward_impl(x), fused(x)), f"train={train}: output differs from the eager reference"
 
 
 @pytest.mark.parametrize("seed", [0, 1])

@@ -106,7 +106,9 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   - The reference quantised path is slower than the old default, which took the op for n=2 eval and the monolith for
     n=2 training on CUDA; that speed now lives in `FusedQuantisedConfidenceLUT`. Measured in the #160 snapshot of
     record (`benchmarks/snapshot_160.md`): at 32,768 vectors eval 9.66 -> 10.09 ms (+4.5%), train total 48.56 ->
-    49.22 ms (+1.4%), train peak 3.64 -> 4.38 GiB; at 8,192 within 1%. Not to be fixed in #160.
+    49.22 ms (+1.4%), train peak 3.64 -> 4.38 GiB; at 8,192 within 1%. The bit-exact exponent order (Consequence D
+    below) costs it more: at 32,768 eval 11.61 ms, train total 52.43 ms, eval peak 2.03 GiB (refreshed rows in the
+    snapshot of record). Not to be fixed in #160.
 - **Consequence B:** `ManifestoLUT` is scaffolding only; its `forward()` raises `NotImplementedError`. The
   reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
@@ -120,34 +122,38 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   explicit tolerances justified in its docstring. It replaced
   `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
   double rounding of a low-precision input's gradient in the fan-out pattern.
-- **Consequence D, the quantised pair: two layers.** The power-of-two exponents are round-half-up floors of fp32
-  transcendental expressions, and no two implementations agree on them to the last ulp, so a value within a few ulps
-  of a rounding boundary can floor differently (one table's weight changes 2x). Two independent sources, tested
-  separately:
-  - *Layer 1, the oracle -- fused vs the eager (uncompiled) reference.* Only the kernel's own log1p / exp / log2
-    (nvcc, `--fmad=false`) vs torch's CUDA kernels differ: 0-3 integer disagreements per 8.4M tables at the champion
-    scale (4 seeds, at init and after training), all within 1e-7 (fp64) of a boundary. On every table more than
-    1e-5 (fp64) from a boundary the integers are exact and the output rows bit-identical (99.996% of tables, 99.73%
-    of rows); the remainder is counted, not asserted.
+- **Consequence D, the quantised pair: bit-exact, in two layers.** The power-of-two exponents are round-half-up
+  floors of fp32 transcendental expressions, so two implementations that differ by an ulp anywhere in the expression
+  can floor a near-boundary value differently (one table's weight changes 2x).
+  - *Layer 1, the oracle -- fused vs the eager (uncompiled) reference: bit for bit, no tolerance, no gate.* The
+    reference's `_pow2.blend_exponents` spells out the kernel's operation order (`csrc/pow2_scalars.cuh`): left-fold
+    sums of the nap terms, true fp32 tensor divisions (a Python-scalar divisor makes torch multiply by the reciprocal;
+    `2.0 / t` is `reciprocal(t) * 2`). Measured: 0 integer disagreements and bit-identical output rows (eval and the
+    training forward) in 28 runs of 8.4M tables -- nap 3, 5, 6, 7 and 8 on the champion geometry and h8 tph32 nap4 d64,
+    4 seeds, at init and after 200 training steps. Before, with torch's own reduction order, they disagreed on 0-3
+    tables per run (the summation order and the reciprocal-multiply division; the transcendentals were identical).
   - *Layer 2, compile trust -- the compiled reference vs the eager reference.* Inductor reassociates the
     transcendentals and flips ~1e-7 of tables; a tolerance test ("compile did not break the maths"): flipped rows
-    <= 1e-6 per table, eval relative norm <= 1e-3, training <= 1e-2 (worst measured 2.4e-7, 3.1e-4, 2.9e-3).
+    <= 1e-6 per table, eval relative norm <= 1e-3, training <= 1e-2 (worst at the champion geometry 2.4e-7, 1.6e-4,
+    3.6e-3; at nap=3 training reached 8.9e-3, a documented limit if that geometry is ever tested).
   - Constructed exact ties: the reference and the kernel both round half up. Natural exact ties: zero.
-  - **Correction.** An earlier version of this section (and the harness, and #160's text) said the fused class is
-    bit-identical to the eager reference. That held only at test sizes (<= 0.6M tables, where a 1e-7 event rarely
-    lands); at the champion scale it is false. The non-quantised pairs have no rounded transcendental in their path
-    and are unaffected. No library code reads or exposes any test switch: the gate is recomputed in the tests.
+  - **The trade-off, accepted on purpose:** (1) the reference partly encodes the kernel's operation order, so their
+    agreement is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate than
+    torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7; (3) the
+    bit-agreement relies on the same libdevice log2 / log1p / exp in torch's build and in the extension's nvcc build,
+    measured identical on this toolkit but not guaranteed across upgrades -- which is why the comparison is bit-exact:
+    such an upgrade fails the test instead of being absorbed by a tolerance. Cost: the reference quantised path
+    +15% eval, +3.5% training, +0.84 GiB eval peak at 32,768 vectors (unoptimised, by decision).
+  - **History:** an earlier version of this section (and the harness, and #160's text) claimed bit-identity with the
+    eager reference when it held only at test sizes; that was corrected, and the claim now holds and is tested at
+    scale. The non-quantised pairs have no rounded transcendental in their path and are unaffected.
 - **Consequence E:** every fused class (`FusedManifestoHardLUT`, `FusedManifestoSoftLUT`, `FusedConfidenceLUT`) is
   exported from `lutorch_ex/__init__.py`.
 
 **Deferred, outside #160 (on purpose):**
 - The quantised-optimisation follow-up PR: `DeployedQuantisedConfidenceLUT` 2.6x slower than its float twin at 32k
-  tokens, int8 deploy at n=2, the n=1 variant, the reference quantised path's speed, and the rounding-boundary
-  item: true bit-exactness of the quantised pair needs the kernel and the reference to share one transcendental
-  implementation (fp64 on both sides, or torch's CUDA math ported into the kernel) vs the documented status quo
-  (exact away from boundaries, bounded at them). Measured for fp64 exponents in the reference alone (branch
-  `wip/quant-fp64-exponents`, unpushed, the starting point): 0 compiled-vs-eager flips, but 0-6 disagreements per
-  8.4M tables with the fp32 kernel, and on the RTX 5090 (sm_120, fp64 at 1/64 of fp32) quantised eval 4.5x and
-  train +80% slower; cheap on H100 (sm_90, fp64 at 1/2).
+  tokens, int8 deploy at n=2, the n=1 variant, and the reference quantised path's speed -- now including the cost of
+  its explicit left fold (+15% eval, +0.84 GiB eval peak at 32k). The rounding-boundary item is RESOLVED on #160 (the
+  bit-exact layer 1 above); the fp64-exponent exploration (`wip/quant-fp64-exponents`, unpushed) is superseded.
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
   lutorch_ex, and the nanochat profiling scripts (which also pass the removed `backend=`).
