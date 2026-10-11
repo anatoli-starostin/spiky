@@ -2,7 +2,8 @@
 reference class.
 
 Per cartridge (FusedManifestoHardLUT / FusedManifestoSoftLUT with both weights, FusedConfidenceLUT with read_top_n 1
-and 2), per dtype (fp32; bf16 table + input; fp16 input on an fp32 table), per anchor mode and head pattern: the fused
+and 2, FusedQuantisedConfidenceLUT), per dtype (fp32; bf16 table + input; fp16 input on an fp32 table), per anchor mode
+and head pattern, wherever the fused class covers the case (the quantised op: fp32, pairs, read_top_n=2 only): the fused
 class and its reference class, loaded with the same state_dict, are fed the same input and output gradient, in
 training and in eval, and compared on every leaf: the value, the input gradient, the table gradient and every learned
 scalar's gradient (soft-sign temperatures; confidence beta / gamma / tau).
@@ -11,9 +12,10 @@ Tolerances (relative norm error ``||a - b|| / ||b||``), each from the one way th
 * Both sides take the same discrete decisions: addressing runs in fp32 on the same values in both (a margin is one
   fp32 subtraction), so the cells read are identical and only the arithmetic around them can differ.
 * fp32 leaf -- summation order. The kernels reduce in a different order (and the table gradient with atomics), so
-  each sum carries a different fp32 round-off: O(sqrt(K) * 2**-24) relative for K terms, ~1e-6 for the K <= 10**4
-  here. ``FP32_TOL = 1e-5`` per element-wise leaf; ``FP32_SCALAR_TOL = 1e-4`` for a learned scalar, whose gradient is
-  ONE sum over every (sample, group, table, output) and so the worst-conditioned reduction in the cartridge.
+  each sum carries a different fp32 round-off, a random walk of O(sqrt(K) * 2**-24) relative for K terms. Element-wise
+  leaves sum K <= 10**4 terms (~1e-6): ``FP32_TOL = 1e-5``. A learned scalar's gradient is ONE sum over every (sample,
+  group, table, output), K = B * n_groups * tph * d_out (up to ~2.5e7 here), the worst-conditioned reduction in the
+  cartridge: ``max(FP32_SCALAR_TOL = 1e-4, 4 * sqrt(K) * 2**-24)``, a 4-sigma bound on that walk.
 * bf16 / fp16 leaf -- one rounding. Both classes compute in fp32 and round each leaf once (fused: in the kernel's
   epilogue; reference: tests/test_reference_low_precision.py proves it bit-exact). Two roundings of fp32 values that
   differ only by the fp32 tolerance above land on the same low-precision value except where they straddle a
@@ -24,9 +26,20 @@ Tolerances (relative norm error ``||a - b|| / ||b||``), each from the one way th
   fp32 tolerances, widened to the input dtype's u: they are computed from the rounded output gradient and input.
 
 Measured 2026-10-11 (RTX 5090), worst error as a share of its tolerance over the whole matrix: fp32 value 3%, grad x
-2%, grad W 9%, learned scalars 21%; bf16 value 5%, grad x 5%, grad W 3%; fp16-input grad x 7%. (The harness found one
+2%, grad W 9%, learned scalars at most ~30% (one soft-sign temperature at batch 24576 reached 1.02e-4, which is why
+the scalar bound scales with K); bf16 value 5%, grad x 5%, grad W 3%; fp16-input grad x 7%; quantised vs the eager
+reference: bit-identical. (The harness found one
 real double rounding: a low-precision input gathered for several groups (fan-out) summed their input gradients in the
 input dtype, 78% of u; the fused classes now cast before the gather.)
+
+The quantised pair. Its value is a staircase: the power-of-two exponents k' and q are ROUNDED from fp32 expressions
+(log2 of the score, 2|u*|/(tau ln2)). The op computes them as the eager torch definition does, so fused and the EAGER
+reference (``_forward_impl``, uncompiled) take the same integers and are compared at the fp32 tolerances above
+(measured: bit-identical value and eval). The COMPILED reference is a different fp32 evaluation of the same
+expressions (Inductor fuses log2 / logsigmoid), so at an exact rounding tie it can round an exponent the other way:
+one table's weight for one sample changes by a factor 2, an O(1) error on a few elements. That is the reference's
+own compiled-vs-eager disagreement (the deferred rounding-tie item of the quantised follow-up PR), not a fused-vs-
+reference difference; it is bounded separately (``QUANT_TIE_TOL``, measured worst 3.4e-4 relative norm).
 
 Kernel-specific checks (launch knobs, determinism, the d_out launch boundary, bf16 accumulation under row collision,
 table dropout) live in test_fused_manifesto_cuda.py, test_fused_confidence.py and test_table_dropout_and_cell_tv.py.
@@ -34,8 +47,9 @@ table dropout) live in test_fused_manifesto_cuda.py, test_fused_confidence.py an
 import pytest
 import torch
 
-from spiky.lutorch_ex import (ConfidenceLUT, FusedConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT, LUTSpec,
-                              ManifestoHardLUT, ManifestoSoftLUT)
+from spiky.lutorch_ex import (ConfidenceLUT, FusedConfidenceLUT, FusedManifestoHardLUT, FusedManifestoSoftLUT,
+                              FusedQuantisedConfidenceLUT, LUTSpec, ManifestoHardLUT, ManifestoSoftLUT,
+                              QuantisedConfidenceLUT)
 from spiky.lutorch_ex.tests._requires_extension import requires_extension
 
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
@@ -43,6 +57,7 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a C
 FP32_TOL = 1e-5
 FP32_SCALAR_TOL = 1e-4
 U = {torch.bfloat16: 2.0 ** -8, torch.float16: 2.0 ** -11}
+QUANT_TIE_TOL = 2e-3            # the compiled quantised reference's rounding-tie flips (see the module docstring)
 
 #: (id, fused class, reference class, kwargs, extension)
 CARTRIDGES = [
@@ -54,10 +69,14 @@ CARTRIDGES = [
      dict(read_top_n=1, beta_init=1.7, gamma_init=0.8), "confidence"),
     ("Confidence n=2", FusedConfidenceLUT, ConfidenceLUT,
      dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6), "confidence"),
+    ("Quantised n=2", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
+     dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6), "quantised"),
 ]
 #: (id, table dtype, input dtype)
 DTYPES = [("fp32", torch.float32, torch.float32), ("bf16", torch.bfloat16, torch.bfloat16),
           ("fp16-input", torch.float32, torch.float16)]
+#: What each fused class covers (everything not listed: all dtypes, both anchor modes).
+COVERS = {"Quantised n=2": dict(dtypes={"fp32"}, anchor_modes={"pairs"})}
 #: (id, h_in, h_out, d, tph, nap, batch)
 GEOMS = [("small-per-head", 4, 4, 12, 6, 5, 128), ("fan-in", 4, 1, 12, 6, 5, 128), ("fan-out", 1, 4, 12, 6, 5, 128),
          ("batch-1", 4, 4, 12, 6, 5, 1), ("canonical", 16, 16, 48, 64, 8, 512), ("large-batch", 4, 4, 12, 6, 5, 24576)]
@@ -67,11 +86,12 @@ def _rel(a, b):
     return ((a.double() - b.double()).norm() / b.double().norm().clamp_min(1e-30)).item()
 
 
-def _tol(leaf: str, leaf_dtype: torch.dtype, input_dtype: torch.dtype) -> float:
+def _tol(leaf: str, leaf_dtype: torch.dtype, input_dtype: torch.dtype, n_terms: int = 0) -> float:
+    """The tolerance of one leaf (module docstring); ``n_terms`` = K of a learned scalar's gradient sum."""
     scalar = leaf not in ("value", "grad x", "grad weights")
     if leaf_dtype in U:
         return U[leaf_dtype]
-    base = FP32_SCALAR_TOL if scalar else FP32_TOL
+    base = max(FP32_SCALAR_TOL, 4.0 * n_terms ** 0.5 * 2.0 ** -24) if scalar else FP32_TOL
     return max(base, U.get(input_dtype, 0.0))
 
 
@@ -85,32 +105,86 @@ def _leaves(m, x, go):
     return out
 
 
-@pytest.mark.parametrize("geom", GEOMS, ids=[g[0] for g in GEOMS])
-@pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
-@pytest.mark.parametrize("dt", DTYPES, ids=[d[0] for d in DTYPES])
-@pytest.mark.parametrize("cart", CARTRIDGES, ids=[c[0] for c in CARTRIDGES])
-def test_fused_matches_reference(cart, dt, anchor_mode, geom):
+def _cases():
+    for cart in CARTRIDGES:
+        cov = COVERS.get(cart[0], {})
+        for dt in DTYPES:
+            for anchor_mode in ("pairs", "single"):
+                if dt[0] in cov.get("dtypes", {dt[0]}) and anchor_mode in cov.get("anchor_modes", {anchor_mode}):
+                    for geom in GEOMS:
+                        yield pytest.param(cart, dt, anchor_mode, geom,
+                                           id=f"{cart[0]}-{dt[0]}-{anchor_mode}-{geom[0]}")
+
+
+def _pair(cart, dt, anchor_mode, geom, seed=7):
     name, Fused, Ref, kw, ext = cart
     _, table_dtype, input_dtype = dt
     _, h_in, h_out, d, tph, nap, B = geom
     requires_extension(ext)
     torch._dynamo.reset()          # every case compiles the reference fresh (else Dynamo's recompile limit -> eager)
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=tph, nap=nap, d_in=d, d_out=d, anchor_mode=anchor_mode)
-    ref = Ref(spec, seed=7, weight_init_std=0.5, **kw).cuda().to(table_dtype)
-    fused = Fused(spec, seed=7, weight_init_std=0.5, **kw).cuda().to(table_dtype)
+    ref = Ref(spec, seed=seed, weight_init_std=0.5, **kw).cuda().to(table_dtype)
+    fused = Fused(spec, seed=seed, weight_init_std=0.5, **kw).cuda().to(table_dtype)
     fused.load_state_dict(ref.state_dict())
-    g = torch.Generator(device="cuda").manual_seed(B + h_in)
+    g = torch.Generator(device="cuda").manual_seed(B + h_in + seed)
     x = torch.randn(B, h_in, d, device="cuda", generator=g).to(input_dtype)
     go = torch.randn(B, h_out, d, device="cuda", generator=g).to(input_dtype)
+    return ref, fused, x, go
+
+
+class _Eager(torch.nn.Module):
+    """The reference's uncompiled forward (``_forward_impl``) with its parameters."""
+
+    def __init__(self, m):
+        super().__init__()
+        self.m = m
+
+    def forward(self, x):
+        return self.m._forward_impl(x)
+
+    def named_parameters(self, *a, **k):
+        return self.m.named_parameters(*a, **k)
+
+    def zero_grad(self, set_to_none=True):
+        self.m.zero_grad(set_to_none=set_to_none)
+
+
+@pytest.mark.parametrize("cart,dt,anchor_mode,geom", list(_cases()))
+def test_fused_matches_reference(cart, dt, anchor_mode, geom):
+    name, Fused, Ref, kw, ext = cart
+    input_dtype = dt[2]
+    ref, fused, x, go = _pair(cart, dt, anchor_mode, geom)
+    # The quantised staircase is compared with the EAGER reference (see the module docstring).
+    oracle = _Eager(ref) if Fused is FusedQuantisedConfidenceLUT else ref
 
     ref.train(); fused.train()
-    a, b = _leaves(fused, x, go), _leaves(ref, x, go)
+    a, b = _leaves(fused, x, go), _leaves(oracle, x, go)
     assert a.keys() == b.keys(), f"{name}: leaves {sorted(a)} vs {sorted(b)}"
     ref.eval(); fused.eval()
     with torch.no_grad():
-        a["eval value"], b["eval value"] = fused(x), ref(x)
+        a["eval value"], b["eval value"] = fused(x), oracle(x)
+        if Fused is FusedQuantisedConfidenceLUT:          # the integer read (forward_int) is the same value
+            a["eval value (integer read)"], b["eval value (integer read)"] = fused(x), ref.forward_int(x)
     for leaf in b:
         assert a[leaf].dtype == b[leaf].dtype, f"{name} {leaf}: dtype {a[leaf].dtype} vs {b[leaf].dtype}"
-        tol = _tol(leaf.replace("eval ", ""), b[leaf].dtype, input_dtype)
+        tol = _tol(leaf.replace("eval ", "").replace(" (integer read)", ""), b[leaf].dtype, input_dtype,
+                   n_terms=x.shape[0] * fused.spec.n_groups * fused.spec.tph * fused.spec.d_out)
         e = _rel(a[leaf], b[leaf])
         assert e < tol, f"{name} {leaf}: rel-norm error {e:.2e} >= {tol:.1e}"
+
+
+@pytest.mark.parametrize("geom", GEOMS, ids=[g[0] for g in GEOMS])
+def test_quantised_compiled_reference_rounding_ties_are_bounded(geom):
+    """The COMPILED quantised reference against the fused class: equal up to the exponent flips at exact rounding ties
+    (see the module docstring), bounded by QUANT_TIE_TOL on every leaf. Several seeds, so a tie is likely hit."""
+    cart = next(c for c in CARTRIDGES if c[0] == "Quantised n=2")
+    for seed in (7, 8, 9):
+        ref, fused, x, go = _pair(cart, DTYPES[0], "pairs", geom, seed=seed)
+        ref.train(); fused.train()
+        a, b = _leaves(fused, x, go), _leaves(ref, x, go)
+        ref.eval(); fused.eval()
+        with torch.no_grad():
+            a["eval value"], b["eval value"] = fused(x), ref(x)
+        for leaf in b:
+            e = _rel(a[leaf], b[leaf])
+            assert e < QUANT_TIE_TOL, f"seed {seed} {leaf}: rel-norm error {e:.2e} >= {QUANT_TIE_TOL:.1e}"

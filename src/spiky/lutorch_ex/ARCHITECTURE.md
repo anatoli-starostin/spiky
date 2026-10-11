@@ -114,8 +114,12 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   the fp32 run rounded once (`tests/test_reference_low_precision.py`). `QuantisedConfidenceLUT` keeps rejecting low
   precision (outside this spec's families).
 - **Consequence D:** `tests/test_fused_vs_reference.py` is the one fused-vs-reference harness: per cartridge (both
-  Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2), per dtype (fp32, bf16, fp16 input), per anchor
-  mode and head pattern, on every leaf, with explicit tolerances justified in its docstring. It replaced
+  Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2, FusedQuantisedConfidenceLUT), per dtype (fp32,
+  bf16, fp16 input) and anchor mode wherever the fused class covers them, per head pattern, on every leaf, with
+  explicit tolerances justified in its docstring. The quantised pair is compared with the eager reference
+  (bit-identical); the compiled quantised reference can round a power-of-two exponent the other way at an exact
+  tie (Inductor evaluates log2 / logsigmoid differently), bounded separately and left to the follow-up PR's
+  rounding-tie item. It replaced
   `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
   double rounding of a low-precision input's gradient in the fan-out pattern.
 - **Consequence E:** every fused class (`FusedManifestoHardLUT`, `FusedManifestoSoftLUT`, `FusedConfidenceLUT`) is
