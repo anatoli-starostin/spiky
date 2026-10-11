@@ -19,10 +19,10 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="the nativ
 
 
 def _mgr():
-    from spiky.lutorch_ex.cartridges._native_ops import native_manager
+    from spiky.lutorch_ex.cartridges._native_ops import LPROJ_EXT_NAME, native_manager
+    from spiky.lutorch_ex.tests._native_required import require_extension
     mgr = native_manager()
-    if mgr is None:
-        pytest.skip("native lprojection extension not available")
+    require_extension(mgr is not None, LPROJ_EXT_NAME)   # fail (see _native_required)
     return mgr
 
 

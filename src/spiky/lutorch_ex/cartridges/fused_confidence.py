@@ -19,10 +19,13 @@ Dispatch (``backend`` forces a path; 'auto' is the hybrid):
 * 'auto' -- 'cuda' whenever it can run, else 'pure'.
 
 bf16/fp16 (like the other fused cartridges): addressing runs in fp32 (so the discrete bit decisions don't drift),
-every read and reduction accumulates in fp32, and the output is cast back to the input dtype once. A bf16 table
-stays bf16 in memory and is upconverted in registers on the 'cuda' path; its weight gradient accumulates in an fp32
-buffer and is cast to bf16 once, at the end. On the 'pure' path low precision runs the ConfidenceLUT math in fp32 on
-an fp32 view of the parameters. ``fused_read`` is ignored by the CUDA path.
+every read and reduction accumulates in fp32, and the output is rounded to the input dtype once. On the 'cuda' path a
+bf16 input is read by the kernels directly (upconverted while each row is staged) and, when groups map 1:1 onto
+output heads, the kernel stores the bf16 output itself (a fan-in keeps the fp32 output, sums the groups, then casts);
+both are bitwise identical to casting outside the kernel. A bf16 table stays bf16 in memory and is upconverted in
+registers on the 'cuda' path; its weight gradient accumulates in an fp32 buffer and is cast to bf16 once, at the end.
+On the 'pure' path low precision runs the ConfidenceLUT math in fp32 on an fp32 view of the parameters.
+``fused_read`` is ignored by the CUDA path.
 
 Table dropout draws its keep flags with ``torch.rand`` (one bool per (b, g, t), like Inductor's separate RNG kernel)
 and the kernels apply them; the stream of random numbers differs from the compiled ConfidenceLUT's, the
@@ -31,15 +34,17 @@ distribution does not.
 from __future__ import annotations
 
 import os
-import warnings
 from dataclasses import dataclass, field
 
 import torch
 from torch.nn.utils.stateless import _reparametrize_module
 
+from . import _fallback
 from ._fused_ops import validate_backend
 from ._native_ops import _CSRC
 from .confidence import ConfidenceLUT
+
+EXT_NAME = "lutorch_ex_fused_confidence"
 
 _LOW_PREC = (torch.bfloat16, torch.float16)
 _CUDA_TABLE_DTYPES = (torch.float32, torch.bfloat16)
@@ -73,47 +78,54 @@ def fused_confidence_ext():
     if _TRIED:
         return _EXT
     _TRIED = True
-    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1" or not torch.cuda.is_available():
+    if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
+        _fallback.record_build_failure(EXT_NAME, disabled=True)
+        return None
+    if not torch.cuda.is_available():
+        _fallback.record_build_failure(EXT_NAME)
         return None
     try:
         from torch.utils.cpp_extension import load
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        _EXT = load(name="lutorch_ex_fused_confidence", sources=[os.path.join(_CSRC, "fused_confidence.cu")],
+        _EXT = load(name=EXT_NAME, sources=[os.path.join(_CSRC, "fused_confidence.cu")],
                     extra_cflags=[f"-std={std}", "-O3"], extra_cuda_cflags=[f"-std={std}", "-O3"], verbose=False)
     except Exception as e:
-        warnings.warn(f"lutorch_ex: the fused_confidence extension could not be built/loaded; FusedConfidenceLUT uses "
-                      f"the ConfidenceLUT path instead. {type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
+        # Never raise here; classify WHY. FusedConfidenceLUT reports it loudly where it actually falls back.
+        _fallback.record_build_failure(EXT_NAME, e)
         _EXT = None
     return _EXT
 
 
 class _FusedConfidence(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, eps, n, knobs):
-        # z, log_beta / log_gamma / log_tau: fp32. weights: fp32 or bf16 (the kernels read it in place).
+    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, eps, n, knobs,
+                out_bf16):
+        # z: fp32 or bf16 (upconverted in-kernel). log_beta / log_gamma / log_tau: fp32. weights: fp32 or bf16 (the
+        # kernels read it in place). The output is fp32, or bf16 when out_bf16 (bf16 z only).
         ext = fused_confidence_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         vec = knobs.vec if weights.dtype == torch.float32 else knobs.vec_bf16
         out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-                                 nap, eps, n, knobs.fwd_threads, knobs.rows_per_cta, vec)
+                                 nap, eps, n, knobs.fwd_threads, knobs.rows_per_cta, vec, out_bf16)
         ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep)
         ctx.cfg = (keep_scale, nap, eps, n, knobs, vec)
-        return out                                          # fp32
+        return out
 
     @staticmethod
     def backward(ctx, go):
         z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
         keep_scale, nap, eps, n, knobs, vec = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
+        # The kernel reads go in fp32 (a bf16 go from the bf16-output mode is upcast: exact). gz comes back in z's dtype.
         gW, gz, gscal = fused_confidence_ext().confidence_bwd(
-            go.contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
+            go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
             nap, eps, n, knobs.bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         g = gscal.sum(0)
         g_tau = g[2] if n == 2 else None
         # gW is accumulated in fp32 whatever the table dtype; a bf16 Parameter must receive a bf16 .grad, so it is
         # cast once here (one rounding per element, after the whole accumulation; a no-op for an fp32 table).
         return (gz, gW.view_as(weights).to(weights.dtype), g[0], g[1], g_tau,
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None, None)
 
 
 class FusedConfidenceLUT(ConfidenceLUT):
@@ -145,9 +157,14 @@ class FusedConfidenceLUT(ConfidenceLUT):
     def _supports_low_precision(self) -> bool:
         return True  # bf16/fp16: fp32 addressing + fp32-accumulated reads ('cuda' and 'pure')
 
-    def _cuda_ok(self, x: torch.Tensor) -> bool:
+    def _shape_ok(self, x: torch.Tensor) -> bool:
+        """Everything the CUDA kernels need EXCEPT the extension itself (a CUDA input, fp32/bf16 table, nap <= 16).
+        Failing this is a deliberate design fallback (no kernel for that case), not a broken fast path."""
         return (x.is_cuda and x.dtype in (torch.float32,) + _LOW_PREC and self.weights.dtype in _CUDA_TABLE_DTYPES
-                and self.spec.nap <= 16 and fused_confidence_ext() is not None)
+                and self.spec.nap <= 16)
+
+    def _cuda_ok(self, x: torch.Tensor) -> bool:
+        return self._shape_ok(x) and fused_confidence_ext() is not None
 
     def _keep_flags(self, B: int, device):
         """Table-dropout keep flags ``[B, G, tph]`` bool (TRAIN + grad only, else None); kernels scale by 1/keep."""
@@ -158,24 +175,42 @@ class FusedConfidenceLUT(ConfidenceLUT):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         be = self.backend
         if be == "auto":
-            be = "cuda" if self._cuda_ok(x) else "pure"
+            if self._cuda_ok(x):
+                be = "cuda"
+            else:
+                if self._shape_ok(x):   # the case the kernels exist for, but the extension is missing: involuntary
+                    _fallback.report_involuntary_fallback(type(self).__name__, EXT_NAME, "auto", "pure")
+                be = "pure"
         elif be == "cuda" and not self._cuda_ok(x):
+            if self._shape_ok(x):       # only the extension is missing: name the classified cause
+                cause = _fallback.recorded(EXT_NAME) or _fallback.Cause(
+                    "unclassified", "the extension loader did not record a cause",
+                    remedy=_fallback.CAUSES["unclassified"][1])
+                raise _fallback.NativeUnavailableError(
+                    _fallback.banner(type(self).__name__, EXT_NAME, "cuda", "(none: explicit request)", cause))
             raise RuntimeError(
                 f"{type(self).__name__}: backend='cuda' needs a CUDA input, an fp32 or bf16 table, nap <= 16 and the "
                 f"fused_confidence extension; got input {x.dtype} on {x.device}, table {self.weights.dtype}, "
                 f"nap {self.spec.nap}, extension {'loaded' if fused_confidence_ext() is not None else 'unavailable'}")
+        self.last_backend = be                                   # provenance for benchmarks (what actually ran)
         if be == "pure":
             return self._pure_forward(x)
         self._check_input(x)
-        # Addressing in fp32 (a no-op for fp32 input); grad x comes back through this cast in the input dtype.
-        z = x[:, self.in_head, :].float().contiguous()          # [B, G, d_in]
+        # [B, G, d_in]; when every group reads its own head (h_in == n_groups) the in_head gather is the identity and
+        # is skipped (no copy of the input). Addressing runs in fp32: a bf16 input goes to the kernels as is and is
+        # upconverted while each row is staged (exact); fp16 is cast here. grad x comes back in the input dtype.
+        zin = x if self.spec.h_in == self.spec.n_groups else x[:, self.in_head, :]
+        z = (zin if zin.dtype == torch.bfloat16 else zin.float()).contiguous()
+        # bf16 output straight from the kernel (one rounding, as the cast it replaces) when groups map 1:1 onto output
+        # heads; a fan-in sums the groups in _route first, so it keeps the fp32 output and casts once after the sum.
+        out_bf16 = z.dtype == torch.bfloat16 and self.spec.h_out == self.spec.n_groups
         keep = self._keep_flags(x.shape[0], x.device)
         keep_scale = 1.0 / (1.0 - self.table_dropout_rate)
         log_tau = self.log_read_tau if self.read_top_n == 2 else self.confidence_log_beta
         grp = _FusedConfidence.apply(z, self.weights, self.confidence_log_beta.float(),
                                      self.confidence_log_gamma.float(), log_tau.float(),
                                      self._anc_a16, self._anc_b16, keep, keep_scale, self.spec.nap, self.cmp_eps,
-                                     self.read_top_n, self.knobs)
+                                     self.read_top_n, self.knobs, out_bf16)
         return self._route(grp, x).to(x.dtype)
 
     def _pure_forward(self, x: torch.Tensor) -> torch.Tensor:

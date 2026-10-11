@@ -33,7 +33,10 @@ import warnings
 
 import torch
 
+from . import _fallback
 from ._fused_ops import _acc_dtype, fused_hard_read
+
+LPROJ_EXT_NAME = "lutorch_ex_lprojection"
 
 _THREADS = int(os.environ.get("SPIKY_LUTORCH_CUDA_THREADS_PER_BLOCK", "256"))
 _MANAGER = None
@@ -67,10 +70,12 @@ def _lprojection_ext():
         return _LPROJ_EXT
     _LPROJ_TRIED = True
     if os.environ.get("LUTORCH_EX_NO_CUDA_EXT", "0") == "1":
+        _fallback.record_build_failure(LPROJ_EXT_NAME, disabled=True)
         return None
     try:
         import torch
         if not torch.cuda.is_available():
+            _fallback.record_build_failure(LPROJ_EXT_NAME)
             return None
         from torch.utils.cpp_extension import load
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
@@ -87,7 +92,10 @@ def _lprojection_ext():
                                    os.path.join(_CSRC, "common_misc.cpp")],
                           extra_cflags=cpp, extra_cuda_cflags=cuda, extra_ldflags=["-lcuda"],
                           verbose=False)
-    except Exception:
+    except Exception as e:
+        # Never raise here (the pure / tier-1 paths are correct), but classify WHY; the cartridge that falls back
+        # because of it reports the cause loudly (cartridges/_fallback.py).
+        _fallback.record_build_failure(LPROJ_EXT_NAME, e)
         _LPROJ_EXT = None
     return _LPROJ_EXT
 
@@ -151,9 +159,30 @@ def native_manager():
     if ext is not None:
         try:
             _MANAGER = ext.get_lutorch_manager()
-        except Exception:
+        except Exception as e:
+            _fallback.record_build_failure(LPROJ_EXT_NAME, e)
             _MANAGER = None
     return _MANAGER
+
+
+def raise_if_forced_native_unavailable(cartridge: str, x: torch.Tensor) -> None:
+    """``backend='native'`` was requested explicitly: if it cannot run, fail with the classified cause (an explicit
+    request is never silently downgraded)."""
+    if not native_available(x.device):
+        cause = _fallback.recorded(LPROJ_EXT_NAME) or _fallback.Cause(
+            "unclassified", "the extension loader did not record a cause", remedy=_fallback.CAUSES["unclassified"][1])
+        if not x.is_cuda:
+            cause = _fallback.Cause("no_cuda_device", f"input is on {x.device}; the native kernels are CUDA-only",
+                                    remedy="move the input to CUDA or use backend='auto'")
+        raise _fallback.NativeUnavailableError(
+            _fallback.banner(cartridge, LPROJ_EXT_NAME, "native", "(none: explicit request)", cause))
+
+
+def require_native_or_report(cartridge: str, x: torch.Tensor, wanted: str, used: str) -> None:
+    """Call where a cartridge picks a non-native backend for a CUDA input only because native is unavailable:
+    reports the classified cause (warn once / raise in strict mode). CPU inputs are a deliberate path: no-op."""
+    if x.is_cuda:
+        _fallback.report_involuntary_fallback(cartridge, LPROJ_EXT_NAME, wanted, used)
 
 
 def native_available(device: torch.device) -> bool:
