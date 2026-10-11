@@ -148,7 +148,10 @@ class FusedConfidenceLUT(ConfidenceBase):
         # [B, G, d_in]; when every group reads its own head (h_in == n_groups) the in_head gather is the identity and
         # is skipped (no copy of the input). Addressing runs in fp32: a bf16 input goes to the kernels as is and is
         # upconverted while each row is staged (exact); fp16 is cast here. grad x comes back in the input dtype.
-        zin = x if self.spec.h_in == self.spec.n_groups else x[:, self.in_head, :]
+        # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to fp32
+        # BEFORE it, so those groups' input gradients sum in fp32 and are rounded to the input dtype once.
+        zin = x if self.spec.h_in == self.spec.n_groups else \
+            (x if x.dtype == torch.float32 else x.float())[:, self.in_head, :]
         z = (zin if zin.dtype == torch.bfloat16 else zin.float()).contiguous()
         # bf16 output straight from the kernel (one rounding, as the cast it replaces) when groups map 1:1 onto output
         # heads; a fan-in sums the groups in _route first, so it keeps the fp32 output and casts once after the sum.

@@ -146,7 +146,10 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     require_cuda(module, x)
     # Group g reads input head g % h_in. When h_in == n_groups that map is the identity, so x already IS the per-group
     # input: skip the gather (eager it is a full extra pass + intermediate, which the compiled path used to fuse away).
-    zin = x if module.spec.h_in == module.spec.n_groups else x[:, module.in_head, :]
+    # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to fp32
+    # BEFORE it, so those groups' input gradients sum in fp32 and are rounded to the input dtype once.
+    zin = x if module.spec.h_in == module.spec.n_groups else \
+        (x if x.dtype == torch.float32 else x.float())[:, module.in_head, :]
     # A bf16 input goes to the kernels as is: they upconvert it while staging each row (fp32 addressing, no fp32 copy of
     # the input in global memory). fp16 / fp64 are cast to fp32 here as before.
     z = (zin if zin.dtype in (torch.float32, torch.bfloat16) else zin.float()).contiguous()

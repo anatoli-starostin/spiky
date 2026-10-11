@@ -99,8 +99,11 @@ Under rules 3 and 5 the first two **are gone**:
   the fp32 run rounded once (`tests/test_reference_low_precision.py`). `QuantisedConfidenceLUT` keeps rejecting low
   precision (outside this spec's families).
 
+- **Consequence D:** `tests/test_fused_vs_reference.py` is the one fused-vs-reference harness: per cartridge (both
+  Manifesto twins with both weights, FusedConfidenceLUT n=1 and 2), per dtype (fp32, bf16, fp16 input), per anchor
+  mode and head pattern, on every leaf, with explicit tolerances justified in its docstring. It replaced
+  `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
+  double rounding of a low-precision input's gradient in the fan-out pattern.
+
 **Still open:**
-- **Consequence D:** fused-vs-reference equivalence tests exist (`test_fused_equivalence`,
-  `test_fused_manifesto_softsign`, `test_fused_confidence`, `test_fused_manifesto_cuda`), but not uniformly per
-  cartridge and per dtype with explicit tolerances.
 - **Consequence E:** `FusedConfidenceLUT` is not exported from `lutorch_ex/__init__.py`.
