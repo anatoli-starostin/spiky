@@ -11,6 +11,7 @@ A cartridge-based lookup-table feed-forward layer. The pieces:
 from .cartridges import (
     ConfidenceLUT,
     QuantisedConfidenceLUT,
+    FusedQuantisedConfidenceLUT,
     DeployedQuantisedConfidenceLUT,
     FusedConfidenceLUT,
     FusedManifestoHardLUT,
@@ -41,6 +42,7 @@ __all__ = [
     "ConfidenceLUT",
     "FusedConfidenceLUT",
     "QuantisedConfidenceLUT",
+    "FusedQuantisedConfidenceLUT",
     "cell_tv_penalty",
     "ProjectionMHL",
     "SupportsDecompressBake",

@@ -60,6 +60,9 @@ CAUSES = {
     "torch_too_old": (
         "this torch is older than lutorch_ex's minimum.",
         "upgrade torch to >= %d.%d." % MIN_TORCH),
+    "unvalidated_arch": (
+        "the extension is enabled only on GPU architectures it has been validated on, and this one is not among them.",
+        "run on a validated GPU (the extension's VALIDATED_ARCHES), or construct the reference class."),
     "no_cuda_device": (
         "torch sees no CUDA device.",
         "run on a CUDA machine, or construct the reference class (it needs no extension)."),
@@ -143,6 +146,13 @@ def record_build_failure(ext_name: str, exc: Optional[BaseException] = None) -> 
     return cause
 
 
+def record_cause(ext_name: str, cause: Cause) -> Cause:
+    """Store a cause the loader determined itself (e.g. an architecture outside its validated list)."""
+    cause.remedy = cause.remedy or CAUSES[cause.kind][1]
+    _RECORDED[ext_name] = cause
+    return cause
+
+
 def recorded(ext_name: str) -> Optional[Cause]:
     return _RECORDED.get(ext_name)
 
@@ -164,8 +174,8 @@ def banner(cartridge: str, ext_name: str, cause: Cause) -> str:
     if cause.log_path:
         lines.append(f"Build log : {cause.log_path}")
     lines += [
-        "Without   : construct the reference class (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT), which needs no",
-        "            extension.",
+        "Without   : construct the reference class (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT /",
+        "            QuantisedConfidenceLUT), which needs no extension.",
         "=" * 100,
     ]
     return "\n".join(lines)

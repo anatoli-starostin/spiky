@@ -170,9 +170,67 @@ def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
         m(torch.randn(16, 4, 8))
 
 
-@pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, lx.FusedConfidenceLUT],
+@pytest.mark.parametrize("cls", [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, lx.FusedConfidenceLUT,
+                                 lx.FusedQuantisedConfidenceLUT],
                          ids=lambda c: c.__name__)
 def test_no_backend_argument(cls):
     """Spec rule 3: the class is the implementation; there is nothing to select."""
     with pytest.raises(TypeError, match="backend"):
         cls(_spec(), seed=0, backend="cuda")
+
+
+# -- FusedQuantisedConfidenceLUT (the p2_scalars op) -----------------------------------------------------------------
+
+@pytest.fixture
+def no_quantised_ext(monkeypatch):
+    from spiky.lutorch_ex.cartridges import _pow2_int8
+    monkeypatch.setattr(_pow2_int8, "_registered", False)
+    monkeypatch.setattr(_pow2_int8, "_tried", True)
+    monkeypatch.setattr(_pow2_int8, "_ext", None)
+    record_build_failure(_pow2_int8.EXT_NAME, RuntimeError("Ninja is required to load C++ extensions"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_fused_quantised_without_extension_raises_with_cause(no_quantised_ext):
+    m = lx.FusedQuantisedConfidenceLUT(_spec(), seed=0, read_top_n=2).cuda()
+    for train in (True, False):
+        with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
+            m.train(train)(torch.randn(16, 4, 8, device="cuda"))
+
+
+def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
+    from spiky.lutorch_ex.cartridges import _pow2_int8
+    monkeypatch.setattr(_pow2_int8, "_tried", False)
+    monkeypatch.setattr(_pow2_int8, "_ext", None)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (7, 5))
+    assert _pow2_int8.load() is None
+    assert _fallback.recorded(_pow2_int8.EXT_NAME).kind == "unvalidated_arch"
+    with pytest.raises(NativeUnavailableError, match=r"(?s)\[unvalidated_arch\].*\(7, 5\)"):
+        _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _pow2_int8.EXT_NAME)
+
+
+@pytest.mark.parametrize("case,kw,x", [
+    ("read_top_n=1", dict(read_top_n=1), lambda: torch.randn(8, 4, 8)),
+    ("anchor_mode='single'", dict(spec=dict(anchor_mode="single")), lambda: torch.randn(8, 4, 8)),
+    ("the input is on cpu", {}, lambda: torch.randn(8, 4, 8)),
+    ("input dtype torch.float64", {}, lambda: torch.randn(8, 4, 8, dtype=torch.float64)),
+])
+def test_fused_quantised_uncovered_cases_raise_naming_the_reference(case, kw, x):
+    """No fallback: every case the op does not cover raises, naming the case and QuantisedConfidenceLUT."""
+    spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8, anchor_mode=kw.pop("spec", {}).get("anchor_mode",
+                                                                                                    "pairs"))
+    m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, **{"read_top_n": 2, **kw})
+    with pytest.raises(RuntimeError, match=rf"(?s){case}.*Construct QuantisedConfidenceLUT"):
+        m(x())
+
+
+def test_no_env_var_switch_left():
+    """LUTORCH_EX_NO_CUDA_EXT / SPIKY_P2_CUDA_DISABLE and the module switch are gone (spec rules 3 and 5)."""
+    import pathlib
+    from spiky.lutorch_ex.cartridges import _pow2_int8
+    assert not hasattr(_pow2_int8, "set_enabled") and not hasattr(_pow2_int8, "_enabled")
+    root = pathlib.Path(lx.__file__).parent / "cartridges"
+    for src in root.glob("*.py"):
+        text = src.read_text()
+        assert "LUTORCH_EX_NO_CUDA_EXT" not in text and "SPIKY_P2_CUDA_DISABLE" not in text, src.name

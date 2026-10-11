@@ -1,6 +1,7 @@
-"""Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT's straight-through reads and
-forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it, and on CUDA the
-p2_scalars op in ``_pow2_int8`` computes the same integers (that agreement is tested, see there).
+"""Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT (the reference class),
+its forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it; FusedQuantisedConfidenceLUT's
+p2_scalars op (``_pow2_int8``) computes the same integers and recomputes its backward with :func:`ste_cell_weights`
+(the agreement is tested in tests/test_fused_vs_reference.py).
 
 It is pure PyTorch (no CUDA / no extension dependency) and holds the whole p2_int8 quantisation
 math — the power-of-two scale, the log-domain score exponent, the two-cell blend exponents, the
@@ -116,6 +117,23 @@ def ste_blend_weights(score: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, 
     val = torch.where(keep, b, torch.zeros_like(b))
     s = e * (b / e.detach().clamp_min(1e-30))
     return val + (s - s.detach())
+
+
+def score_from_margins(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
+    """learned_margin score s = (sum_i m_i) exp(g + gamma sum_i logsigmoid(beta m_i)), m = |d| [..., NAP] -> [...].
+    ConfidenceLUT._score plus an additive log-gain g (always 0 in lutorch_ex), with beta = exp(log_beta),
+    gamma = exp(log_gamma) given."""
+    return m.sum(dim=-1) * torch.exp(g + gamma * F.logsigmoid(beta * m).sum(dim=-1))
+
+
+def ste_cell_weights(d: torch.Tensor, tau: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor,
+                     q: torch.Tensor, k: torch.Tensor, skip: torch.Tensor, drop: torch.Tensor) -> torch.Tensor:
+    """The straight-through per-cell weights [..., 2] for given integers: value (2^k', 2^(k'-q)) or 0, gradient through
+    s v, s (1 - v) times the ratios. THE torch expression: the reference read uses it, and the fused op's backward
+    recomputes it with the op's integers held fixed."""
+    m = d.abs()
+    mv = m.min(dim=-1, keepdim=True).values
+    return ste_blend_weights(score_from_margins(m, g, beta, gamma), mv, tau, q, k, skip, drop)
 
 
 @torch.no_grad()

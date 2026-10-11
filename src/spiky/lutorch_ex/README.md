@@ -283,8 +283,15 @@ gradient is accumulated with atomics, so it is not bit-reproducible run to run (
 
 The Gen-3 `ConfidenceLUT` has the hand-written twin `FusedConfidenceLUT` (`cartridges/fused_confidence.py`,
 the `lutorch_ex_fused_confidence` extension), with the same coverage and errors; neither inherits the other's
-forward (both build on `ConfidenceBase`). `QuantisedConfidenceLUT` has no twin (its compiled `embedding_bag`
-read is its fast path).
+forward (both build on `ConfidenceBase`).
+
+`QuantisedConfidenceLUT` (the reference: the torch definition in `cartridges/_pow2.py`, every case) has the twin
+`FusedQuantisedConfidenceLUT`: the `lutorch_ex::p2_scalars` CUDA op (`csrc/pow2_int8_read.cu`, the
+`lutorch_ex_pow2_int8_read` extension) computes the per-table power-of-two integers and straight-through cell weights,
+and n=2 training runs one flat compiled read. The op is the two-cell read on CUDA fp32, so read_top_n=1, single
+anchors, a CPU input or a non-fp32 input / table raise, naming the case; it is enabled only on validated
+architectures (sm_120, sm_90), elsewhere it raises with that cause. Despite the file name the extension is not an
+int8 read: int8 tables are always read with the torch definition (`_pow2.int_blend_read`).
 
 **Precision.** Every Manifesto and confidence class, reference and fused, runs fp32 and accepts a bf16 / fp16
 input and a bf16 table with one contract: addressing runs in fp32, so a lossy margin cannot flip a bit; reads and
@@ -292,7 +299,7 @@ reductions accumulate in fp32; and each result is rounded once (the output and t
 a parameter's gradient to its dtype). The reference classes do it by running their fp32 maths on fp32 views; the
 result is bit-identical to the fp32 run rounded once (`tests/test_reference_low_precision.py`). The reference
 classes also run fp64; the fused ones do not (and take no fp16 table). `QuantisedConfidenceLUT` stays fp32 / fp64
-and raises a `TypeError` on bf16/fp16.
+and raises a `TypeError` on bf16/fp16; `FusedQuantisedConfidenceLUT` is fp32 only.
 
 **Compilation and kernels.**
 
@@ -308,8 +315,6 @@ and raises a `TypeError` on bf16/fp16.
 | environment variable | effect |
 | --- | --- |
 | `LUTORCH_EX_NO_COMPILE=1` | disable `torch.compile` everywhere |
-| `LUTORCH_EX_NO_CUDA_EXT=1` | skip the int8 read extension (`QuantisedConfidenceLUT` / Deployed then use their torch read); it does not affect the fused classes, which have no fallback |
-| `SPIKY_P2_CUDA_DISABLE=1` | deprecated alias, still honoured: skips the int8 read extension only |
 
 ## The wrapper: `ProjectionMHL`
 
@@ -449,8 +454,8 @@ Scope today:
 - `read_top_n=2` and `h_out == n_groups` only; fan-in would need a scale applied before routing.
 - The wrapper must have a `decompress` layer to fold the scale into.
 - Only int8 is implemented; other bit widths have no packer.
-- The int8 CUDA read is enabled only on validated architectures, sm_120 and sm_90. Elsewhere the
-  pure-torch read is used.
+- The deployed int8 read is the torch definition (`_pow2.int_blend_read`, compiled on CUDA); no extension is
+  involved.
 
 ## Benchmarking
 
@@ -522,8 +527,9 @@ lutorch_ex/
 │   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
 │   ├── fused_manifesto_hard.py, fused_manifesto_soft.py   fused twins
 │   ├── confidence.py                Gen-3 ConfidenceLUT
-│   ├── quantised_confidence.py      QuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
-│   ├── _pow2.py, _pow2_int8.py      power-of-two quantisation maths and its CUDA read
+│   ├── quantised_confidence.py      QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
+│   ├── _pow2.py                     the power-of-two quantisation maths (the torch definition)
+│   ├── _pow2_int8.py                FusedQuantisedConfidenceLUT glue: the p2_scalars op (csrc/pow2_int8_read.cu)
 │   ├── fused_confidence.py          FusedConfidenceLUT (glue for csrc/fused_confidence.cu)
 │   ├── reference_base.py            ReferenceForward: the reference classes' (compiled) forward
 │   ├── confidence_base.py           ConfidenceBase: ConfidenceLUT / FusedConfidenceLUT parameters and scaffolding

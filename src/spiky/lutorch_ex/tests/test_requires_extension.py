@@ -28,7 +28,7 @@ def test_no_cuda_device_is_a_skip(monkeypatch):
     _cuda(monkeypatch, False)
     with pytest.raises(pytest.skip.Exception, match="needs a CUDA device"):
         rx.require_extension(False, EXT)
-    for which in ("manifesto", "confidence"):          # skips before any build is attempted
+    for which in ("manifesto", "confidence", "quantised"):     # skips before any build is attempted
         with pytest.raises(pytest.skip.Exception, match="needs a CUDA device"):
             rx.requires_extension(which)
 

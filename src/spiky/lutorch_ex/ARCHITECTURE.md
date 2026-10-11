@@ -54,7 +54,7 @@ fold, SoftSign's "Smooth" (the same variant as Manifesto's "Soft") becomes `Soft
 | Manifesto, hard read + surrogate gradient | `ManifestoHardLUT(weight="rational" \| "softsign")` | `FusedManifestoHardLUT(weight=...)` |
 | Manifesto, blended read | `ManifestoSoftLUT(weight="rational" \| "softsign")` | `FusedManifestoSoftLUT(weight=...)` |
 | Confidence | `ConfidenceLUT` | `FusedConfidenceLUT` |
-| Confidence, quantised | `QuantisedConfidenceLUT` | none yet (`DeployedQuantisedConfidenceLUT` stays the inference-only deploy form) |
+| Confidence, quantised | `QuantisedConfidenceLUT` | `FusedQuantisedConfidenceLUT` (`DeployedQuantisedConfidenceLUT` stays the inference-only deploy form, torch only) |
 
 - **Rejected:** an implementation suffix (`ManifestoHardRefLUT` / `ManifestoHardCudaLUT`), which renames every class,
   and namespaces (`lutorch_ex.reference.X` / `lutorch_ex.cuda.X`), which change every import and make the two forms
@@ -64,22 +64,18 @@ fold, SoftSign's "Smooth" (the same variant as Manifesto's "Soft") becomes `Soft
   learned temperatures stay `log_soft_score_temp` / `log_select_temp`. References in the report `.tex` and in
   experiment / profiling scripts are left dangling on purpose until the final cleanup; they are listed in #160.
 
-## `LUTORCH_EX_NO_CUDA_EXT` under this spec
+## `LUTORCH_EX_NO_CUDA_EXT` under this spec - gone
 
 Before this spec it was read in three places: `_cuda_ext.load_extension` (skip building every JIT extension),
-`_fallback.disabled_on_purpose` / `is_deliberate` (make the resulting fallback quiet), and `_pow2_int8` (skip the
-p2 / int8 extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`).
-
-Under rules 3 and 5 the first two **are gone**:
-- A fused class raises when its kernel cannot load, so there is no fallback left to make quiet.
-- No reference class loads an extension (`ManifestoHard/Soft` and `ConfidenceLUT` import none).
+`_fallback.disabled_on_purpose` / `is_deliberate` (make the resulting fallback quiet), and `_pow2_int8.load` (skip the
+p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus the module switch
+`_pow2_int8.set_enabled`). Under rules 3 and 5 all of them **are gone**, with no exception:
+- A fused class raises when its kernel cannot load, so there is no fallback left to make quiet or to force.
+- No reference class uses an extension (`ManifestoHard/Soft`, `ConfidenceLUT`, `QuantisedConfidenceLUT` and
+  `DeployedQuantisedConfidenceLUT` call none).
 - **The replacement lever** is explicit class choice (E): to run without the extension (CI, a CPU-only box),
   construct the reference class. Tests of a fused class skip without a CUDA device and fail on one without the
   extension (`tests/_requires_extension.py`).
-- **One residual, outside this spec's families:** `QuantisedConfidenceLUT` registers the p2 op with a built-in pure
-  fallback, and `DeployedQuantisedConfidenceLUT` reads through the int8 extension. Until the quantised-cartridges
-  work splits these into a reference and a fused form, the variable (or `SPIKY_P2_CUDA_DISABLE`) still gates that one
-  path.
 
 ## Gaps between `main` and this spec (for the PRs that land it)
 
@@ -91,7 +87,25 @@ Under rules 3 and 5 the first two **are gone**:
   case the kernels do not cover names the case and the reference class, a missing extension names the classified
   cause. The `pure` / `pure_eval` / `tier1` / `native` paths are deleted, with `_native_ops.py`,
   `_native_softsign.py` and their CUDA sources (`lprojection`, single-anchor input grad, `softsign_surrogate_grad`).
-  `LUTORCH_EX_NO_CUDA_EXT` survives only on the p2 / int8 path (above).
+  `LUTORCH_EX_NO_CUDA_EXT` is gone (above).
+- **Rules 3 + 5, the quantised path:** `QuantisedConfidenceLUT` is the reference (the torch definition, `_pow2`, every
+  case; no extension, no op, no monolith). `FusedQuantisedConfidenceLUT` (new) carries the `lutorch_ex::p2_scalars`
+  op: the n=2 training monolith and the n=2 eval read. It raises without the extension (classified cause, including
+  an architecture outside its validated list) and on a case the op does not cover (read_top_n=1, single anchors, a
+  CPU input, a non-fp32 input or table). `_pow2_int8.set_enabled` / `_enabled` and the env-var switch are gone. Both
+  share `QuantisedScaffold` (config, fake-quant tables, the integer read, deployment export) and the state_dict;
+  `from_deployment` rebuilds the (torch) `DeployedQuantisedConfidenceLUT`. The extension (`csrc/pow2_int8_read.cu`)
+  is not an int8 read despite its name: it computes only the per-table p2 integers; int8 tables are read by the torch
+  definition (`_pow2.int_blend_read`). The file and op names are kept (renaming them would churn the build cache
+  and the op registry for no behaviour change).
+- **Decided consequences of rules 3 + 5 (accepted by Anatoly):**
+  - The `native` lprojection kernels are gone. They were a second, slower CUDA implementation and the only CUDA path
+    with fp64; fp64 now runs on the reference classes only (CPU or CUDA).
+  - A fused class no longer runs on the CPU. CPU coverage lives with the reference classes; fused tests skip without
+    a CUDA device.
+  - The reference quantised path is slower than the old default, which took the op for n=2 eval and the monolith for
+    n=2 training on CUDA; that speed now lives in `FusedQuantisedConfidenceLUT`. Measured in the #160 snapshot of
+    record; not to be fixed in #160.
 - **Consequence B:** `ManifestoLUT` is scaffolding only; its `forward()` raises `NotImplementedError`. The
   reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
@@ -108,8 +122,7 @@ Under rules 3 and 5 the first two **are gone**:
   exported from `lutorch_ex/__init__.py`.
 
 **Deferred, outside #160 (on purpose):**
-- The quantised cartridges (`QuantisedConfidenceLUT`, `DeployedQuantisedConfidenceLUT`): no reference / fused split
-  yet, so `LUTORCH_EX_NO_CUDA_EXT` still gates their p2 / int8 read and they keep rejecting bf16; Deployed is 2.6x
-  slower than its float twin at 32k tokens. These belong to the quantised-cartridges PR.
+- The quantised-optimisation follow-up PR: `DeployedQuantisedConfidenceLUT` 2.6x slower than its float twin at 32k
+  tokens, int8 deploy at n=2, the n=1 variant, the rounding-tie fix, and the reference quantised path's speed.
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
-  lutorch_ex, and the nanochat profiling scripts.
+  lutorch_ex, and the nanochat profiling scripts (which also pass the removed `backend=`).

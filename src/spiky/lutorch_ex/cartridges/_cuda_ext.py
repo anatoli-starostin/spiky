@@ -2,7 +2,8 @@
 two hand-written kernel families (FusedManifesto* and FusedConfidenceLUT).
 
 * :func:`load_extension` is the one JIT build / load of the fused cartridges' extensions (fused_manifesto,
-  fused_confidence; the p2 int8 extension has its own architecture-gated loader in ``_pow2_int8``). It never raises:
+  fused_confidence; FusedQuantisedConfidenceLUT's p2_scalars extension has its own architecture-gated loader in
+  ``_pow2_int8``). It never raises:
   when the extension is unavailable it records the classified cause (:mod:`._fallback`) and returns None, and the
   fused cartridge that needs it raises with that cause.
 * :class:`KernelKnobs` is the launch configuration of the two kernel families. :class:`ManifestoCudaKnobs` and

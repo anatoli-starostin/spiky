@@ -50,7 +50,6 @@ class BenchRow:
     min_ms: Optional[float] = None
     throughput_rows_per_s: Optional[float] = None
     note: str = ""
-    backend: str = ""                 # the implementation: 'cuda' (a Fused* class) or 'reference'
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -162,14 +161,9 @@ def benchmark(
     """Benchmark a cartridge over the (operation x batch x device) grid. See module docstring.
 
     A fused class has no fallback: a case its kernels do not cover, or a missing extension, raises, so it is an error
-    cell, never a silently slow timing. Every ok row carries the implementation ('cuda' or 'reference')."""
+    cell, never a silently slow timing. The class is the implementation, so the cartridge name says what ran."""
     return _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats,
                       measure_cuda)
-
-
-def implementation_of(cart) -> str:
-    """'cuda' for a fused cartridge (its kernels are its only implementation), else 'reference'."""
-    return "cuda" if type(cart).__name__.startswith("Fused") else "reference"
 
 
 def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats, measure_cuda):
@@ -188,8 +182,7 @@ def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, device
                     cart = make_cartridge().to(device)
                     times, note = _measure_cell(cart, make_input, op, batch, device, warmup, repeats)
                     med, mn, thr = _stats(times, batch)
-                    rows.append(BenchRow(name, label, op, batch, "ok", med, mn, thr, note,
-                                         backend=implementation_of(cart)))
+                    rows.append(BenchRow(name, label, op, batch, "ok", med, mn, thr, note))
                 except Exception as e:  # OOM, etc. — one cell failing must not kill the grid
                     rows.append(BenchRow(name, label, op, batch, "error", note=f"{type(e).__name__}: {e}"))
                 finally:
@@ -200,11 +193,11 @@ def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, device
 
 def format_table(rows: Sequence[BenchRow]) -> str:
     """Render rows as a fixed-width text table."""
-    header = ("cartridge", "backend", "device", "operation", "batch", "status", "median_ms", "min_ms", "rows/s")
+    header = ("cartridge", "device", "operation", "batch", "status", "median_ms", "min_ms", "rows/s")
 
     def cell(r: BenchRow) -> tuple:
         fmt = lambda v, f: (f % v) if v is not None else "-"
-        return (r.cartridge, r.backend or "-", r.device, r.operation, str(r.batch_size), r.status,
+        return (r.cartridge, r.device, r.operation, str(r.batch_size), r.status,
                 fmt(r.median_ms, "%.3f"), fmt(r.min_ms, "%.3f"), fmt(r.throughput_rows_per_s, "%.1f"))
 
     table = [header] + [cell(r) for r in rows]

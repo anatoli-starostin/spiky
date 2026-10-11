@@ -75,7 +75,7 @@ from spiky.lutorch_ex.tests._weights import softsign  # noqa: E402
     _lx.ManifestoHardLUT, _lx.ManifestoSoftLUT, _lx.FusedManifestoHardLUT, _lx.FusedManifestoSoftLUT,
     softsign(_lx.ManifestoHardLUT), softsign(_lx.ManifestoSoftLUT), softsign(_lx.FusedManifestoHardLUT),
     softsign(_lx.FusedManifestoSoftLUT),
-    _lx.ConfidenceLUT, _FusedConfidenceLUT, _lx.QuantisedConfidenceLUT,
+    _lx.ConfidenceLUT, _FusedConfidenceLUT, _lx.QuantisedConfidenceLUT, _lx.FusedQuantisedConfidenceLUT,
 ])
 def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):
     """A misspelt option (here table_dropout_rate) used to be swallowed by ManifestoLUT.__init__(**unused): the
@@ -106,12 +106,14 @@ def test_the_shared_bases_have_no_forward(base):
 
 def test_no_fused_class_inherits_a_reference_forward():
     for fused, ref in ((_lx.FusedManifestoHardLUT, _lx.ManifestoHardLUT), (_lx.FusedManifestoSoftLUT, _lx.ManifestoSoftLUT),
-                       (_FusedConfidenceLUT, _lx.ConfidenceLUT)):
+                       (_FusedConfidenceLUT, _lx.ConfidenceLUT),
+                       (_lx.FusedQuantisedConfidenceLUT, _lx.QuantisedConfidenceLUT)):
         assert not issubclass(fused, ref) and not issubclass(fused, ReferenceForward), fused.__name__
         assert issubclass(ref, ReferenceForward), ref.__name__
 
 
 def test_every_fused_class_is_exported():
     """Spec amendment E: the class names are the public API, so every fused class is importable from lutorch_ex."""
-    for name in ("FusedManifestoHardLUT", "FusedManifestoSoftLUT", "FusedConfidenceLUT"):
+    for name in ("FusedManifestoHardLUT", "FusedManifestoSoftLUT", "FusedConfidenceLUT",
+                 "FusedQuantisedConfidenceLUT"):
         assert name in _lx.__all__ and getattr(_lx, name).__name__ == name

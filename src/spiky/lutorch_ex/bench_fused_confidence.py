@@ -21,15 +21,6 @@ from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, Cud
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
 
-def provenance(mod) -> str:
-    """The implementation, for the row label: FusedConfidenceLUT runs only its kernels (or raises)."""
-    return "cuda" if isinstance(mod, FusedConfidenceLUT) else "compiled ConfidenceLUT"
-
-SPEC = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
-KW = dict(seed=1, table_dropout_rate=0.2)
-KINDS = ("compiled", "cuda", "cuda-bf16")
-
-
 def build(kind, n, knobs=None):
     spec = LUTSpec(**SPEC)
     if kind in ("cuda", "cuda-bf16"):
@@ -142,7 +133,7 @@ def main():
             fwd, _ = time_step(mod, x, go, fwd_only=True)
             ms, peak = time_step(mod, x, go)
             print(f"  {kind:15s} fwd {fwd:7.3f} ms   fwd+bwd {ms:7.3f} ms  {peak:6.2f} GiB   "
-                  f"[{provenance(mod)}]")
+                  f"[{type(mod).__name__}]")
             torch._dynamo.reset()
         if a.sweep:
             print("  sweep, fp32 table (fwd_threads, bwd_threads, rows_per_cta, vec):")

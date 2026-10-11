@@ -5,8 +5,9 @@ The fused classes have no fallback (spec rule 3), so a test that runs one needs 
 * a CUDA device, the extension unavailable (failed to build or load, e.g. setuptools missing) -> a FAILURE naming the
   extension and its recorded cause, so a broken build cannot pass as a green run.
 
-Use :func:`requires_extension` (``requires_extension("manifesto")`` / ``("confidence")``) at the top of a test, or the
-:data:`needs_manifesto_ext` / :data:`needs_confidence_ext` fixtures.
+Use :func:`requires_extension` (``requires_extension("manifesto")`` / ``("confidence")`` / ``("quantised")``) at the
+top of a test, or the :data:`needs_manifesto_ext` / :data:`needs_confidence_ext` / :data:`needs_quantised_ext`
+fixtures.
 """
 import pytest
 import torch
@@ -21,14 +22,18 @@ def require_cuda() -> None:
 
 
 def _probe(which: str):
-    """``(available, ext_name)`` for ``which`` in {'manifesto', 'confidence'}; loads (JIT-builds) the extension."""
+    """``(available, ext_name)`` for ``which`` in {'manifesto', 'confidence', 'quantised'}; loads (JIT-builds) the
+    extension."""
     if which == "manifesto":
         from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import EXT_NAME, fused_manifesto_ext
         return fused_manifesto_ext() is not None, EXT_NAME
     if which == "confidence":
         from spiky.lutorch_ex.cartridges.fused_confidence import EXT_NAME, fused_confidence_ext
         return fused_confidence_ext() is not None, EXT_NAME
-    raise ValueError(f"unknown extension {which!r} (expected 'manifesto' or 'confidence')")
+    if which == "quantised":
+        from spiky.lutorch_ex.cartridges import _pow2_int8
+        return _pow2_int8.ensure_registered(), _pow2_int8.EXT_NAME
+    raise ValueError(f"unknown extension {which!r} (expected 'manifesto', 'confidence' or 'quantised')")
 
 
 def _unavailable(ext_name: str) -> str:
@@ -59,3 +64,8 @@ def needs_manifesto_ext():
 @pytest.fixture
 def needs_confidence_ext():
     requires_extension("confidence")
+
+
+@pytest.fixture
+def needs_quantised_ext():
+    requires_extension("quantised")
