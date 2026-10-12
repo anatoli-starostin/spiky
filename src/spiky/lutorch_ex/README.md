@@ -462,8 +462,12 @@ Scope today:
 The performance snapshot of record (every class, fp32 and bf16, 8k and 32k vectors, RTX 5090) is
 `benchmarks/snapshot_162.md` / `.json`, made by `python -m spiky.lutorch_ex.bench_snapshot`. Earlier snapshots stay as
 history: `snapshot_160` and `snapshot_159.json` (#159's, transcribed from its PR comment: 2 decimals, a different
-session). `python -m spiky.lutorch_ex.bench_compare A.json B.json --out-dir DIR` compares any two of them and draws
-the figures in `benchmarks/figures_159_vs_162/` (interleaved before / after bars and a ratio strip; matplotlib needed).
+session). `python -m spiky.lutorch_ex.bench_compare A.json B.json --out-dir DIR` compares any two of them (interleaved
+before / after bars and a ratio strip; matplotlib needed). Two committed figure sets:
+- `benchmarks/figures_159_vs_162/`: the cumulative change across #160 and #162 (#159's snapshot has 2 decimals and a
+  different session: not a controlled A/B);
+- `benchmarks/figures_160_vs_162/`: #162's effect alone (the quantised reference's compile options, ManifestoHardLUT's
+  surrogate); the other cells that move there are run-to-run noise.
 
 `spiky.lutorch_ex.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
 grid of batch sizes and devices. It reports the median and minimum milliseconds and the throughput:
