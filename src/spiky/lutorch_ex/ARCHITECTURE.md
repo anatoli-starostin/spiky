@@ -144,9 +144,12 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     training forward) in 28 runs of 8.4M tables -- nap 3, 5, 6, 7 and 8 on the champion geometry and h8 tph32 nap4 d64,
     4 seeds, at init and after 200 training steps. Before, with torch's own reduction order, they disagreed on 0-3
     tables per run (the summation order and the reciprocal-multiply division; the transcendentals were identical).
-  - *Layer 2, compile trust -- the compiled reference vs the eager reference, in fp64 on purpose.* In fp32 Inductor's
-    reassociation of the transcendentals lands a few values per million tables on the other side of a rounding
-    boundary (measured: 52 of 192 runs had a flipped row; flip-free rows <= 1.1e-7, flipped rows >= 5.8e-3), so any
+  - *Layer 2, compile trust -- the compiled reference vs the eager reference, in fp32 a different evaluation of the
+    same formula, so fp64 on purpose.* Compiled, the left folds and the transcendentals stay bit-identical to eager;
+    two divisions do not. In k', Inductor rewrites the division by the constant ln2 into a multiply by its reciprocal,
+    which Triton contracts with the following add into one FMA. In q, Triton computes 2/(tau ln2) with its approximate
+    fp32 division (`div.full.f32`). In fp32 that lands a few values per million tables on the other side of a rounding
+    boundary (measured on #160: 52 of 192 runs had a flipped row; flip-free rows <= 1.1e-7, flipped rows >= 5.8e-3), so any
     fp32 bound only absorbs flips. In fp64 the two evaluations differ by ~1e-16 and nothing flips (0 in 192 runs: nap 3
     to 8 on two geometries, 8 seeds, at init and after training). The test therefore builds the cartridge in fp64
     (through its normal dtype support; no library switch) and asserts tight bounds -- every row <= 1e-13, eval / value
