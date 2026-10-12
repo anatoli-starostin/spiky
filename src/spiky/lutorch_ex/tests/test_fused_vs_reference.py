@@ -269,10 +269,16 @@ FP64_TENSOR_BOUND = 1e-14       # eval, value, grad x, grad weights (worst 2.2e-
 FP64_SCALAR_BOUND = 1e-12       # beta / gamma / tau gradients (worst 6.0e-14, ~17x headroom)
 
 
-def _champion_pair(seed):
+#: Layer 1 geometries: the champion, and tph = 128 -- past the bound of the fp32 exactness argument (QuantisedConfidenceLUT.
+#: _blend_read: 2 tph = 256 terms of up to 127 * 2^10 units can pass 2^24), where bit-equality is no longer guaranteed
+#: by construction and is checked as measured.
+LAYER1_GEOMS = {"champion": CHAMPION, "tph128": dict(CHAMPION, tph=128)}
+
+
+def _champion_pair(seed, geom=CHAMPION):
     requires_extension("quantised")
     torch._dynamo.reset()
-    spec = LUTSpec(**CHAMPION)
+    spec = LUTSpec(**geom)
     ref = QuantisedConfidenceLUT(spec, seed=seed, **QUANT_KW).cuda()
     fused = FusedQuantisedConfidenceLUT(spec, seed=seed, **QUANT_KW).cuda()
     fused.load_state_dict(ref.state_dict())
@@ -280,13 +286,15 @@ def _champion_pair(seed):
     return ref, fused, x
 
 
+@pytest.mark.parametrize("geom", sorted(LAYER1_GEOMS))
 @pytest.mark.parametrize("seed", [0, 1])
-def test_quantised_layer1_fused_bit_exact_vs_eager_reference(seed):
-    """LAYER 1 (oracle): at the champion scale (8.4M tables), the op's integers (q, k', skip, drop) equal the eager
-    reference definition's (_pow2.blend_exponents on the same margins) on EVERY table, and the eager reference's output
-    equals the fused class's bit for bit, in eval and in the training forward. No tolerance, no gate."""
+def test_quantised_layer1_fused_bit_exact_vs_eager_reference(seed, geom):
+    """LAYER 1 (oracle): at the champion scale (8.4M tables; 16.8M at tph = 128), the op's integers (q, k', skip,
+    drop) equal the eager reference definition's (_pow2.blend_exponents on the same margins) on EVERY table, and the
+    eager reference's output equals the fused class's bit for bit, in eval and in the training forward. No tolerance,
+    no gate."""
     from spiky.lutorch_ex.cartridges import _pow2, _pow2_int8
-    ref, fused, x = _champion_pair(seed)
+    ref, fused, x = _champion_pair(seed, LAYER1_GEOMS[geom])
     with torch.no_grad():
         z, u, c, j, ustar, calt = ref._addresses(x)
         beta, gamma = ref._betagamma(u.dtype)

@@ -426,3 +426,86 @@ As FusedConfidenceLUT's backward does:
 - The forward saves only z (the routed input, `[B, G, d_in]`), the parameters and the dropout factors.
 - The backward kernel, one CTA per (group, rows), re-stages the z row and anchors in shared memory and **recomputes phase A**: the margins in registers / shared memory for the gradient terms (as FusedConfidence's `us` scratch, per CTA, `tph × nap` floats), the integers, the weights.
 - Nothing `[B, G, tph, nap]`-sized is stored in global memory at any point.
+
+## Stages 2 + 4: the exactness argument in the reference, and the hand-written backward
+
+### Stage 2 (folded in, documentation + coverage)
+
+- **The exactness argument now lives in the reference**, in `QuantisedConfidenceLUT._blend_read`'s docstring.
+  - Every term is W_hat·2^e·2^k' or W_hat·2^e·2^(k'−q), with |W_hat| ≤ 127, k' ∈ [−3, 4] and q ≤ 3. So every term is an integer multiple of 2^(e−6).
+  - A bag of 2·tph = 128 terms stays within 128·127·2^10 = 16,646,144 < 2^24, so no partial sum rounds.
+  - It names when the argument fails: tph > 64; a wider read window or larger Q; table dropout (1/(1−rate) rounds).
+  - `_left_fold` and every reduction order are unchanged.
+- **New coverage:** the existing Layer 1 test (`test_quantised_layer1_fused_bit_exact_vs_eager_reference`) is parametrised over `LAYER1_GEOMS = {champion, tph128}`. tph128 is the champion with tph = 128, i.e. 16.8M tables at 8,192 vectors, past the exactness bound.
+  - Zero tolerance, unchanged assertions.
+  - **Measured: bit-exact** for seeds 0 and 1, eval and training forward, and the integers agree on every table.
+  - So no separate tolerance assertion is proposed. The bound is a worst case (every term at |W_hat| = 127 and the top shift, all the same sign), which these weights do not reach. Bit-equality at tph > 64 is measured, not guaranteed. If a future geometry breaks it, Layer 1 will say so.
+
+### Stage 4: `quant_bwd_kernel` (csrc/pow2_int8_read.cu)
+
+**One launch**, structured as FusedConfidenceLUT's backward. One CTA per (group, 4 samples), the same thread count and vector width as the forward.
+
+- **Saved by the forward:** z `[B, G, d_in]`, the fp32 master table, the exponents E `[G, d_out]`, the three log scalars, the dropout factors `[B, G, tph]` (when training with dropout), and the anchors. The anchors are stored as int16, plus a per-group input-dim → anchor-entry CSR map (int32, input-independent, built once in `__init__`).
+- **Nothing of size `[B, G, tph, nap]` is ever in global memory.** The margins `us` and their gradients `gd` are per-CTA shared memory, `tph × nap` floats each.
+- **Phase A (thread per table):** re-stage z, recompute the margins (kept in shared memory), `p2::table_scalars`, the forward weights w1 / w2 (× dropout), and the straight-through numerators b1 = 2^k', b2 = 2^(k'−q). These use the clamped k', also for skipped and dropped cells, as `_pow2.ste_blend_weights`.
+- **Phase B (stripe × chunk, float4 `__ldg`):**
+  - `gW[c] += w·go` via fp32 atomics (float4 vector atomics on sm_90+).
+  - The per-chunk partial dot products `go · fq(W[c])`, each written to its own shared slot `rp[chunk][t]`.
+- **Phase C (thread per table):**
+  - `r_c = Σ_chunk rp` in chunk order.
+  - The straight-through gradient: `G_c = r_c · mask · b_c / max(e_c, 1e-30)`, with e_1 = s·σ(x), e_2 = s·σ(−x), x = 2mv/τ. Then g_s = G_1σ(x) + G_2σ(−x) and g_x = s(G_1 − G_2)σ(x)σ(−x).
+  - The margin gradients `gd[t][j] = sign(u_j)·(g_s·E + g_s·s·γ·β·σ(−βm_j) [+ g_x·2/τ if j is the first argmin])`.
+  - This thread's share of the β / γ / τ gradients.
+- **Phase D (thread per input dim):** `gz[i]` sums the gd of the anchors that read i, from the CSR map. **No atomics.**
+
+**Exact reduction order of every gradient. Determinism: nothing feeding q or k' uses atomics.**
+
+| gradient | order | deterministic |
+|---|---|---|
+| grad x (z) | per (sample, group, input dim i): `((0 ± gd[e_0]) ± gd[e_1]) ± …` over the anchor entries reading i in increasing entry index (a-anchors in (t, j) order, then b-anchors; + for a, − for b); then `x[:, in_head]`'s autograd scatter when h_in ≠ n_groups | yes, bit-repeatable |
+| per-table dot r_c | `((0 + rp_0) + rp_1) + … + rp_{nchunk−1}`, each `rp = ((0 + fq_0·go_0) + fq_1·go_1) + …` over the VEC lanes | yes |
+| log β, log γ, log τ | per thread: tables t = tid, tid + blockDim, … within each of the CTA's 4 rows in order; warp xor-shuffle butterfly (16, 8, 4, 2, 1); warps 0..nw−1 summed in order by thread 0; per-CTA partials `[grid, 3]` summed by `torch.sum(0)` (a fixed-shape reduction) | yes, bit-repeatable |
+| grad W | fp32 `atomicAdd` (float4 vector atomics on sm_90+): order **not** deterministic. Allowed (it feeds no q / k' within the step) | no (measured: not bit-repeatable) |
+
+### Gradient correctness
+
+Throwaway script: fused vs the eager reference in fp32, and vs the reference in fp64. Same weights and input, B = 512, seeds 0 / 1. Values are relative norms; the eager32 ~ fp64 column is the reference's own fp32 error, for scale.
+
+| geometry | gradient | fused ~ eager fp32 | fused ~ fp64 | eager fp32 ~ fp64 |
+|---|---|---|---|---|
+| champion | grad x | 1.9e-7 | 1.5e-7 | 1.5e-7 |
+| champion | grad W | 5.3e-8 | 5.0e-8 | 4.9e-8 |
+| champion | log β | 2.5e-7 – 4.7e-7 | 5e-9 – 8e-9 | 2.4e-7 – 4.6e-7 |
+| champion | log γ | 1.2e-7 – 3.4e-7 | 2.0e-7 – 3.9e-7 | 5e-8 – 3.2e-7 |
+| champion | log τ | 9e-8 – 2.3e-6 | 1.4e-7 – 1.8e-6 | 4e-8 – 4.7e-7 |
+| tph128 | grad x / W | 2.1e-7 / 4.4e-8 | 1.7e-7 / 5.0e-8 | 1.7e-7 / 4.9e-8 |
+| tph128 | β / γ / τ | ≤ 1.4e-6 | ≤ 1.6e-6 | ≤ 2.3e-7 |
+| h4 tph20 nap5 d13→6 | grad x / W | 1.8e-7 / 1.4e-7 | 1.3e-7 / 1.3e-7 | 1.5e-7 / 7.5e-8 |
+| h4 tph20 nap5 d13→6 | log β (seed 0) | 7.2e-5 | 1.8e-5 | 5.4e-5 |
+
+- The fused gradients are as close to fp64 as the eager fp32 reference is.
+- The single 7e-5 outlier (the 6-output geometry's β, seed 0) is the sum's cancellation: the eager fp32 reference is 5.4e-5 from fp64 there too.
+- **Bit-identical to the torch path: none**, except log γ at the small geometry for seed 1 (by chance). The kernel sums in a different order from autograd, so bit identity is not expected. The forward value stays bit-identical (Layer 1).
+- The suite's own gradient checks pass: the Amendment D harness's fp32 checks against the fp64 truth for the scalars, layer 1 with table dropout (fp32 tolerances, ROW_SAME), test_table_dropout_and_cell_tv (a dropped table gets zero grad). The surrogate / gradcheck tests in test_quantised_confidence.py run on the reference class (fp64), not on the fused kernel, which is fp32 only.
+
+### Measured (RTX 5090, `bench_snapshot.measure`, fresh process per cell, two runs; ms / GiB)
+
+| cell | Stage 1 | **Stage 4** | FusedConfidence n=2 | vs FusedConfidence |
+|---|---|---|---|---|
+| 32k train total | 50.4 / 3.734 | **9.92–10.02 / 0.236** | 9.35–9.39 / 0.236 | **+6%** (+0.6 ms) |
+| 32k train backward | — | 7.84–7.96 | 7.37–7.42 | +7% |
+| 8k train total | 12.90 / 0.969 | **2.64–2.71 / 0.094** | 2.43 / 0.094 | **+10%** (+0.24 ms) |
+| 32k eval | 1.94 / 0.094 | 1.94–1.99 / 0.094 | 1.87 / 0.094 | +4% (unchanged) |
+| 8k eval | 0.526 / 0.023 | 0.526–0.528 / 0.023 | 0.474 / 0.023 | +11% (unchanged) |
+
+- **Against the targets:** 32k **met** (~10 ms target; 10.0 measured, 5.0× faster than Stage 1). 8k **missed**: 2.67 against ~2.4, +10% over FusedConfidence.
+- **Peak memory equals FusedConfidence's** at both sizes.
+- **Launches per train step: 52 → 10 at 8k, 11 at 32k** (FusedConfidence: 9 / 10). The one extra launch is the table-exponent kernel.
+- **Profile at 32k train (kernel time 9.81 ms):** `quant_bwd_kernel` 7.71, `quant_fwd_kernel` 1.94, `table_exponent_kernel` 0.07, then the optimizer-free bench's adds and fills.
+- **Where the residual is:** the backward is +0.4–0.6 ms over FusedConfidence's (bench backward medians). Likely causes (not profiled to the instruction level): the fake-quant of every loaded element for the dot products, the extra phase-C transcendentals of the straight-through ratios (σ, the logsigmoid derivative, the divides), and phase D's serial CSR walk.
+
+### Tests
+
+- **Full GPU suite: 1575 passed / 0 failed / 0 skipped** (main: 1573; the 2 new cases are the tph128 Layer 1 parametrisations).
+- **CPU suite: 417 passed / 1010 skipped** (main: 417 / 1008; the 2 new GPU-only cases skip on CPU).
+- No assertion changed, no tolerance added or widened; Layer 1 stays zero-tolerance.

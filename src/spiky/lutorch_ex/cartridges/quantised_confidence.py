@@ -28,8 +28,7 @@ Implementations (spec rules 3 and 5: the class is the implementation, there is n
   compiled on CUDA. It loads no extension.
 * :class:`FusedQuantisedConfidenceLUT` -- the fused twin: one fused CUDA forward (``_pow2_int8.FusedQuantRead``:
   addressing, the per-table integers and straight-through weights, the fake-quant gather, in one kernel after the
-  table exponents); its backward is, for now, the torch form of the same read (the ``lutorch_ex::p2_scalars`` op,
-  ste_tables, embedding_bag). Cases the kernel does not cover (read_top_n=1, single anchors, nap > 8, a CPU input, a
+  table exponents) and one hand-written CUDA backward that recomputes the per-table scalars from z. Cases the kernel does not cover (read_top_n=1, single anchors, nap > 8, a CPU input, a
   non-fp32 input or table) raise, naming the case, and so does a missing extension.
 * :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form; torch, no extension.
 
@@ -73,7 +72,17 @@ class QuantisedScaffold:
         return W.reshape(G * tph * K, d_out)
 
     def _blend_read(self, psw2, c, c_alt, W2):
-        """The n=2 read: cells c and c_alt of every table, weighted by psw2 [B, G, tph, 2] -> [B, G, d_out]."""
+        """The n=2 read: cells c and c_alt of every table, weighted by psw2 [B, G, tph, 2] -> [B, G, d_out].
+
+        EXACT IN FP32, so the order of embedding_bag's sum does not matter (and FusedQuantisedConfidenceLUT's
+        different, documented order gives the same bits). Per output (group g, channel c) every term is
+        W_hat * 2^e * 2^k' or W_hat * 2^e * 2^(k' - q), with |W_hat| <= 127, k' in [-3, 4] and q <= 3 (Q): an integer
+        multiple of 2^(e - 6) of magnitude at most 127 * 2^10. A bag holds 2 tph = 128 terms at the p2_int8 preset, so
+        every partial sum is an integer multiple of 2^(e - 6) bounded by 128 * 127 * 2^10 = 16,646,144 < 2^24: fp32
+        represents it, and no addition rounds. The argument FAILS (sums can round, and two orders can then differ):
+        * tph > 64: 2 tph * 127 * 2^10 can reach 2^24;
+        * a read window wider than [-3, 4] (or a larger Q): more bits per term;
+        * table dropout: the weights carry 1 / (1 - rate), not a power of two, so the products already round."""
         G, tph, K, d_out = self.weights.shape
         B = c.shape[0]
         gc = _global_cells(c, G, tph, K)
@@ -299,24 +308,32 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
 
     Forward (``_pow2_int8.FusedQuantRead``): the table exponents, then ONE kernel for the whole read -- addressing, the
     p2 integers and straight-through weights in registers, the fake-quant gather and the fixed-order reduction (the
-    order is documented in ``csrc/pow2_int8_read.cu``). The margins never reach global memory. Backward: for now the
-    torch form of the same read (:meth:`_read_torch`), differentiated with autograd; the hand-written backward kernel
-    (which will recompute the margins from z, as FusedConfidenceLUT's does) replaces it."""
+    order is documented in ``csrc/pow2_int8_read.cu``). The margins never reach global memory. Backward: ONE
+    hand-written kernel that re-stages z and recomputes phase A per CTA, as FusedConfidenceLUT's does; its reduction
+    orders are documented beside it."""
 
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._init_quant(quant_mode, quant_overrides)
         # Build / register the op eagerly; never raises -- _require raises per call.
         _pow2_int8.ensure_registered()
-        self._compiled_read = None   # the backward's compiled recompute, built lazily (see _recompute)
         # int16 copies of the anchors for the kernel (the int64 buffers stay the state_dict's source of truth).
         if spec.d_in > torch.iinfo(torch.int16).max:
             raise ValueError(f"FusedQuantisedConfidenceLUT needs d_in <= 32767, got {spec.d_in}")
         self.register_buffer("_anc_a16", self.anchor_a.to(torch.int16).contiguous(), persistent=False)
         if self.anchor_b is not None:
             self.register_buffer("_anc_b16", self.anchor_b.to(torch.int16).contiguous(), persistent=False)
+            # The backward's input-dim -> anchor-entry map (per group, CSR): entry e < tph * nap is anchor_a's e-th,
+            # else anchor_b's (e - tph * nap)-th; increasing within each dim, the fixed order of the z gradient's sum.
+            G, an = self.spec.n_groups, self.spec.tph * self.spec.nap
+            dims = torch.cat([self.anchor_a.reshape(G, an), self.anchor_b.reshape(G, an)], dim=1)
+            ent = torch.sort(dims, dim=1, stable=True).indices
+            cnt = torch.stack([torch.bincount(r, minlength=self.spec.d_in) for r in dims])
+            off = torch.cat([torch.zeros(G, 1, dtype=cnt.dtype, device=cnt.device), cnt.cumsum(1)], dim=1)
+            self.register_buffer("_zoff", off.to(torch.int32).contiguous(), persistent=False)
+            self.register_buffer("_zent", ent.to(torch.int32).contiguous(), persistent=False)
         else:
-            self._anc_b16 = None
+            self._anc_b16 = self._zoff = self._zent = None
 
     def _require(self, x: torch.Tensor) -> None:
         """Raise unless the kernel can run this call: a RuntimeError naming the unsupported case, or the classified
@@ -354,49 +371,9 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         dmask = self._table_dropout_mask(x.shape[0], x.device, x.dtype)
         grp_out = _pow2_int8.FusedQuantRead.apply(
             z, self.weights, self.confidence_log_beta.float(), self.confidence_log_gamma.float(),
-            self.log_read_tau.float(), self._anc_a16, self._anc_b16,
-            None if dmask is None else dmask.contiguous(), self._quant, self._recompute())
+            self.log_read_tau.float(), self._anc_a16, self._anc_b16, self._zoff, self._zent,
+            None if dmask is None else dmask.contiguous(), self._quant)
         return self._route(grp_out, x)
-
-    def _recompute(self):
-        """The backward's recompute (:meth:`_read_torch`), torch.compiled like the other reference graphs
-        (specialised on the first shape: its fused backward is cheaper)."""
-        if not _COMPILE_ENABLED:
-            return self._read_torch
-        if self._compiled_read is None:
-            self._compiled_read = torch.compile(self._read_torch, dynamic=None)
-        return self._compiled_read
-
-    def _read_torch(self, z, weights, log_beta, log_gamma, log_tau, dmask):
-        """The torch form of the fused read (the backward until the hand-written kernel): margins, the p2_scalars op
-        (cells + straight-through power-of-two weights), ste_tables and an offsets-based embedding_bag. Its integers
-        are the fused kernel's (same p2::table_scalars on the same fp32 margins); its value differs only in the order
-        of the output sums."""
-        G, tph, K, d_out = weights.shape
-        nap = self.spec.nap
-        B = z.shape[0]
-        cfg = self._quant
-        idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
-        idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
-        d = (z.gather(2, idx_a) - z.gather(2, idx_b)).view(B, G, tph, nap)  # signed margins
-        beta, gamma = log_beta.exp(), log_gamma.exp()
-        g0 = torch.zeros((), dtype=d.dtype, device=d.device)
-        tau = log_tau.exp()
-        psw, idx = _pow2_int8.p2_cell_weights(d, tau, g0, beta, gamma, cfg)  # [B,G,tph,2]
-        if dmask is not None:
-            psw = psw * dmask.unsqueeze(-1)            # table dropout (one Bernoulli/table, both cells)
-        W = _pow2.ste_tables(weights.reshape(G * tph, K, d_out), n_heads=G, bits=cfg["bits"], offset=cfg["offset"])
-        flat_q = W.reshape(-1, d_out)
-        # embedding_bag wants indices and offsets of one dtype; int32 offsets reach B*G*2*tph, so fall back to int64
-        # for batches where that would not fit.
-        dt = self.index_dtype
-        if dt == torch.int32 and B * G * 2 * tph > torch.iinfo(torch.int32).max:
-            dt = torch.long
-        toff = (torch.arange(G * tph, device=z.device, dtype=dt) * K).view(1, G, tph, 1)
-        flat_idx = (idx.to(dt) + toff).reshape(-1)
-        offsets = torch.arange(B * G, device=z.device, dtype=dt) * (2 * tph)
-        return F.embedding_bag(flat_idx, flat_q, offsets=offsets, mode="sum",
-                               per_sample_weights=psw.reshape(-1).to(flat_q.dtype)).view(B, G, d_out)
 
 
 class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):

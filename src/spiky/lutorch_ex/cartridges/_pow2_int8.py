@@ -1,13 +1,12 @@
-"""The CUDA side of FusedQuantisedConfidenceLUT: the p2 extension's build / load and device gating, and the
-lutorch_ex::p2_scalars custom op. Used ONLY by the fused class; the reference QuantisedConfidenceLUT never calls
-it (importing this module builds nothing: ensure_registered() loads the extension).
+"""The CUDA side of FusedQuantisedConfidenceLUT: the p2 extension's build / load and device gating, the
+lutorch_ex::p2_scalars custom op and the fused read. Used ONLY by the fused class; the reference QuantisedConfidenceLUT
+never calls it (importing this module builds nothing: ensure_registered() loads the extension).
 
 EXTENSION
 
-csrc/pow2_int8_read.cu provides one function, `scalars`: the forward of the lutorch_ex::p2_scalars custom op (below),
-p2::table_scalars (csrc/pow2_scalars.cuh) for every table, i.e. the per-table power-of-two integers and straight-through
-cell weights of the n=2 read. (Despite the file name it is not an int8 read: the int8 tables are read with the torch
-definition, _pow2.int_blend_read.)
+csrc/pow2_int8_read.cu provides `scalars` (the forward of the lutorch_ex::p2_scalars custom op below: p2::table_scalars,
+csrc/pow2_scalars.cuh, for every table) and FusedQuantisedConfidenceLUT's read: `table_exponents`, `quant_fwd` (the
+fused forward) and `quant_bwd` (the fused backward), wrapped by FusedQuantRead.
 
 Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an architecture
 in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been validated on real
@@ -141,37 +140,32 @@ class FusedQuantRead(torch.autograd.Function):
     Forward: two launches, the input-independent table exponents and the fused read (addressing, the p2 integers and
     straight-through weights in registers, the fake-quant gather); the margins never reach global memory.
 
-    Backward (until the hand-written backward kernel): ``recompute(z, weights, log_beta, log_gamma, log_tau, dmask)``,
-    the torch form of the same read (margins, the p2_scalars op, ste_tables, embedding_bag), differentiated with
-    autograd. Its value equals the forward's up to the order of the output sums; its integers are the same (the op
-    and the fused kernel run the same p2::table_scalars on the same fp32 margins)."""
+    Backward: one launch of the hand-written backward (csrc/pow2_int8_read.cu, quant_bwd), plus the sum of its per-CTA
+    scalar partials. Only z, the parameters, the exponents and the dropout factors are saved; the kernel re-stages z
+    and recomputes phase A per CTA. The gradient semantics are the reference's (_pow2.ste_cell_weights, ste_tables):
+    the identity to the fp32 master table and the straight-through ratios b / e (clamped k', also for skipped and
+    dropped cells)."""
 
     @staticmethod
-    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, dmask, cfg, recompute):
+    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, cfg):
         ext = load()
         W2 = weights.reshape(-1, weights.shape[-1])
         E = ext.table_exponents(W2, weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
-        lo, hi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
-        out = ext.quant_fwd(z, anc_a16, anc_b16, W2, E, dmask, log_beta, log_gamma, log_tau,
-                            cfg["lo"], cfg["hi"], cfg["Q"], float(lo), float(hi))
-        ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, dmask)
-        ctx.recompute = recompute
+        qlo, qhi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
+        args = (W2, E, dmask, log_beta, log_gamma, log_tau, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
+        out = ext.quant_fwd(z, anc_a16, anc_b16, *args)
+        ctx.save_for_backward(z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask)
+        ctx.cfg = (cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
         return out
 
     @staticmethod
     def backward(ctx, go):
-        z, weights, log_beta, log_gamma, log_tau, dmask = ctx.saved_tensors
-        need = ctx.needs_input_grad[:5]
-        leaves = [t.detach().requires_grad_(n) for t, n in zip((z, weights, log_beta, log_gamma, log_tau), need)]
-        with torch.enable_grad():
-            y = ctx.recompute(*leaves, dmask)
-            grads = iter(torch.autograd.grad(y, [t for t in leaves if t.requires_grad], go, allow_unused=True))
-        out = [next(grads) if t.requires_grad else None for t in leaves]
-        return (*out, None, None, None, None, None)
-
-
-def p2_cell_weights(d: torch.Tensor, tau, g, beta, gamma, cfg: dict):
-    """The op: (psw [..., 2] straight-through cell weights, idx [..., 2] cell numbers c1, c2) from the signed margins
-    ``d`` (CUDA fp32). The caller has checked that the op is registered (FusedQuantisedConfidenceLUT._require)."""
-    psw, cells, _kq = torch.ops.lutorch_ex.p2_scalars(d, tau, g, beta, gamma, cfg["lo"], cfg["hi"], cfg["Q"])
-    return psw, cells[..., :2].to(torch.int64)
+        z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask = ctx.saved_tensors
+        W2 = weights.reshape(-1, weights.shape[-1])
+        gz, gW, gscal = load().quant_bwd(go.contiguous(), z, anc_a16, anc_b16, zoff, zent, W2, E, dmask,
+                                         log_beta, log_gamma, log_tau, *ctx.cfg)
+        gs = gscal.sum(0)                      # over CTAs (a fixed-shape reduction: deterministic)
+        need = ctx.needs_input_grad
+        return (gz if need[0] else None, gW.view_as(weights) if need[1] else None,
+                gs[0].view_as(log_beta) if need[2] else None, gs[1].view_as(log_gamma) if need[3] else None,
+                gs[2].view_as(log_tau) if need[4] else None, None, None, None, None, None, None)
