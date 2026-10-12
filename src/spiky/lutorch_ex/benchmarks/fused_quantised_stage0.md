@@ -786,3 +786,100 @@ The address threshold `cmp_eps` (bit = `[u > cmp_eps]`, default 0) is gone from 
 | FusedConfidence fp32 eval | 0.477 (0.474) | 1.874 (1.875) |
 
 All are within noise; no new snapshot of record is needed.
+
+## Diagnosis: the FusedQuantised backward and the 8k training gap (no code change)
+
+**The question:** at 8k FusedQuantised trains at 2.73 ms against FusedConfidence's 2.43 ms (+10%; 32k is +6%). Where does the ~0.25–0.30 ms go? Champion geometry, fp32, RTX 5090. Scripts and scratch builds are outside the repo.
+
+**Hardware counters were NOT available.** `ncu` fails with `ERR_NVGPUCTRPERM`: GPU performance counters are restricted to admin users on this machine.
+- So there are no measured occupancy, stall reasons, issue efficiency, pipe utilisation or DRAM/L2 throughput counters here.
+- Enabling them is an admin action: driver option `NVreg_RestrictProfilingToAdminUsers=0` and a reboot, or `ncu` as root. It was not done.
+- **What was measured instead:**
+  - static resource usage and the SASS opcode mix (`cuobjdump`);
+  - exact occupancy (`cudaOccupancyMaxActiveBlocksPerMultiprocessor` on scratch builds of the real kernels);
+  - CTA / wave arithmetic;
+  - the per-kernel profile of the training step (torch profiler, CUPTI, two fresh processes per class);
+  - ablations of the backward on scratch builds, each kernel timed directly and interleaved, 5–7 rounds.
+- **Conditions:** desktop only on the card (~180 MiB), clocks unlocked, SM 1.87–2.88 GHz, 38–53 C. The driver reported a software power cap (throttle 0x4) after the long ablation runs.
+- **The 8k numbers move ±5–10% between rounds and processes:** the 8k backward measured 1.85 and 2.08 ms in two fresh processes. Differences under ~0.1 ms at 8k are inside that noise.
+
+### Where the training-step gap is (per-kernel profile, two fresh processes each, ms)
+
+| 8k train step | FusedQuantised | FusedConfidence | gap |
+|---|---|---|---|
+| backward kernel | 1.85 / 2.08 | 1.72 / 1.72 | **+0.13 to +0.36** (+8 to +21%) |
+| forward kernel | 0.48 / 0.51 | 0.49 / 0.49 | ~0 |
+| table_exponent_kernel | 0.072 / 0.075 | — | **+0.07** |
+| adds, fills, scalar reduce | 0.09 | 0.09 | 0 |
+
+- **At 32k:** backward 7.66 / 7.74 vs 6.93 / 7.03 (+10–12%), forward ~equal, exponents +0.07. Total +0.80 ms (+9% by kernel time; +6% in the bench's wall-clock).
+- **Why 8k is worse in relative terms:**
+  - The backward kernel's own relative gap is about the same at both sizes (~+10%), and noisier at 8k.
+  - What makes 8k worse is the **fixed cost**: `table_exponent_kernel` re-reads the whole 50 MB fp32 master every step (0.072 ms, cold L2 after the backward's gW write). That is 3% of an 8k step but 0.7% of a 32k step.
+- **There is no tail or launch effect:**
+  - quant_bwd: 32,768 CTAs at 8k = 32 waves of 6 × 170; 131,072 = 128 waves at 32k.
+  - FusedConfidence: 15 / 59 waves.
+  - A partial last wave is at most 3% (quant) / 7% (FC) and is not the difference.
+
+### Static resources and occupancy
+
+| | quant_bwd<4> | confidence_bwd<2,4,f32> |
+|---|---|---|
+| registers / thread | 64 | 64 |
+| stack (local memory) | **32 B** (11 LDL/STL: the margin array handed to `p2::table_scalars`) | 0 |
+| dynamic smem / CTA (champion) | **14,592 B** | 6,208 B |
+| CTAs / SM (occupancy API) | **6** (12 warps), smem-limited | **13** (26 warps) |
+| static SASS: MUFU (EX2 / RCP) | 69 | 171 |
+| static SASS: FP32 add / mul / fma | 1,113 | 2,671 |
+| global atomics (static) | 10 REDG | 30 REDG + 54 smem CAS loops (`ATOMS.CAST.SPIN`) |
+| build | `--fmad=false` (needed by Layer 1 for the forward) | `-O3` (FMA contraction on) |
+
+- Static counts are not dynamic counts. FusedConfidence's kernel is more unrolled, so its larger static MUFU / FP count does not mean more work per table.
+- What it does show: **the quantised backward is not MUFU-heavier than FusedConfidence's.**
+
+### Ablations of quant_bwd (measurement only; ms, median of rounds; run 1 / run 2)
+
+| variant | 8k | 32k |
+|---|---|---|
+| base | 2.09 / 1.95 | 8.44 / 7.98 |
+| **suspect 1** — fake-quant removed from the dot products | 2.07 (−0.02) | 8.36 (−0.08) |
+| **suspect 2** — straight-through transcendentals replaced by cheap arithmetic (no MUFU in phase C) | 2.06 (−0.03) | 8.35 (−0.09) |
+| **suspect 3** — grad-x CSR gather replaced by one read | 1.99 / 2.02 (−0.10 / +0.07) | 8.04 / 8.07 (−0.40 / +0.09) |
+| phase-A integer maths (`table_scalars`) replaced by constants | 1.97 / 2.05 (−0.12 / +0.10) | 7.33 / 7.46 (−1.1 / −0.5) |
+| all three suspects removed together | 1.67 (−0.42) | 6.99 (−1.45) |
+| gW atomics removed | **1.47 (−0.62)** | **5.70 (−2.74)** |
+| table row loads removed | **1.43 (−0.67)** | **6.24 (−2.20)** |
+| built with FMA contraction (no `--fmad=false`) | 2.15 (+0.06) | 8.42 (−0.02) |
+| "lite": −4 KB smem (margins recomputed in phase C, gd aliased on the dot slots; bit-identical) | 2.02 (+0.07) | 8.35 (+0.37) |
+| FusedConfidence bwd | 1.94 / 1.87 | 7.71 / 7.31 |
+| FusedConfidence bwd padded to quant_bwd's smem (occupancy only) | **3.03** | **11.63** |
+
+### Verdicts
+
+1. **Fake-quant in the dot products: killed.** 0.02 ms at 8k, 0.08 at 32k (≤1%, inside noise).
+2. **Straight-through transcendentals: killed.** 0.03 / 0.09 ms (≤1%). Without counters there is no MUFU-pipe utilisation figure. But removing every MUFU from phase C buys ~1%, so the SFU is not the limiter.
+3. **Serial grad-x gather: not confirmed.** −0.10 ms at 8k in one run, +0.07 in the other; −0.40 / +0.09 at 32k. At most ~0.1 ms (5%) at 8k, inside the noise.
+
+- **Removing all three at once saves 0.42 ms at 8k.** That is more than the gap, so the extra work does exist. But it is spread thin, and each piece alone is near the noise floor.
+- **What actually dominates the backward is the memory side, the same as for FusedConfidence.** The gW scatter atomics (−0.62 ms if removed) and the table row loads (−0.67 ms) are each about a third of the kernel. FusedConfidence has the same two.
+- **Occupancy is not the explanation**, although the quantised kernel runs at half of FusedConfidence's occupancy (12 vs 26 warps per SM, shared-memory-limited):
+  - Padding FusedConfidence's backward to the same shared memory makes it 60% slower (1.87 → 3.03 ms). Its shared-memory CAS atomics need the extra warps to hide latency.
+  - The quantised backward, at that same occupancy, is within 4–8% of the unpadded FusedConfidence.
+  - Cutting its shared memory by 4 KB ("lite") does not speed it up.
+- **The phase-A recompute is the largest quant-specific item at 32k** (0.5–1.1 ms), and the most variable at 8k. It is the same kind of cost that bounds Deployed (Stage 3).
+- **So the quant backward is bound by the same memory-side work as FusedConfidence's,** plus a diffuse ~10% of quant-specific arithmetic, mostly phase A. Neither table traffic nor occupancy separates the two.
+
+### Is the 8k gap recoverable?
+
+**Not all of it**, without changing results or adding a knob. Candidates, ranked by expected gain:
+
+| # | change | est. gain (8k / 32k) | bit-exact? | cost / risk |
+|---|---|---|---|---|
+| 1 | save each table's integers from the forward (c1, c2, k', q: 4 bytes per table) and skip `table_scalars` in the backward | 0.05–0.12 / 0.5–1.1 | **yes** (the same integers) | +34 MB peak at 8k, +134 MB at 32k: training peak 0.094 → ~0.13 GiB and 0.236 → ~0.37 GiB. Loses the "peak = FusedConfidence's" property. Is `[B, G, tph]` (allowed) but not free |
+| 2 | `table_exponent_kernel` with more CTAs (it launches 32 for a 50 MB read; 0.72 TB/s cold vs torch's own single pass at 0.98 TB/s on the same rows) | 0.02–0.04 (both sizes; eval too) | **yes** (a max is order-independent) | low |
+| 3 | phase D: split each input dim's anchor entries across two threads with a fixed combine | ≤ 0.1 / ≤ 0.4 (unconfirmed) | **no**: changes grad x's summation order (still deterministic) | low; numerical change |
+| 4 | remove the 32-byte stack frame (pass the margins to `table_scalars` without a local array) | small, unmeasured | yes | low |
+| — | FMA contraction / smaller shared memory | none measured | — | — |
+
+- **Honest floor:** #2 alone brings 8k to ~+8.5%. With #1 as well, the estimate is ~+5–7%. Without #1 the remaining gap is the diffuse phase-A arithmetic, which cannot be removed without either storing the integers (#1) or changing the quantisation maths.
+- **Recommendation:** #2 is cheap and exact and worth doing. #1 is a memory-for-time trade and is Anatoly's call. #3 changes numbers and is not worth ≤0.1 ms. And at 8k the gap itself sits half inside the ±5–10% noise.
