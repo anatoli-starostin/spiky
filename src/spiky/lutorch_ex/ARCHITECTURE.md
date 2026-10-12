@@ -109,11 +109,10 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   - A fused class no longer runs on the CPU. CPU coverage lives with the reference classes; fused tests skip without
     a CUDA device.
   - The reference quantised path is slower than the old default, which took the op for n=2 eval and the monolith for
-    n=2 training on CUDA; that speed now lives in `FusedQuantisedConfidenceLUT`. Measured in the #160 snapshot of
-    record (`benchmarks/snapshot_160.md`): at 32,768 vectors eval 9.66 -> 10.09 ms (+4.5%), train total 48.56 ->
-    49.22 ms (+1.4%), train peak 3.64 -> 4.38 GiB; at 8,192 within 1%. The bit-exact exponent order (Consequence D
-    below) costs it more: at 32,768 eval 11.61 ms, train total 52.43 ms, eval peak 2.03 GiB (refreshed rows in the
-    snapshot of record). Not to be fixed in #160.
+    n=2 training on CUDA; that speed now lives in `FusedQuantisedConfidenceLUT`; the bit-exact exponent order
+    (Consequence D below) adds to it. #159's snapshot of record vs #160's (`benchmarks/snapshot_160.md`, RTX 5090):
+    8,192 vectors eval 2.52 -> 2.97 ms, train total 12.43 -> 12.56 ms; 32,768 eval 9.66 -> 11.76 ms, train total
+    48.56 -> 50.74 ms, eval peak 1.66 -> 2.03 GiB, train peak 3.64 -> 4.17 GiB. Not to be fixed in #160.
 - **Consequence B:** `ManifestoLUT` is scaffolding only; its `forward()` raises `NotImplementedError`. The
   reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
@@ -160,8 +159,8 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7; (3) the
     bit-agreement relies on the same libdevice log2 / log1p / exp in torch's build and in the extension's nvcc build,
     measured identical on this toolkit but not guaranteed across upgrades -- which is why the comparison is bit-exact:
-    such an upgrade fails the test instead of being absorbed by a tolerance. Cost: the reference quantised path
-    +15% eval, +3.5% training, +0.84 GiB eval peak at 32,768 vectors (unoptimised, by decision).
+    such an upgrade fails the test instead of being absorbed by a tolerance. Cost: part of the reference quantised
+    path's slowdown in the decided consequences above (unoptimised, by decision).
   - **History:** an earlier version of this section (and the harness, and #160's text) claimed bit-identity with the
     eager reference when it held only at test sizes; that was corrected, and the claim now holds and is tested at
     scale. The non-quantised pairs have no rounded transcendental in their path and are unaffected.
@@ -169,9 +168,10 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   exported from `lutorch_ex/__init__.py`.
 
 **Deferred, outside #160 (on purpose):**
-- The quantised-optimisation follow-up PR: `DeployedQuantisedConfidenceLUT` 2.6x slower than its float twin at 32k
-  tokens, int8 deploy at n=2, the n=1 variant, and the reference quantised path's speed -- now including the cost of
-  its explicit left fold (+15% eval, +0.84 GiB eval peak at 32k). The rounding-boundary item is RESOLVED on #160 (the
+- The quantised-optimisation follow-up PR: `DeployedQuantisedConfidenceLUT`'s eval at 32,768 vectors (17.18 ms in
+  the #160 snapshot vs 11.76 ms for the reference `QuantisedConfidenceLUT` and 9.67 ms for the fused class; it was
+  2.6x its float twin in #159), int8 deploy at n=2, the n=1 variant, and the reference quantised path's speed,
+  including its explicit left fold (eval peak 2.03 GiB at 32,768 vs 1.66 GiB in #159). The rounding-boundary item is RESOLVED on #160 (the
   bit-exact layer 1 above); the fp64-exponent exploration (`wip/quant-fp64-exponents`, unpushed) is superseded.
 - Re-measure the snapshot of record on the H100 (it is RTX 5090 only).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
