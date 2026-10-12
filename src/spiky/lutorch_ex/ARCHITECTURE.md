@@ -125,9 +125,15 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   bf16, fp16 input) and anchor mode wherever the fused class covers them, per head pattern, on every leaf, with
   explicit tolerances justified in its docstring. Its dtypes are every table / input combination the fused classes
   declare: fp32; bf16 table + bf16 input; fp16 input on an fp32 table; a bf16 table with an fp32 input; an fp16 input
-  on a bf16 table. It replaced
-  `test_fused_equivalence.py` and `test_fused_manifesto_softsign.py`, and found (and the fused classes now fix) a
-  double rounding of a low-precision input's gradient in the fan-out pattern.
+  on a bf16 table. Twelve head-pattern / batch / width geometries, 672 cases: they include fan-in and fan-out at
+  batch 1 and 24,576 and at d_in != d_out (pairs; single is in test_single_anchor.py), the combinations of the
+  replaced `test_fused_equivalence.py`. It replaced that file and `test_fused_manifesto_softsign.py`, and found (and
+  the fused classes now fix) a double rounding of a low-precision input's gradient in the fan-out pattern. Its bounds
+  were corrected when those rows were added, because the rows exposed two derivation errors. A bf16 / fp16 leaf is
+  bounded by 2u, not u: one ulp is between u and 2u relative, which a scalar leaf exceeds on a single straddle. A
+  learned scalar's gradient is a cancelling sum, so its round-off scales with the sum of |terms|, not with |sum|: each
+  side is now checked for accuracy against an fp64 reference, within the probabilistic bound 4 * sqrt(K) * u *
+  sum|terms|.
 - **Consequence D, the quantised pair: bit-exact, in two layers.** The power-of-two exponents are round-half-up
   floors of fp32 transcendental expressions, so two implementations that differ by an ulp anywhere in the expression
   can floor a near-boundary value differently (one table's weight changes 2x).

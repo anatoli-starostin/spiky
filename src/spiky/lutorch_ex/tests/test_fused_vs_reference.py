@@ -14,22 +14,39 @@ Tolerances (relative norm error ``||a - b|| / ||b||``), each from the one way th
   fp32 subtraction), so the cells read are identical and only the arithmetic around them can differ.
 * fp32 leaf -- summation order. The kernels reduce in a different order (and the table gradient with atomics), so
   each sum carries a different fp32 round-off, a random walk of O(sqrt(K) * 2**-24) relative for K terms. Element-wise
-  leaves sum K <= 10**4 terms (~1e-6): ``FP32_TOL = 1e-5``. A learned scalar's gradient is ONE sum over every (sample,
-  group, table, output), K = B * n_groups * tph * d_out (up to ~2.5e7 here), the worst-conditioned reduction in the
-  cartridge: ``max(FP32_SCALAR_TOL = 1e-4, 4 * sqrt(K) * 2**-24)``, a 4-sigma bound on that walk.
+  leaves sum K <= 10**4 terms (~1e-6): ``FP32_TOL = 1e-5``.
+* fp32 learned scalar -- an ACCURACY test against fp64. A learned scalar's gradient is ONE sum over every (sample,
+  group, table, output), K = B * n_groups * tph * d_out terms (up to ~2.5e7 here), and it cancels: |sum| is down to
+  2.9e-4 of S (below) for a soft-sign temperature at fan-in batch 24576. Round-off scales with the sum of |terms|, not
+  with |sum|: for a K-term sum in any order, |error| <= lambda * sqrt(K) * u * sum |x_i| with high probability
+  (Higham & Mary, "A new approach to probabilistic rounding error analysis", SISC 2019), lambda = 4, u = 2**-24.
+  So each side is compared with t, the gradient of the reference class run in fp64 (eager, same state, input and
+  output gradient): ``|side - t| < max(max(FP32_SCALAR_TOL, u_input) * |t|, 4 * sqrt(K) * 2**-24 * S)``, with S the
+  sum over SCALE_CHUNKS batch chunks of |chunk gradient| (fp64) -- a lower bound on sum |x_i|, so the bound is never
+  looser than the derivation. The two sides are also compared with each other within that bound. Both sides being
+  wrong the same way fails here; a difference test would not see it. (Before: ``max(FP32_SCALAR_TOL,
+  4 * sqrt(K) * 2**-24)`` RELATIVE to |sum|, i.e. |sum| in place of sum |x_i|. That holds only without cancellation:
+  that temperature measured 1.1e-3 against 6.3e-4.) The fp64 reference adds ~13 s over the matrix.
 * bf16 / fp16 leaf -- one rounding. Both classes compute in fp32 and round each leaf once (fused: in the kernel's
   epilogue; reference: tests/test_reference_low_precision.py proves it bit-exact). Two roundings of fp32 values that
   differ only by the fp32 tolerance above land on the same low-precision value except where they straddle a
-  rounding boundary, and then differ by one ulp. One ulp everywhere would be a relative norm error of at most
-  u = 2**-8 (bf16) / 2**-11 (fp16), so ``u`` bounds it with a wide margin. A learned scalar in a bf16 module is a
-  bf16 leaf as well, so the same bound applies.
+  rounding boundary, and then differ by one ulp. One ulp of v is 2u * 2**floor(log2|v|), between u|v| and 2u|v|:
+  u = 2**-8 (bf16) / 2**-11 (fp16) is HALF an ulp at the bottom of a binade. The bound is therefore ``2u``. (Before:
+  u. On a tensor leaf a lone straddle dilutes in the norm and u held; a scalar leaf is one value, and one straddle
+  there always exceeds u -- measured 4.95e-3 = 1.27u on a bf16 temperature of 0.79.) A learned scalar in a bf16 module
+  is a bf16 leaf: fused vs reference within 2u|reference| plus the fp32 bound above (the fp32 values may differ by
+  that before rounding), and each side vs fp64 within the fp32 bound plus the one final rounding, u * (|t| + it).
 * Leaves that stay fp32 in a low-precision run (every parameter's gradient when only the input is fp16) take the
   fp32 tolerances, widened to the input dtype's u: they are computed from the rounded output gradient and input.
 
-Measured 2026-10-11 (RTX 5090), worst error as a share of its tolerance over the whole matrix: fp32 value 3%, grad x
-2%, grad W 9%, learned scalars at most ~30% (one soft-sign temperature at batch 24576 reached 1.02e-4, which is why
-the scalar bound scales with K); bf16 value 5%, grad x 5%, grad W 3%; fp16-input grad x 7%; quantised vs the eager
-reference: integers and values bit-identical. (The harness found one
+Measured 2026-10-12 (RTX 5090) over the 672-case matrix, worst error as a share of its bound: fp32 value 2.6%, grad x
+3.6%, grad W 8.5%; bf16 value 0.5%, grad x 1.2%, grad W 2.2%; fp16 value 2.5%, grad x 2.0%; fp32 learned scalars vs
+fp64 1.9% (fused vs reference 1.4%); bf16 learned scalars fused vs reference within one ulp (equal in 10 of 10 repeats
+of the worst case), vs fp64 up to 76%. That 76% is by construction: the final rounding alone may use half an ulp,
+nearly all of u|t| when |t| sits just above a power of two; the bound is rigorous (the fp32 bound plus that
+rounding), so it does not fail by chance. The scalar bound is loose where the sum cancels: up to 1.84|t| at fan-in
+batch 24576, where a fused scalar has to be off by ~3x to fail (by 3-30% at the canonical geometry; a tensor leaf by
+1e-5). Quantised vs the eager reference: integers and values bit-identical. (The harness found one
 real double rounding: a low-precision input gathered for several groups (fan-out) summed their input gradients in the
 input dtype, 78% of u; the fused classes now cast before the gather.)
 
@@ -62,7 +79,12 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a C
 
 FP32_TOL = 1e-5
 FP32_SCALAR_TOL = 1e-4
+FP32_U = 2.0 ** -24
 U = {torch.bfloat16: 2.0 ** -8, torch.float16: 2.0 ** -11}
+#: Batch chunks of a learned scalar's cancellation scale S (module docstring).
+SCALE_CHUNKS = 32
+TENSOR_LEAVES = ("value", "grad x", "grad weights")
+SEED = 7
 
 #: (id, fused class, reference class, kwargs, extension)
 CARTRIDGES = [
@@ -83,22 +105,57 @@ DTYPES = [("fp32", torch.float32, torch.float32), ("bf16", torch.bfloat16, torch
           ("fp16-input-bf16-table", torch.bfloat16, torch.float16)]
 #: What each fused class covers (everything not listed: all dtypes, both anchor modes).
 COVERS = {"Quantised n=2": dict(dtypes={"fp32"}, anchor_modes={"pairs"})}
-#: (id, h_in, h_out, d, tph, nap, batch)
+#: (id, h_in, h_out, d, tph, nap, batch); d is d_in = d_out, or a (d_in, d_out) pair. The fan-in / fan-out rows at
+#: batch 1 and 24576 and at d_in != d_out are the combinations the superseded test_fused_equivalence.py covered.
 GEOMS = [("small-per-head", 4, 4, 12, 6, 5, 128), ("fan-in", 4, 1, 12, 6, 5, 128), ("fan-out", 1, 4, 12, 6, 5, 128),
-         ("batch-1", 4, 4, 12, 6, 5, 1), ("canonical", 16, 16, 48, 64, 8, 512), ("large-batch", 4, 4, 12, 6, 5, 24576)]
+         ("batch-1", 4, 4, 12, 6, 5, 1), ("canonical", 16, 16, 48, 64, 8, 512), ("large-batch", 4, 4, 12, 6, 5, 24576),
+         ("fan-in-batch-1", 4, 1, 12, 6, 5, 1), ("fan-out-batch-1", 1, 4, 12, 6, 5, 1),
+         ("fan-in-large-batch", 4, 1, 12, 6, 5, 24576), ("fan-out-large-batch", 1, 4, 12, 6, 5, 24576),
+         ("fan-in-d12-to-8", 4, 1, (12, 8), 6, 5, 128), ("fan-out-d12-to-8", 1, 4, (12, 8), 6, 5, 128)]
+#: Rows run in some anchor modes only (everything not listed: both). d_in != d_out with single anchors is covered by
+#: test_single_anchor.py::test_single_fused_equals_reference_f32.
+GEOM_ANCHORS = {"fan-in-d12-to-8": {"pairs"}, "fan-out-d12-to-8": {"pairs"}}
 
 
 def _rel(a, b):
     return ((a.double() - b.double()).norm() / b.double().norm().clamp_min(1e-30)).item()
 
 
-def _tol(leaf: str, leaf_dtype: torch.dtype, input_dtype: torch.dtype, n_terms: int = 0) -> float:
-    """The tolerance of one leaf (module docstring); ``n_terms`` = K of a learned scalar's gradient sum."""
-    scalar = leaf not in ("value", "grad x", "grad weights")
+def _tol(leaf_dtype: torch.dtype, input_dtype: torch.dtype) -> float:
+    """The relative-norm tolerance of one tensor leaf (module docstring): one rounding straddle, else fp32."""
     if leaf_dtype in U:
-        return U[leaf_dtype]
-    base = max(FP32_SCALAR_TOL, 4.0 * n_terms ** 0.5 * 2.0 ** -24) if scalar else FP32_TOL
-    return max(base, U.get(input_dtype, 0.0))
+        return 2.0 * U[leaf_dtype]
+    return max(FP32_TOL, U.get(input_dtype, 0.0))
+
+
+def _scalar_truth(Ref, kw, spec, state, x, go):
+    """{leaf: (t, S)} for every learned-scalar leaf: t its gradient from the reference class in fp64 (eager, the same
+    state, input and output gradient), S the cancellation scale -- the sum of |gradient| over SCALE_CHUNKS batch
+    chunks, a lower bound on the sum of |terms| of that gradient's sum (module docstring)."""
+    m = _Eager(Ref(spec, seed=SEED, **kw).cuda().double())
+    m.m.load_state_dict({k: v.double() for k, v in state.items()})
+    m.m.train()
+
+    def scalars(xc, gc):
+        return {k: v for k, v in _leaves(m, xc.double(), gc.double()).items() if k not in TENSOR_LEAVES}
+    t = scalars(x, go)
+    chunks = [scalars(xc, gc) for xc, gc in zip(x.chunk(min(x.shape[0], SCALE_CHUNKS)),
+                                                go.chunk(min(x.shape[0], SCALE_CHUNKS)))]
+    return {k: (float(t[k]), float(sum(c[k].abs() for c in chunks))) for k in t}
+
+
+def _checks(a, b, truth, input_dtype, n_terms):
+    """(leaf, check, error, bound) for every leaf: a = fused, b = reference (module docstring)."""
+    for leaf in b:
+        if leaf in truth:                            # a learned scalar: accuracy of each side, then the two sides
+            t, S = truth[leaf]
+            u = U.get(b[leaf].dtype, 0.0)
+            fp32 = max(max(FP32_SCALAR_TOL, U.get(input_dtype, 0.0)) * abs(t), 4.0 * n_terms ** 0.5 * FP32_U * S)
+            for side, v in (("fused vs fp64", a[leaf]), ("reference vs fp64", b[leaf])):
+                yield leaf, side, abs(float(v) - t), fp32 + u * (abs(t) + fp32)
+            yield leaf, "fused vs reference", abs(float(a[leaf]) - float(b[leaf])), fp32 + 2.0 * u * abs(float(b[leaf]))
+        else:
+            yield leaf, "fused vs reference", _rel(a[leaf], b[leaf]), _tol(b[leaf].dtype, input_dtype)
 
 
 def _leaves(m, x, go):
@@ -118,23 +175,26 @@ def _cases():
             for anchor_mode in ("pairs", "single"):
                 if dt[0] in cov.get("dtypes", {dt[0]}) and anchor_mode in cov.get("anchor_modes", {anchor_mode}):
                     for geom in GEOMS:
+                        if anchor_mode not in GEOM_ANCHORS.get(geom[0], {anchor_mode}):
+                            continue
                         yield pytest.param(cart, dt, anchor_mode, geom,
                                            id=f"{cart[0]}-{dt[0]}-{anchor_mode}-{geom[0]}")
 
 
-def _pair(cart, dt, anchor_mode, geom, seed=7):
+def _pair(cart, dt, anchor_mode, geom, seed=SEED):
     name, Fused, Ref, kw, ext = cart
     _, table_dtype, input_dtype = dt
     _, h_in, h_out, d, tph, nap, B = geom
+    d_in, d_out = d if isinstance(d, tuple) else (d, d)
     requires_extension(ext)
     torch._dynamo.reset()          # every case compiles the reference fresh (else Dynamo's recompile limit -> eager)
-    spec = LUTSpec(h_in=h_in, h_out=h_out, tph=tph, nap=nap, d_in=d, d_out=d, anchor_mode=anchor_mode)
+    spec = LUTSpec(h_in=h_in, h_out=h_out, tph=tph, nap=nap, d_in=d_in, d_out=d_out, anchor_mode=anchor_mode)
     ref = Ref(spec, seed=seed, weight_init_std=0.5, **kw).cuda().to(table_dtype)
     fused = Fused(spec, seed=seed, weight_init_std=0.5, **kw).cuda().to(table_dtype)
     fused.load_state_dict(ref.state_dict())
     g = torch.Generator(device="cuda").manual_seed(B + h_in + seed)
-    x = torch.randn(B, h_in, d, device="cuda", generator=g).to(input_dtype)
-    go = torch.randn(B, h_out, d, device="cuda", generator=g).to(input_dtype)
+    x = torch.randn(B, h_in, d_in, device="cuda", generator=g).to(input_dtype)
+    go = torch.randn(B, h_out, d_out, device="cuda", generator=g).to(input_dtype)
     return ref, fused, x, go
 
 
@@ -175,10 +235,11 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
                 assert torch.equal(a[leaf], b[leaf]), f"{name} {leaf}: differs from the eager reference"
     for leaf in b:
         assert a[leaf].dtype == b[leaf].dtype, f"{name} {leaf}: dtype {a[leaf].dtype} vs {b[leaf].dtype}"
-        tol = _tol(leaf.replace("eval ", "").replace(" (integer read)", ""), b[leaf].dtype, input_dtype,
-                   n_terms=x.shape[0] * fused.spec.n_groups * fused.spec.tph * fused.spec.d_out)
-        e = _rel(a[leaf], b[leaf])
-        assert e < tol, f"{name} {leaf}: rel-norm error {e:.2e} >= {tol:.1e}"
+    scalars = [leaf for leaf in b if leaf not in TENSOR_LEAVES and not leaf.startswith("eval ")]
+    truth = _scalar_truth(Ref, kw, fused.spec, ref.state_dict(), x, go) if scalars else {}
+    n_terms = x.shape[0] * fused.spec.n_groups * fused.spec.tph * fused.spec.d_out
+    for leaf, check, e, bound in _checks(a, b, truth, input_dtype, n_terms):
+        assert e < bound, f"{name} {leaf} ({check}): error {e:.2e} >= {bound:.1e}"
 
 
 # -- the quantised pair at the champion scale: two layers -------------------------------------------------------------
@@ -337,8 +398,8 @@ def test_quantised_layer1_with_table_dropout(seed):
     rows = (a["value"] - b["value"]).norm(dim=-1) / b["value"].norm(dim=-1).clamp_min(1e-30)
     assert float(rows.max()) <= ROW_SAME, f"a row moved by {float(rows.max()):.2e}: a table dropped on one side only?"
     n_terms = B * spec.n_groups * spec.tph * spec.d_out
-    for leaf in b:
-        tol = _tol(leaf, b[leaf].dtype, torch.float32, n_terms=n_terms)
+    for leaf in b:                 # fp32 throughout; the scalars keep the no-cancellation bound, stricter (measured above)
+        tol = max(FP32_SCALAR_TOL, 4.0 * n_terms ** 0.5 * FP32_U) if leaf not in TENSOR_LEAVES else FP32_TOL
         e = _rel(a[leaf], b[leaf])
         assert e < tol, f"{leaf}: rel-norm error {e:.2e} >= {tol:.1e}"
     # the dropped tables contribute nothing: the masked value differs from the unmasked one
