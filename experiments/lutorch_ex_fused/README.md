@@ -40,7 +40,7 @@ trainer (and this one) run **fp32** (the LUT stays an fp32 island). Kept fp32 fo
 reproduction; add an explicit bf16 cast if you want it (would diverge from the abl47 numbers).
 
 ## wandb (flagged)
-Minimal inline wandb (project "Spiky", group "lutorch_ex", tags [lutorch_ex, fused, <cartridge>]),
+Minimal inline wandb (project "Spiky", group "lutorch_ex_fused", tags [lutorch_ex, fused, <cartridge>]),
 fresh unique run name per launch. The old `wandb_tracking.Tracker` was NOT vendored (it pulls
 spiky.util.wandb_integration + metric_glossary); swap it in if you want the exact old tags/glossary.
 

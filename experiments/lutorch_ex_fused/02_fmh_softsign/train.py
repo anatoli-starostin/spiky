@@ -254,7 +254,7 @@ run_name = f"{cfg['exp_name']}_{RUN_TAG}"
 wb = None
 try:
     import wandb
-    wb = wandb.init(project="Spiky", group="lutorch_ex", name=run_name, id=run_name,
+    wb = wandb.init(project="Spiky", group="lutorch_ex_fused", name=run_name, id=run_name,
                     config=cfg, tags=["lutorch_ex", "fused", cfg["cartridge"]])
 except Exception as e:                                 # never let logging kill training
     print(f"[wandb] disabled ({type(e).__name__}: {e})")
