@@ -13,7 +13,6 @@
   "device_batch_size": 12,
   "total_batch_size": 24576,
   "random_seed": 1,
-  "compute_dtype": "bf16",
   "eval_every": 500,
   "ckpt_every": 2000,
   "lut_n_heads": 8,

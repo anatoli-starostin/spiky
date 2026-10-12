@@ -13,6 +13,9 @@ MinimalGPT, n_embd 384, n_head 6, seq_len 512, vocab 32768, untied unembedder; 4
 cosine (0.1*lr floor) warmup 0.1, wd 0.1, grad_accum 4, device_batch 12 (24,576 tok/step), seed 1,
 eval_every 500; LUTSpec h8/tph64/nap8/d48 pairs; cell-TV λ=10, table_dropout 0.2.
 
+Precision: **FP32 throughout** (PyTorch default; the LUT FFN is an fp32 island). abl47's config
+had a dead `compute_dtype="bf16"` field its trainer never applied — removed here; matches abl47 numerics.
+
 Launch — **ONLINE-or-die wandb** (hard requirement): run as a BARE `python train.py` on a CUDA box
 with the lutorch_ex extension built, OUTBOUND NETWORK, and wandb logged in. `wandb.init` runs FIRST
 (before data/model/GPU); with no network (e.g. inside the sbox cage) or no wandb login it HARD-FAILS

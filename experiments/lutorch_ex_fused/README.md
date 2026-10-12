@@ -34,10 +34,11 @@ vocab 32768. Eval: vendored `tools/fixed_eval.evaluate_bpb_fixed` — fixed bs 4
 rows -> rows [12, 4800) of the val shard; `val_bpb = total_nats / (ln2 * total_bytes)` (bits/byte;
 bit-for-bit = nanochat `evaluate_bpb` at skip_rows=0). abl47-comparable.
 
-## Precision note (flagged)
-`compute_dtype:"bf16"` in config echoes the abl47 config but is **not applied** — the original abl47
-trainer (and this one) run **fp32** (the LUT stays an fp32 island). Kept fp32 for faithful number
-reproduction; add an explicit bf16 cast if you want it (would diverge from the abl47 numbers).
+## Precision
+**FP32 throughout** (PyTorch default — no mixed precision, no explicit dtype knob); the LUT FFN is an
+fp32 island (`ProjectionMHL(cart, 384).float()` + an `x.float()` cast in forward). This matches
+abl47's *actual* numerics: abl47's config carried a `compute_dtype="bf16"` field that its trainer
+never applied (it ran fp32), so that dead field has been removed here rather than carried forward.
 
 ## wandb (flagged)
 Minimal inline wandb (project "Spiky", group "lutorch_ex_fused", tags [lutorch_ex, fused, <cartridge>]),

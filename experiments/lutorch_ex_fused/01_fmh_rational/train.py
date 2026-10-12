@@ -17,9 +17,8 @@ Launch (from this folder, on a CUDA box with the lutorch_ex extension built):
     python train.py                 # reads ./config.json, writes artifacts here
     SMOKE_STEPS=40 python train.py   # short sanity (overrides n_steps + eval cadence)
 
-NOTE (precision): abl47 ran fp32 (its trainer never cast to bf16 / used autocast); the
-config's compute_dtype="bf16" was a dead field. We keep fp32 for faithfulness; the LUT stays an
-fp32 island. NOTE (wandb): ONLINE-or-die — wandb.init runs FIRST (before data/model/GPU) with
+NOTE (precision): these runs are plain FP32 throughout (PyTorch default; no mixed precision, no
+explicit dtype knob); this matches abl47's actual numerics. The LUT stays an fp32 island. NOTE (wandb): ONLINE-or-die — wandb.init runs FIRST (before data/model/GPU) with
 project "Spiky", group "lutorch_ex_fused"; no offline fallback, so a bad launch (no network /
 not logged in — e.g. inside the sbox cage) hard-fails in seconds. Launch as a BARE `python
 train.py` on a networked, wandb-logged-in box. (The old wandb_tracking helper was not vendored —
