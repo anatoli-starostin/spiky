@@ -206,6 +206,9 @@ class MinimalGPT(nn.Module):
                                    reduction=loss_reduction, ignore_index=-1)
         return logits
 
+    def get_device(self):                 # nanochat-GPT interface used by fixed_eval.evaluate_bpb_fixed
+        return next(self.parameters()).device
+
 
 model = MinimalGPT(cfg, VOCAB).to(DEVICE)
 
