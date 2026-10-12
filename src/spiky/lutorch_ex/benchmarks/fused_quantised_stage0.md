@@ -1019,3 +1019,50 @@ All are within noise; no new snapshot of record is needed.
 - Earlier runs measured 32k train at +6–7%. This session's +8.2% is inside the ±6% floor of each cell but above the ~+6% bound.
 - **Deployed n=2** eval: 0.310 / 1.252 ms. FusedConfidence bf16: 0.317 / 1.230.
 - **Deployed n=1** eval: 0.221 / 0.892 ms.
+
+## The delta against #162 (the parent), re-measured in one session
+
+#162 is #164's actual parent, so this is the primary comparison. The #160 one above is the cumulative picture across #162 and #164.
+
+**Files:**
+- `benchmarks/snapshot_162_remeasured.json` / `.md`: #162's library code `c8e48c36`, the commit `snapshot_162.json` was measured at. #162 merged as 33c4fee2; its snapshot was added in 84e18217. The JSON and the .md header agree on c8e48c36.
+- `benchmarks/snapshot_164_vs162.json` / `.md`: #164 HEAD `e68fcc32`.
+- `benchmarks/figures_162_remeasured_vs_164/`: `bench_compare.py --same-session`.
+
+**Which figure directory is which:**
+- `figures_162_remeasured_vs_164/`: **this** same-session comparison.
+- `figures_162_vs_164/` (older): #162's published snapshot against the first #164 snapshot (code 41df6f25), from different sessions. **Historical only.**
+- `figures_160_vs_164/`: the same-session comparison against #160.
+
+**Re-measured, not published.**
+- #162's code builds and runs on today's toolchain and reproduces its own published numbers on probe cells (8k, fp32):
+  - FusedQuantised eval 2.519 vs 2.521 ms, train backward 9.869 vs 9.884, train total 12.367 vs 12.390;
+  - ManifestoHard eval 0.663 vs 0.647, train backward 8.968 vs 8.971, train total 14.908 vs 14.907;
+  - FusedConfidence n=2 eval 0.472 vs 0.473, train total 2.541 vs 2.459 (+3%, inside noise).
+- Measured 2026-10-13, interleaved cell by cell with #164 HEAD, each tree's own bench_snapshot per cell.
+- Conditions: busy SM ≥ 2.65 GHz, 34–43 C, no throttle or power-cap flag.
+
+**The cell set is #162's own:** 15 cartridges × {fp32, bf16} × {8k, 32k} × four phases × {ms, GiB}. Deployed n=1 is after-only.
+
+**Delta (420 comparable values):**
+
+| metric | improved | regressed | within noise | OOM → fits |
+|---|---|---|---|---|
+| time | 10 | 0 | 200 | 0 |
+| peak memory | 10 | 0 | 200 | 0 |
+
+- **Beyond noise, better:** only the cells this PR targets.
+  - FusedQuantisedConfidenceLUT: every time cell ×0.20–0.24 (8k eval 2.523 → 0.515, train total 12.39 → 2.685; 32k eval 9.678 → 1.949, train total 48.48 → 10.12) and every peak cell ×0.06–0.10.
+  - DeployedQuantisedConfidenceLUT eval: ×0.107 / ×0.075 time, ×0.057 peak.
+- **Nothing else moved beyond its noise floor.**
+- **The expectation held.** Against #162, ManifestoHard / ManifestoHard·softsign 8k train backward is within noise, and all 16 ManifestoHard time cells are within noise. The 32k Manifesto training cells fit on both sides (no OOM transition). The ×1.21–1.23 train-backward cost and the OOM → fits seen against #160 are #162's own (its single-embedding_bag surrogate), not #164's.
+
+**FusedQuantised against FusedConfidence fp32, this session:**
+
+| | 8k | 32k |
+|---|---|---|
+| train | 2.685 vs 2.464 ms = **+9.0%** | 10.118 vs 9.398 = **+7.7%** |
+| eval | 0.515 vs 0.474 = **+8.6%** | 1.949 vs 1.870 = **+4.2%** |
+
+- **Deployed n=2 eval:** 0.310 / 1.254 ms against FusedConfidence bf16 0.320 / 1.254, so level.
+- **Deployed n=1 eval:** 0.220 / 0.892 ms.
