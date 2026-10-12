@@ -112,7 +112,13 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     n=2 training on CUDA; that speed now lives in `FusedQuantisedConfidenceLUT`; the bit-exact exponent order
     (Consequence D below) adds to it. #159's snapshot of record vs #160's (`benchmarks/snapshot_160.md`, RTX 5090):
     8,192 vectors eval 2.52 -> 2.97 ms, train total 12.43 -> 12.56 ms; 32,768 eval 9.66 -> 11.76 ms, train total
-    48.56 -> 50.74 ms, eval peak 1.66 -> 2.03 GiB, train peak 3.64 -> 4.17 GiB. Not to be fixed in #160.
+    48.56 -> 50.74 ms, eval peak 1.66 -> 2.03 GiB, train peak 3.64 -> 4.17 GiB. Not to be fixed in #160. (The
+    "+15% eval, +0.84 GiB eval peak at 32,768" quoted for the left fold during #160 was measured against #160's own
+    pre-left-fold branch state, not against #159; the #159 -> #160 delta is the +21.8% eval / +0.37 GiB above.)
+    Fixed on #162 without touching the maths: the eval cost was Inductor materialising the left folds' ~1 GiB
+    `[B, G, tph, nap]` margin producer, and `QuantisedConfidenceLUT` now compiles with two realize thresholds raised
+    (`_COMPILE_OPTIONS`, a scheduling hint). `benchmarks/snapshot_162.md`: 32,768 eval 9.98 ms / 0.90 GiB, 8,192 eval
+    2.58 ms / 0.26 GiB, train unchanged.
 - **Consequence B:** `ManifestoLUT` is scaffolding only; its `forward()` raises `NotImplementedError`. The
   reference classes take their (compiled) forward from `ReferenceForward` (`cartridges/reference_base.py`).
   `ConfidenceLUT` and `FusedConfidenceLUT` both build on `ConfidenceBase`; the fused class no longer inherits
@@ -144,9 +150,12 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
     training forward) in 28 runs of 8.4M tables -- nap 3, 5, 6, 7 and 8 on the champion geometry and h8 tph32 nap4 d64,
     4 seeds, at init and after 200 training steps. Before, with torch's own reduction order, they disagreed on 0-3
     tables per run (the summation order and the reciprocal-multiply division; the transcendentals were identical).
-  - *Layer 2, compile trust -- the compiled reference vs the eager reference, in fp64 on purpose.* In fp32 Inductor's
-    reassociation of the transcendentals lands a few values per million tables on the other side of a rounding
-    boundary (measured: 52 of 192 runs had a flipped row; flip-free rows <= 1.1e-7, flipped rows >= 5.8e-3), so any
+  - *Layer 2, compile trust -- the compiled reference vs the eager reference, in fp32 a different evaluation of the
+    same formula, so fp64 on purpose.* Compiled, the left folds and the transcendentals stay bit-identical to eager;
+    two divisions do not. In k', Inductor rewrites the division by the constant ln2 into a multiply by its reciprocal,
+    which Triton contracts with the following add into one FMA. In q, Triton computes 2/(tau ln2) with its approximate
+    fp32 division (`div.full.f32`). In fp32 that lands a few values per million tables on the other side of a rounding
+    boundary (measured on #160: 52 of 192 runs had a flipped row; flip-free rows <= 1.1e-7, flipped rows >= 5.8e-3), so any
     fp32 bound only absorbs flips. In fp64 the two evaluations differ by ~1e-16 and nothing flips (0 in 192 runs: nap 3
     to 8 on two geometries, 8 seeds, at init and after training). The test therefore builds the cartridge in fp64
     (through its normal dtype support; no library switch) and asserts tight bounds -- every row <= 1e-13, eval / value
@@ -176,8 +185,9 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
 **Deferred, outside #160 (on purpose):**
 - The quantised-optimisation follow-up PR: `DeployedQuantisedConfidenceLUT`'s eval at 32,768 vectors (17.18 ms in
   the #160 snapshot vs 11.76 ms for the reference `QuantisedConfidenceLUT` and 9.67 ms for the fused class; it was
-  2.6x its float twin in #159), int8 deploy at n=2, the n=1 variant, and the reference quantised path's speed,
-  including its explicit left fold (eval peak 2.03 GiB at 32,768 vs 1.66 GiB in #159). The rounding-boundary item is RESOLVED on #160 (the
+  2.6x its float twin in #159), int8 deploy at n=2, the n=1 variant, and the reference quantised path's training speed
+  (its eval left-fold cost is resolved on #162: eval peak 0.90 GiB at 32,768). #162 is the precursor: the left-fold
+  cost, `ManifestoHardLUT`'s 32,768-vector training out-of-memory, and `bench_compare.py`. The rounding-boundary item is RESOLVED on #160 (the
   bit-exact layer 1 above); the fp64-exponent exploration (`wip/quant-fp64-exponents`, unpushed) is superseded.
 - Re-measure the snapshot of record on the H100 (it is RTX 5090 only).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside

@@ -60,8 +60,10 @@ tested separately:
   Measured: 0 integer disagreements and bit-identical output rows in 28 runs (8.4M tables each; nap 3, 5, 6, 7, 8; two
   geometries; init and after training). Gradients keep the fp32 tolerances above (the backward's sums differ in order).
 * LAYER 2, compile trust -- the compiled reference vs the eager reference, in fp64 on purpose: in fp32 Inductor's
-  reassociation flips ~1e-7 of the exponents, in fp64 none (0 in 192 runs), so a tight bound checks that compile kept
-  the code logic; layer 1 pins the fp32 numbers.
+  divide-by-constant rewrite (a reciprocal multiply that Triton contracts with the next add into one FMA, in k') and
+  Triton's approximate fp32 division (div.full.f32, in q) flip ~1e-7 of the exponents (the left folds and the
+  transcendentals compile bit-identically); in fp64 none flip (0 in 192 runs), so a tight bound checks that compile
+  kept the code logic; layer 1 pins the fp32 numbers.
 Constructed exact ties check the rule itself: reference and kernel both round half up. Natural exact ties: zero.
 
 Kernel-specific checks (launch knobs, determinism, the d_out launch boundary, bf16 accumulation under row collision,
@@ -246,9 +248,10 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
 #
 # Why two layers. The exponents q and k' are floor(x + 1/2) of fp32 transcendental expressions; a value within an ulp
 # of a boundary floors differently in two implementations that differ by an ulp anywhere. Two independent sources:
-# Inductor reassociating log2 / logsigmoid / exp (compiled vs eager reference), and any difference in operation order
-# between the kernel and the eager reference. The second is removed by construction -- the reference spells out the
-# kernel's order (_pow2.blend_exponents) -- so:
+# the compiled graph's arithmetic (compiled vs eager reference: Inductor's divide-by-constant rewrite, a reciprocal
+# multiply contracted into an FMA, in k'; Triton's approximate fp32 division in q), and any difference in operation
+# order between the kernel and the eager reference. The second is removed by construction -- the reference spells out
+# the kernel's order (_pow2.blend_exponents) -- so:
 #   layer 1 -- fused vs the EAGER reference: BIT FOR BIT, integers and output rows, no tolerance, no gate. A CUDA or
 #              torch upgrade that changes libdevice (which both sides call) would fail here, by design;
 #   layer 2 -- compiled vs eager reference, in fp64: a check that torch.compile preserved the code logic (below).

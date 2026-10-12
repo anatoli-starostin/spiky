@@ -1,8 +1,9 @@
 """Read primitives of the reference cartridges: the flat cell index, and the embedding_bag reads.
 
 The gather + sum over a group's ``tph`` tables is one ``torch.nn.functional.embedding_bag`` call (itself a fused
-kernel): :func:`fused_hard_read` for the hard value, :func:`fused_blend_read` for the two-cell blend. Plain autograd
-gives their backward. Used by ManifestoHardLUT / ManifestoSoftLUT; ConfidenceLUT builds on :func:`_global_cells`.
+kernel): :func:`fused_hard_read` for the hard value, :func:`fused_blend_read` for the two-cell blend,
+:func:`fused_surrogate_read` for the hard cartridge's surrogate. Plain autograd gives their backward. Used by
+ManifestoHardLUT / ManifestoSoftLUT; ConfidenceLUT builds on :func:`_global_cells`.
 """
 from __future__ import annotations
 
@@ -60,4 +61,21 @@ def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor
     if drop_mask is not None:
         w0, w1 = w0 * drop_mask, w1 * drop_mask
     psw = torch.cat([w0, w1], dim=2).reshape(B * G, 2 * tph).to(acc)
+    return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
+
+
+def fused_surrogate_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor, w: torch.Tensor,
+                         drop_mask=None) -> torch.Tensor:
+    """The hard cartridge's surrogate s[b,g] = sum_t w_t (W[g,t,c_alt] - W[g,t,c]) via one embedding_bag over the
+    DETACHED table, per_sample_weights (-w, +w) on (c, c_alt): no weight gradient, and the gradient to w (embedding_bag's
+    per-sample-weight backward, dot(go, W[idx])) without materialising the [B, G, tph, d_out] cell rows -- the two
+    gathers it replaces took ~6 GiB each at 32,768 vectors. drop_mask [B,G,tph] (optional) multiplies w (dropped
+    tables give no surrogate gradient). -> [B,G,d_out] in the accumulation dtype."""
+    G, tph, K, d_out = weights.shape
+    B = c.shape[0]
+    acc = _acc_dtype(weights.dtype)
+    W2 = weights.detach().reshape(G * tph * K, d_out).to(acc)
+    idx = torch.cat([_global_cells(c, G, tph, K), _global_cells(c_alt, G, tph, K)], dim=2).reshape(B * G, 2 * tph)
+    ww = w if drop_mask is None else w * drop_mask
+    psw = torch.cat([-ww, ww], dim=2).reshape(B * G, 2 * tph).to(acc)
     return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)

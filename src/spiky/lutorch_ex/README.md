@@ -460,7 +460,14 @@ Scope today:
 ## Benchmarking
 
 The performance snapshot of record (every class, fp32 and bf16, 8k and 32k vectors, RTX 5090) is
-`benchmarks/snapshot_160.md`, made by `python -m spiky.lutorch_ex.bench_snapshot`.
+`benchmarks/snapshot_162.md` / `.json`, made by `python -m spiky.lutorch_ex.bench_snapshot`. Earlier snapshots stay as
+history: `snapshot_160` and `snapshot_159.json` (#159's, transcribed from its PR comment: 2 decimals, a different
+session). `python -m spiky.lutorch_ex.bench_compare A.json B.json --out-dir DIR` compares any two of them (interleaved
+before / after bars and a ratio strip; matplotlib needed). Two committed figure sets:
+- `benchmarks/figures_159_vs_162/`: the cumulative change across #160 and #162 (#159's snapshot has 2 decimals and a
+  different session: not a controlled A/B);
+- `benchmarks/figures_160_vs_162/`: #162's effect alone (the quantised reference's compile options, ManifestoHardLUT's
+  surrogate); the other cells that move there are run-to-run noise.
 
 `spiky.lutorch_ex.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
 grid of batch sizes and devices. It reports the median and minimum milliseconds and the throughput:
@@ -526,6 +533,7 @@ lutorch_ex/
 ├── deploy_registry.py   format tag -> rebuilder registry
 ├── bench.py             the benchmark harness
 ├── bench_snapshot.py    the performance snapshot of record (every class, one fresh process per cell)
+├── bench_compare.py     two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
 ├── bench_fused_confidence.py   FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
 ├── cartridges/
 │   ├── manifesto_base.py            ManifestoLUT: tables, anchors, addressing, routing, cell TV, table dropout
@@ -545,5 +553,6 @@ lutorch_ex/
 │   ├── _fallback.py                 classified "extension unavailable" errors (NativeUnavailableError)
 │   ├── uncertainty.py               rational_uncertainty
 │   └── csrc/                        CUDA / C++ kernel sources
+├── benchmarks/          snapshots of record (snapshot_<PR>.md / .json) and the comparison figures
 └── tests/               pytest suite
 ```
