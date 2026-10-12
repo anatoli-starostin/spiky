@@ -1,5 +1,5 @@
-"""Lock in the optimized read paths: hard eval reads one cell; hard train and soft eval read the pair in one gather;
-soft train reads through embedding_bag."""
+"""Lock in the optimized read paths: hard eval reads one cell; soft eval reads the pair in one gather; hard and soft
+train read through embedding_bag."""
 import torch
 
 from spiky.lutorch_ex import LUTSpec, ManifestoHardLUT, ManifestoSoftLUT
@@ -34,11 +34,13 @@ def test_hard_eval_uses_single_read():
     assert counts == {"read": 1, "pair": 0}, counts  # eval shortcut: one gather, no alt
 
 
-def test_hard_train_uses_fused_pair():
+def test_hard_train_uses_the_embedding_bag_reads():
+    """Hard train: the value and the surrogate are two embedding_bag reads; no [B, G, tph, d_out] gather at all (the
+    pair gather it replaced ran out of memory at 32,768 vectors)."""
     cart = ManifestoHardLUT(_spec(), seed=0).train()
     counts = _instrument(cart)
     cart(torch.randn(4, cart.spec.h_in, cart.spec.d_in)).sum().backward()
-    assert counts == {"read": 0, "pair": 1}, counts  # train: both cells, one fused gather
+    assert counts == {"read": 0, "pair": 0}, counts
 
 
 def test_soft_eval_uses_fused_pair_and_train_the_embedding_bag_blend():
