@@ -137,8 +137,9 @@ def _integers_from(cells: torch.Tensor, kq: torch.Tensor, Q: int):
 class FusedQuantRead(torch.autograd.Function):
     """FusedQuantisedConfidenceLUT's read, ``z [B, G, d_in]`` -> ``[B, G, d_out]``.
 
-    Forward: two launches, the input-independent table exponents and the fused read (addressing, the p2 integers and
-    straight-through weights in registers, the fake-quant gather); the margins never reach global memory.
+    Forward: three launches -- the input-independent table exponents (a row-split partial max, then the max over the
+    splits) and the fused read (addressing, the p2 integers and straight-through weights in registers, the fake-quant
+    gather); the margins never reach global memory.
 
     Backward: one launch of the hand-written backward (csrc/pow2_int8_read.cu, quant_bwd), plus the sum of its per-CTA
     scalar partials. Only z, the parameters, the exponents and the dropout factors are saved; the kernel re-stages z

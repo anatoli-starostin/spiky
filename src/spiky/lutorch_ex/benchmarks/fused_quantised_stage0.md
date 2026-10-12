@@ -919,3 +919,54 @@ All are within noise; no new snapshot of record is needed.
   - the frozen scalars are buffers with no gradient after a real backward;
   - the table and any scalar left learnable still get gradients;
   - the pair still agrees under `test_fused_matches_reference`'s own checks and tolerances (Layer 1 bit-exactness for the quantised pair).
+
+## The table-exponent kernel: full-bandwidth read (candidate #2 of the backward diagnosis)
+
+**The problem:** `table_exponent_kernel` reads the whole fp32 master (50 MB at the champion geometry) every forward to take the per-(group, channel) max |W|. But it launched only G × ⌈d_out / 32⌉ CTAs: 32 at the champion. At d_out = 48 half the lanes of the second channel block idled. It reached 0.72 TB/s with a cold L2.
+
+**The new code is two launches:**
+- `te_partial_kernel`: one CTA per (group, row split), 256 threads as TX = min(d_out, 256) columns × TY rows. Consecutive threads read consecutive floats of consecutive rows (a fully coalesced sweep). Splits are sized to 4,096 floats per CTA: 3,072 CTAs at the champion. It writes the split's per-channel max.
+- `te_final_kernel`: one thread per (group, channel), the max over the splits, then e.
+- The block shape and split size are kernel constants: no knob, no runtime choice. No atomics.
+
+**Bit-exactness:** a max is exact and order-independent.
+- Verified: E is **bit-identical before / after in 56 cases**, and equal to `_pow2.head_chan_exponents`.
+- The 56 cases are 14 geometries × {random, edge cases} × two shifts. Geometries include d_out = 1, 4, 6, 12, 13, 24, 33, 48, 64, 97, 256, 1000, G = 1 … 16 and tph = 1 … 128.
+- Edge cases: an all-zero channel, a max exactly a power of two, a max from negative values (exactly −8 in the last row), a channel just below and one just above 4, and the global max in each group's last row and column.
+- Layer 1 stays bit-exact (the full suite).
+
+**Decompositions tried** (champion table, ms, warm / cold L2):
+
+| threads / CTA | floats / CTA | CTAs | warm | cold |
+|---|---|---|---|---|
+| old (32 × 32) | — | 32 | 0.030 | 0.0696 (0.72 TB/s) |
+| 256 | 8,192 | 1,536 | 0.019 | 0.0573 (0.88 TB/s) |
+| 512 | 8,192 | 1,536 | 0.021 | 0.0532 |
+| 256 / 512 | 16,384 | 768 | 0.019 | 0.0553 |
+| 512 | 32,768 | 384 | 0.019 | 0.0553 |
+| 1024 | 32,768 | 384 | 0.024 | 0.0635 |
+| 128 | 4,096 | 3,072 | 0.023 | 0.0594 |
+| **256** | **4,096** | **3,072** | **0.018–0.021** | **0.0512 (0.98 TB/s)** |
+| torch inf-norm over the same rows (reference) | | | 0.027 | 0.051–0.053 (0.95–0.98 TB/s) |
+
+- The kept configuration reaches torch's own single-pass bandwidth cold, and beats it warm (2.75 vs 1.89 TB/s).
+- **Cold is the case that matters for training:** the kernel runs right after the optimizer has rewritten the table.
+
+**Inside the step** (per-kernel profile):
+- Training: 0.073 → **0.047 ms** (−0.026).
+- Eval: 0.029 → **0.017 ms** (−0.012).
+- One more launch per forward (3 instead of 2).
+
+**End to end (it is small):**
+
+| cell (ms) | before | after | FusedConfidence | gap before → after |
+|---|---|---|---|---|
+| 8k train | 2.709–2.743 | 2.642–2.696 | 2.415–2.450 | +10–12% → **+9.7%** |
+| 8k eval | 0.526 | 0.514–0.515 | 0.474–0.476 | +11% → **+8.5%** |
+| 32k train | 9.90–10.07 | 9.90–9.96 | 9.37–9.38 | +6–7% → +6% (within noise) |
+| 32k eval | 1.94–2.01 | 2.00 | 1.87 | +4–7% (within noise) |
+
+- The kernel-level gain is real and reproducible (three fresh processes, identical to 0.1 µs). End to end it is ~1% of an 8k training step and ~2% of 8k eval, about the size of the noise.
+- **The exponent kernel was not the main reason for the 8k training gap:** 0.07 ms of a ~0.25 ms gap. The remainder is the backward kernel's diffuse quant-specific arithmetic (see the diagnosis section).
+- **Deployed is not on this path:** it reads the exported int8 table and computes no exponents.
+- Nothing else changed.

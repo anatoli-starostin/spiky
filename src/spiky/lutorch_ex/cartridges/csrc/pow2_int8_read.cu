@@ -8,6 +8,7 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cmath>
 #include <type_traits>
 
@@ -78,11 +79,11 @@ std::vector<torch::Tensor> p2_scalars(const torch::Tensor& Dm, const torch::Tens
 }
 
 // ============================================================================================================================
-// FusedQuantisedConfidenceLUT's forward: two launches per call.
+// FusedQuantisedConfidenceLUT's forward: three launches per call (the exponents take two, see te_partial_kernel).
 //
 // 1. table_exponents: e[g, c] = ceil(log2(max_{t, cell} |W[g, t, cell, c]|)) - (bits - 1) + offset, the per-(group,
 //    channel) power-of-two scale of the fake-quant table (_pow2.head_chan_exponents). Input-independent; a max, so its
-//    result does not depend on the reduction order.
+//    result does not depend on the reduction order: a row-split partial max, then the max over the splits.
 // 2. quant_fwd: the whole read, one CTA per (group g, QF_ROWS consecutive samples), structured as FusedConfidenceLUT's
 //    forward (csrc/fused_confidence.cu):
 //    phase A  thread per table: the margins d_j = z[a_j] - z[b_j] from the z row in shared memory, then p2::table_scalars
@@ -148,23 +149,49 @@ __device__ inline void load_vec(const float* p, float (&v)[VEC]) {
   for (int k = 0; k < VEC; ++k) v[k] = f[k];
 }
 
-__global__ void table_exponent_kernel(const float* __restrict__ W, float* __restrict__ E, int rows_per_group, int d_out,
-                                      float shift) {
-  __shared__ float red[32][33];
-  const int g = blockIdx.x;                                // one block per group (no product: G is small)
-  const int c = blockIdx.y * 32 + threadIdx.x;             // channel
-  float m = 0.f;
-  if (c < d_out) {
-    const float* base = W + (size_t)g * rows_per_group * d_out + c;
-    for (int r = threadIdx.y; r < rows_per_group; r += 32) m = fmaxf(m, fabsf(__ldg(base + (size_t)r * d_out)));
+// table_exponents in two launches (a max over all of a group's rows, per channel; the 50 MB champion table is read once):
+//   te_partial_kernel  one CTA per (group, row split): TE_THREADS-ish threads as TX columns x TY rows, so consecutive
+//                      threads read consecutive floats of consecutive rows (a fully coalesced sweep of the split's rows);
+//                      the per-channel max of the split goes to P[g, split, c]. Splits are sized so the grid has
+//                      ~G x rows x d_out / TE_ELEMS_PER_CTA CTAs (3,072 at the champion geometry), not G x d_out / 32.
+//   te_final_kernel    one thread per (group, channel): the max over the splits, then e.
+// A max is exact and order-independent, so the result equals any other decomposition bit for bit; no atomics.
+constexpr int TE_THREADS = 256;                // threads per CTA (rounded down to a multiple of TX)
+constexpr int TE_ELEMS_PER_CTA = 4096;         // floats each CTA reads (16 KB): sets the number of row splits
+
+__global__ void te_partial_kernel(const float* __restrict__ W, float* __restrict__ P, int rows_per_group, int d_out,
+                                  int nsplit, int rows_per_split, int TX, int TY) {
+  extern __shared__ float red[];               // [TY][TX]
+  const int b = blockIdx.x;
+  const int g = b / nsplit, split = b % nsplit;
+  const int tx = threadIdx.x % TX, ty = threadIdx.x / TX;
+  const int r0 = split * rows_per_split;
+  const int r1 = min(rows_per_group, r0 + rows_per_split);
+  const float* base = W + (size_t)g * rows_per_group * d_out;
+  for (int c0 = 0; c0 < d_out; c0 += TX) {
+    const int c = c0 + tx;
+    float m = 0.f;
+    if (c < d_out)
+      for (int r = r0 + ty; r < r1; r += TY) m = fmaxf(m, fabsf(__ldg(base + (size_t)r * d_out + c)));
+    red[ty * TX + tx] = m;
+    __syncthreads();
+    if (ty == 0 && c < d_out) {
+      float a = red[tx];
+      for (int y = 1; y < TY; ++y) a = fmaxf(a, red[y * TX + tx]);
+      P[((size_t)g * nsplit + split) * d_out + c] = a;
+    }
+    __syncthreads();
   }
-  red[threadIdx.y][threadIdx.x] = m;
-  __syncthreads();
-  if (threadIdx.y == 0 && c < d_out) {
-    float a = red[0][threadIdx.x];
-    for (int y = 1; y < 32; ++y) a = fmaxf(a, red[y][threadIdx.x]);
-    E[(size_t)g * d_out + c] = ceilf(log2f(fmaxf(a, 1e-30f))) - shift;   // _pow2.head_chan_exponents
-  }
+}
+
+__global__ void te_final_kernel(const float* __restrict__ P, float* __restrict__ E, int G, int d_out, int nsplit,
+                                float shift) {
+  const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;   // (g, c)
+  if (i >= (int64_t)G * d_out) return;
+  const int64_t g = i / d_out, c = i % d_out;
+  float a = 0.f;
+  for (int s = 0; s < nsplit; ++s) a = fmaxf(a, P[(g * nsplit + s) * d_out + c]);
+  E[i] = ceilf(log2f(fmaxf(a, 1e-30f))) - shift;   // _pow2.head_chan_exponents
 }
 
 template <int VEC>
@@ -654,9 +681,21 @@ torch::Tensor table_exponents(const torch::Tensor& W, int64_t G, double shift) {
   const int64_t rows = W.size(0), d_out = W.size(1);
   TORCH_CHECK(rows % G == 0, "W rows must be a multiple of G");
   auto E = torch::empty({G, d_out}, W.options());
-  dim3 grid((unsigned)G, (unsigned)((d_out + 31) / 32)), block(32, 32);
-  qf::table_exponent_kernel<<<grid, block, 0, at::cuda::getCurrentCUDAStream()>>>(
-      W.data_ptr<float>(), E.data_ptr<float>(), (int)(rows / G), (int)d_out, (float)shift);
+  if (G == 0 || d_out == 0) return E;
+  const int64_t rpg = rows / G;
+  const int TX = (int)std::min<int64_t>(d_out, qf::TE_THREADS);
+  const int TY = qf::TE_THREADS / TX;
+  const int64_t want = (rpg * d_out + qf::TE_ELEMS_PER_CTA - 1) / qf::TE_ELEMS_PER_CTA;   // row splits per group
+  const int nsplit = (int)std::max<int64_t>(1, std::min<int64_t>(want, std::max<int64_t>(rpg, 1)));
+  const int rows_per_split = (int)((rpg + nsplit - 1) / nsplit);
+  auto P = torch::empty({G, nsplit, d_out}, W.options());
+  auto stream = at::cuda::getCurrentCUDAStream();
+  qf::te_partial_kernel<<<(unsigned)(G * nsplit), TX * TY, sizeof(float) * TX * TY, stream>>>(
+      W.data_ptr<float>(), P.data_ptr<float>(), (int)rpg, (int)d_out, nsplit, rows_per_split, TX, TY);
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  const int64_t n = G * d_out;
+  qf::te_final_kernel<<<(unsigned)((n + 255) / 256), 256, 0, stream>>>(P.data_ptr<float>(), E.data_ptr<float>(), (int)G,
+                                                                        (int)d_out, nsplit, (float)shift);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
   return E;
 }
