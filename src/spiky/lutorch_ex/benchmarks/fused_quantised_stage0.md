@@ -589,3 +589,143 @@ The Stage 1 template, specialised for the stored int8 rows and for the read widt
   - 2 n=1 cases in test_deploy's round trip.
 - **CPU suite: 419 passed / 1017 skipped** (from 417 / 1010). The 2 test_deploy n=1 cases run on CPU; the 7 GPU-only new tests skip there.
 - No assertion weakened, no tolerance added or widened. The extended round-trip test adds an exact (`torch.equal`) assertion.
+
+## Investigation: bf16 for the quantised confidence cartridge (no code change)
+
+The question: is bf16 genuinely impossible here, or is the effect small enough to accept? It was asked first for bf16 input activations, then redirected to the design worth having: **bf16 STORED TABLES with fp32 activations and fp32 exponent arithmetic**.
+
+**Methodology (scripts outside the repo):**
+- Champion geometry (h16 tph64 nap8 d48), 8,192 vectors, seeds 0 and 1.
+- Trained weights, as the G3 n=1 study: 200 Adam steps of the float ConfidenceLUT n=2 on the fixed synthetic regression target. Every model takes those weights.
+- Outputs are compared by relative L2 over the whole tensor, the row-wise median / p99, and the single worst row (row = one sample × head).
+- Every quantised output below is the read with the cartridge's own integers. The fp32 one equals the cartridge's eval output bit for bit (checked).
+
+### 1. The current scope of the refusal, and where it came from
+
+- **`QuantisedConfidenceLUT` refuses both bf16 / fp16 parameters and bf16 / fp16 input activations.**
+  - It sets `_ACCEPTS_LOW_PRECISION = False`, so `ReferenceForward.forward` raises `TypeError("... does not support low precision ...")`.
+  - That happens when the input dtype is bf16 / fp16 OR any parameter or buffer is.
+- **`FusedQuantisedConfidenceLUT` refuses both, as an implementation limit:** `_require` accepts only an fp32 input and an fp32 table. fp64 is refused too.
+- **`DeployedQuantisedConfidenceLUT` refuses bf16 / fp16 input** (`TypeError`, "fp32/fp64 inference only"). On CUDA it takes fp32 input only. It has no table parameter: its rows are int8.
+- **`test_rejects_low_precision` asserts, for read_top_n ∈ {1, 2} and dtype ∈ {bf16, fp16}:** a `QuantisedConfidenceLUT(...).to(dtype)` (every parameter, the table included, in low precision) called on an input of that dtype raises `TypeError` matching "does not support low precision".
+  - It covers only the reference class, and only the all-low-precision case. A bf16 table with an fp32 input is not tested separately; today it raises through the same check.
+  - To allow bf16 tables, the class flag would change, and this test would narrow to the cases still refused (see §4).
+- **No technical reason was ever recorded.** The history:
+  - The class was added in 5f0e5d8c with "fp32/fp64 only; bf16 raises via the base". At that time every non-fused cartridge raised on low precision. That rule came from 128b1f6c, where Gen-2 bf16 gave no speedup through embedding_bag: a performance reason about a different read, not a numerical one.
+  - When #160 Amendment C (016a3a84) gave the reference classes bf16 support, the quantised class was explicitly deferred: "QuantisedConfidenceLUT keeps rejecting low precision (outside the spec's families; the quantised-cartridges work decides)". ARCHITECTURE.md Consequence C and the README say the same.
+  - The exponent-flip argument appears nowhere in code, docs or commits. **It is an inherited default plus a deferral, not a reasoned decision.**
+- **Amendment C already describes the legal design.** ReferenceForward runs a bf16 table / input as fp32 maths on fp32 views and rounds the output once to the input dtype.
+  - For the quantised class that means: the bf16 table upconverted once; the margins, folds, logsigmoid, division by ln2, round_half_up and the exponent e all in fp32; the output in the input's dtype.
+  - With an fp32 input, a bf16 table therefore gives exactly the "bf16-rounded table, fp32 arithmetic" read measured below.
+  - Enabling it in the reference class is the flag alone. The fused class needs kernel support (§4). Deployed is unaffected.
+
+### 2. What table values feed (confirmed from the code)
+
+- **q, k', skip, drop and the cells c / c_alt depend only on the margins**: z (the activations) and the int16 anchors, plus β, γ, τ (`p2::table_scalars`, `_pow2.blend_exponents`). **The table W never enters them.** Checked: the integers are identical with an fp32 and a bf16-rounded table.
+- **The table-derived quantities are:**
+  - the exponent `e[g, c] = ceil(log2 max|W[g, ·, ·, c]|) − 7` (`table_exponent_kernel` / `head_chan_exponents`), per (group, channel), not per sample;
+  - and the int8 values `W_hat = clamp(round_half_up(W / 2^e), −128, 127)`.
+- **So the original objection (round_half_up on q / k' with 8 mantissa bits) does not apply to bf16 tables.** It applies only to bf16 activations or bf16 exponent arithmetic (§5).
+
+### 3. bf16 tables: the numbers (fp32 activations, fp32 exponent arithmetic; both seeds agree to 3 digits)
+
+**A. e flips: none.**
+- **0 of 768 (group, channel) exponents change**, in both seeds.
+- **The mechanism:** e changes only if bf16 rounding moves max|W| across a power of two. bf16 can round a value at most 2^−9 relative onto 2^n from above. So a flip needs max|W| within 2^−9 (0.2%) above a power of two.
+- **Measured distance of the trained max|W| above the power of two below it:** every channel lies between 1.6% and 25% above. Fewer than 4% lie within 6.25%, none within 1.6%.
+  - That is a property of these weights (max of 16,384 entries of a std-0.5 table ≈ 2.0–2.5), not a guarantee.
+  - Under a uniform log-distribution the expected flip rate would be ~0.3% of channels.
+- **A flip is benign in kind:** a static per-channel change of the fake-quant step by ×2 (W_hat of that channel re-quantised on a grid twice as coarse or fine). It is not a per-sample discontinuity, and the export would carry the same e.
+
+**B. But bf16 storage is NOT nearly free here: double rounding into the int8 grid.**
+- **7.3% of the int8 W_hat entries change, by exactly ±1** (both seeds), with e unchanged. The cause:
+  - W / 2^e lies in [−128, 128) and bf16 keeps 8 significant bits. For |W_hat| ∈ [64, 128) the bf16 grid is 0.5 W_hat units, in [32, 64) it is 0.25.
+  - A value in (k + 0.25, k + 0.5) rounds in bf16 to k + 0.5, and round_half_up then takes it to k + 1 instead of k.
+  - bf16 and int8 have about the same resolution, so rounding twice moves a fixed fraction of entries. **The hypothesis that the quantised cartridge is where bf16 storage is least harmful is refuted:** it is the place where bf16's grid collides with the int8 grid.
+- **Output** (seed 0 / seed 1):
+
+| comparison | rel. L2 | row median | row p99 | worst row |
+|---|---|---|---|---|
+| **FusedQuantised bf16 table vs fp32 table** | **0.0203 / 0.0203** | 0.0208 | 0.0287 / 0.0289 | 0.037 / 0.039 |
+| − with e forced to the fp32 value (rounding inside the fake-quant only) | 0.0203 / 0.0203 | 0.0208 | 0.029 | 0.037 / 0.039 |
+| − e flips only | 0 | 0 | 0 | 0 |
+| yardstick: quantisation itself, FusedQuantised fp32 vs FusedConfidence fp32 | 0.2227 / 0.2228 | 0.223 | 0.350 | 0.53 / 0.56 |
+| yardstick: FusedConfidence bf16 table vs fp32 table (fp32 input) | 0.0017 / 0.0017 | 0.0017 | 0.0024 | 0.0031 |
+
+- **Reading:**
+  - The whole bf16-table divergence is the in-grid rounding, 0.020 relative L2. That is **12× what bf16 table storage costs FusedConfidenceLUT (0.0017)**, but **1/11 of what quantisation itself costs (0.223)**: in quadrature it moves the total distance from the float model by ~0.001.
+  - It is smooth: no row moves by more than 0.039, and no row by more than 0.1. A bf16 table is simply a different, equally valid int8 table: 7% of entries one step away.
+  - The quantised reproduction of the G3 figure is confirmed: 0.2227 / 0.2228, 0.223 previously.
+
+**C. Speed and memory.**
+- **Measured:** an ablation of the real kernels with the phase-B table gathers reading half the bytes (bf16 rows of the same shape, upconverted in registers); scratch builds, outside the repo.
+
+| kernel (ms) | fp32 table (now) | bf16-width reads | all table loads removed (floor) |
+|---|---|---|---|
+| quant_fwd 32k | 1.956 | 1.651 (**−16%**) | 0.921 |
+| quant_bwd 32k | 7.875 | 7.154 (**−9%**) | 6.505 |
+| quant_fwd 8k | 0.494 | 0.467 (−5%) | 0.254 |
+| quant_bwd 8k | 1.829 | 1.942 (+6%, noise or the narrower loads) | 1.627 |
+
+- **Implied trainable class gain:**
+  - 32k: eval ~1.94 → ~1.65 ms (still above FusedConfidence bf16's 1.21) and train total ~10.0 → ~9.0 ms (−10%).
+  - 8k: about nothing.
+- **Memory:** the champion table is 50 MB per layer in fp32, 25 MB in bf16, gradient likewise.
+  - That saving exists only if the table PARAMETER itself is bf16, as FusedConfidenceLUT's bf16 table is: no fp32 master.
+  - If an fp32 master is kept for the optimiser, a bf16 copy ADDS 25 MB, and the design is only a bandwidth win inside the kernels.
+  - A pure-bf16 parameter has its own unmeasured risk. Adam updates smaller than half a bf16 ulp vanish, and for |W_hat| ≥ 64 that is 0.25 int8 steps. So small updates can no longer accumulate across a W_hat boundary.
+  - The fp32 master is what makes slow accumulation work today.
+- **DeployedQuantisedConfidenceLUT: no upside.** Its rows are already int8; there is no float table to halve. bf16 tables matter only at training time (the export quantises whatever table the model holds, so it stays consistent). Activations are fp32 by the premise.
+- **Is it worth the work?**
+  - **Trainable class: marginal.** ~16% eval / ~10% train at 32k, nothing at 8k. It does not reach FusedConfidence bf16. The work is a bf16 path in three kernels plus the exponents, plus the training-dynamics question above.
+  - **Deployed: no.**
+
+### 4. What a bf16-table design would need
+
+- **Reference:** `_ACCEPTS_LOW_PRECISION` → accept a bf16 table, keep refusing low-precision input. This needs a narrower check than the shared flag (a class-level rule "table may be bf16, input must not"). Or accept both under Amendment C and keep input refusal as a documented choice.
+- **Fused:** `quant_fwd` / `quant_bwd` / `table_exponents` read bf16 rows (as FusedConfidence's bf16 kernels do); gW in the table's dtype; `_require` admits a bf16 table.
+- **Export:** unchanged. It quantises the model's table, bf16 or not.
+- **Tests:**
+  - a bf16-table harness row (fused vs eager reference bit for bit, as Layer 1);
+  - an Amendment-C exactness test (bf16 table == fp32 run on the bf16-rounded table, output rounded once);
+  - and a narrowed `test_rejects_low_precision`.
+- **Proposed narrowing, NOT applied:** keep the existing test for bf16 / fp16 INPUT (input of that dtype, table of that dtype or fp32: still `TypeError`). Add a fp16-table case (still refused). Replace the "bf16 table refused" expectation by a positive test: `QuantisedConfidenceLUT(...)` with `weights` in bf16 and an fp32 input runs, and equals the fp32 run on `weights.bfloat16().float()` bit for bit. This narrows an existing assertion, so it is Anatoly's decision.
+
+### 5. bf16 input activations (the first question, kept short): not unsafe, but measurably more fragile than elsewhere, and pointless
+
+The fp32 maths on a bf16-rounded input (Amendment C for the input), against the fp32 input:
+
+| | flips per table | rel. L2 | row p99 | worst row | rows moved > 0.1 |
+|---|---|---|---|---|---|
+| quant: bf16 input, fp32 exponent maths | q 0.36%, k' 0.36% (all ±1), cells c 0.36%, c_alt 0.76% | 0.048 | 0.19–0.20 | 0.68–0.90 | 6% |
+| − of which address changes only | − | 0.022 | 0.11 | 0.34–0.45 | 1.2% |
+| − of which exponent changes only | − | 0.043 | 0.19 | 0.68–0.89 | 4.5% |
+| quant, Amendment C exactly (bf16 input + bf16 params, fp32 maths, bf16 out) | as above | 0.052–0.053 | 0.20 | 0.69–0.92 | 6.4–6.7% |
+| quant, exponent arithmetic itself in bf16 (variant c) | q 0.60%, k' 1.5% | 0.089–0.090 | 0.29 | 0.77–0.92 | 23% |
+| yardstick: FusedConfidence fp32 on bf16-rounded input | − | 0.022 | 0.10 | 0.33 | 1.1% |
+| yardstick: FusedConfidence bf16 (all) vs fp32 | − | 0.022 | 0.10 | 0.33 | 1.1% |
+
+- **The prediction ("flips routine") is half right.**
+  - Per table, flips are rare: 0.36% of exponents. That is the same rate as the address-bit flips every bf16 cartridge already has. The pre-rounding values sit uniformly with respect to the boundaries (2% within 0.01); bf16 input moves them by 0.0025 (median) to 0.012–0.021 (p99).
+  - But a row reads 64 tables, so ~59% of rows hold at least one changed table.
+  - An exponent flip doubles or halves a table's weight. So the exponent part costs **2× FusedConfidence's whole bf16 cost** (0.043 vs 0.022), with a heavier tail (worst row 0.9 vs 0.33; 4.5% vs 1.1% of rows moved > 0.1).
+  - The address part alone reproduces FusedConfidence's bf16 cost exactly (0.022).
+- **Doing the exponent arithmetic in bf16 (variant c) is clearly worse:**
+  - k' flips rise 4× (1.5%) and the output divergence to 0.09.
+  - 0.6% / 1.3% of the bf16 pre-rounding values land exactly on a rounding boundary (bf16's coarse grid).
+  - So any bf16 support must keep the exponent maths in fp32. That is Amendment C's rule anyway.
+- **Verdict on bf16 input: not unsafe, pointless.** Its cost (0.05) is a quarter of quantisation's own and smooth on average, though heavier-tailed than elsewhere. The residual stream is fp32 (Anatoly's premise), so there is nothing to gain from accepting it. Note that a bf16 activation would not even be protected by the refusal: the same flips happen if a caller upcasts a bf16 tensor to fp32 before the call.
+
+### 6. Verdict
+
+- **bf16 TABLE storage (fp32 activations, fp32 exponent arithmetic) is numerically acceptable.**
+  - The deciding number: **0.020 relative L2 (worst row 0.039)** against **0.223 for quantisation itself**, with **no e flips** in the trained weights and no per-sample discontinuity.
+  - It is **not** "nearly free": it is 12× FusedConfidence's bf16-table cost (0.0017), from double rounding into the int8 grid. A training run would still have to confirm it at model level (bpb), since 7% of int8 entries move.
+- **The upside is small:**
+  - ~16% eval / ~10% train at 32k, ~0 at 8k, for the trainable class;
+  - 25 MB per layer only with a pure-bf16 table parameter (which carries the small-update risk);
+  - nothing for Deployed.
+- **Recommendation: follow-up, not this PR.** #164's goal state is met in fp32. bf16 tables would buy at most ~1.7 ms per 32k step, at the cost of three kernel variants, a narrowed test and a training-dynamics question. If pursued, do it as its own PR with a bpb run, in this order:
+  1. the reference flag plus the narrowed test;
+  2. the fused bf16 table reads.
+- **bf16 input activations:** not unsafe, and not worth having. The exponent arithmetic must stay fp32 in any case (bf16 arithmetic: 0.09).
