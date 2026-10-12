@@ -61,7 +61,8 @@ def _fused(cls, **kw):
 
 
 #: (name, constructor). Every concrete cartridge class (reference and fused) with its defaults.
-#: DeployedQuantisedConfidenceLUT is inference-only (forward only, built from an export).
+#: DeployedQuantisedConfidenceLUT is inference-only (forward only, built from an export of a QuantisedConfidenceLUT with
+#: that read width; the n=2 row keeps its earlier name).
 CARTRIDGES = [
     ("ManifestoHardLUT", lambda s: lx.ManifestoHardLUT(s, seed=1)),
     ("ManifestoSoftLUT", lambda s: lx.ManifestoSoftLUT(s, seed=1)),
@@ -77,7 +78,8 @@ CARTRIDGES = [
     ("FusedConfidenceLUT n=2", _conf(lx.FusedConfidenceLUT, 2)),
     ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2)),
     ("FusedQuantisedConfidenceLUT n=2", _conf(lx.FusedQuantisedConfidenceLUT, 2)),
-    ("DeployedQuantisedConfidenceLUT", None),      # built from QuantisedConfidenceLUT.to_deployment()
+    ("DeployedQuantisedConfidenceLUT", lambda s: _deployed(s, 2)),       # from QuantisedConfidenceLUT.to_deployment()
+    ("DeployedQuantisedConfidenceLUT n=1", lambda s: _deployed(s, 1)),
 ]
 
 
@@ -168,8 +170,8 @@ def _time_train(m, xx, go, warmup: int, repeats: int):
     return _stats(f), _stats(b), _stats(t)
 
 
-def _deployed(spec):
-    q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=2)
+def _deployed(spec, n):
+    q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=n)
     payload = q.to_deployment()
     return lx.DeployedQuantisedConfidenceLUT(spec, payload["tensors"], payload["meta"])
 
@@ -182,7 +184,7 @@ def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
     torch._dynamo.reset()
     torch.cuda.empty_cache()
     try:
-        m = (_deployed(spec) if make is None else make(spec)).cuda()
+        m = make(spec).cuda()
         if dtype != torch.float32:
             m = m.to(dtype)
         torch.manual_seed(0)
@@ -201,7 +203,7 @@ def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
         fwd()
         torch.cuda.synchronize()
         row["eval_forward"]["peak_gib"] = (torch.cuda.max_memory_allocated() - base) / 2 ** 30
-        if make is None:                                   # inference-only
+        if isinstance(m, lx.DeployedQuantisedConfidenceLUT):   # inference-only
             return row
         m.train()
         xx = x.clone().requires_grad_(True)

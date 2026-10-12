@@ -153,14 +153,15 @@ def test_payload_roundtrip(tmp_path):
 import pytest  # noqa: E402
 
 
-def _variant_model(anchor_mode="pairs", compress=True, projection_dtype=None):
-    """One quant ProjectionMHL FFN behind a backbone Linear, with the given anchor mode / compress / GEMM dtype."""
+def _variant_model(anchor_mode="pairs", compress=True, projection_dtype=None, read_top_n=2):
+    """One quant ProjectionMHL FFN behind a backbone Linear, with the given anchor mode / compress / GEMM dtype / read
+    width."""
     class Variant(nn.Module):
         def __init__(self):
             super().__init__()
             self.embed = nn.Linear(N_EMBD, N_EMBD)
             cart = QuantisedConfidenceLUT(LUTSpec(**SPEC, anchor_mode=anchor_mode), seed=1, quant_mode="p2_int8",
-                                          weight_init_std=1e-2, read_top_n=2)
+                                          weight_init_std=1e-2, read_top_n=read_top_n)
             self.ff0 = ProjectionMHL(cart, d_model=N_EMBD, compress=compress, projection_dtype=projection_dtype)
 
         def forward(self, x):
@@ -169,13 +170,16 @@ def _variant_model(anchor_mode="pairs", compress=True, projection_dtype=None):
     return Variant
 
 
-@pytest.mark.parametrize("anchor_mode,compress,projection_dtype", [
-    ("single", True, None),                 # B2: single-anchor export used to crash (anchor_b is None)
-    ("pairs", False, None),                 # B4: compress=False (an identity) used to crash the export
-    ("pairs", True, torch.bfloat16),        # B4: projection_dtype used to be dropped on load
+@pytest.mark.parametrize("anchor_mode,compress,projection_dtype,read_top_n", [
+    ("single", True, None, 2),              # B2: single-anchor export used to crash (anchor_b is None)
+    ("pairs", False, None, 2),              # B4: compress=False (an identity) used to crash the export
+    ("pairs", True, torch.bfloat16, 2),     # B4: projection_dtype used to be dropped on load
+    ("pairs", True, None, 1),               # read_top_n=1 exports, and the deployed cartridge reads one cell
+    ("single", True, None, 1),
 ])
-def test_export_load_round_trip_keeps_spec_and_wrapper_options(tmp_path, anchor_mode, compress, projection_dtype):
-    Variant = _variant_model(anchor_mode, compress, projection_dtype)
+def test_export_load_round_trip_keeps_spec_and_wrapper_options(tmp_path, anchor_mode, compress, projection_dtype,
+                                                               read_top_n):
+    Variant = _variant_model(anchor_mode, compress, projection_dtype, read_top_n)
     torch.manual_seed(0)
     m = Variant().eval()
     with torch.no_grad():
@@ -197,6 +201,7 @@ def test_export_load_round_trip_keeps_spec_and_wrapper_options(tmp_path, anchor_
     assert ff.cartridge.spec.anchor_mode == anchor_mode
     assert (ff.cartridge.anchor_b is None) == (anchor_mode == "single")
     assert ff.has_compress == compress and ff.projection_dtype == projection_dtype
+    assert ff.cartridge.read_top_n == read_top_n
     with torch.no_grad():
         y_dep = dep(x)
     rel = (y_dep - y_ref).norm() / y_ref.norm().clamp_min(1e-30)

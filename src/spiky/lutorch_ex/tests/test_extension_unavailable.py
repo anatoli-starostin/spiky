@@ -234,3 +234,25 @@ def test_no_env_var_switch_left():
     for src in root.glob("*.py"):
         text = src.read_text()
         assert "LUTORCH_EX_NO_CUDA_EXT" not in text and "SPIKY_P2_CUDA_DISABLE" not in text, src.name
+
+
+# -- DeployedQuantisedConfidenceLUT on CUDA (the deploy_fwd kernel) ---------------------------------------------------
+
+def _deployed(n=2, device="cuda"):
+    q = lx.QuantisedConfidenceLUT(_spec(), seed=0, read_top_n=n)
+    p = q.to_deployment()
+    return lx.DeployedQuantisedConfidenceLUT(_spec(), p["tensors"], p["meta"], device=device)
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("n", [1, 2])
+def test_deployed_without_extension_raises_with_cause(no_quantised_ext, n):
+    """No fallback on CUDA: without the extension the deployed class raises with the classified cause."""
+    with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
+        _deployed(n)(torch.randn(16, 4, 8, device="cuda"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_deployed_cuda_fp64_input_raises_naming_the_case():
+    with pytest.raises(RuntimeError, match=r"input dtype torch.float64 on CUDA"):
+        _deployed()(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))

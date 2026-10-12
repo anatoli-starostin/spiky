@@ -114,6 +114,19 @@ def blend_exponents(m: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, g: tor
     return q, k, skip, drop
 
 
+@torch.no_grad()
+def single_exponent(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor, cfg: dict):
+    """The read_top_n = 1 integers: k' = round(log2 s) = floor(log2 S + (g + gamma ls)/ln2 + 1/2) (no blend, so no c_q),
+    clamped into [lo, hi]; skip = k' below the window. m [..., NAP] -> float k, bool skip [...]. Written in the kernel's
+    operation order (csrc/pow2_scalars.cuh, p2::single_scalars), as blend_exponents is for n = 2: the nap terms of S and
+    of the logsigmoid sum left-folded, the division by ln2 a true fp32 tensor division."""
+    ln2 = torch.full((), LN2, dtype=m.dtype, device=m.device)
+    S = _left_fold(m)
+    ls = _left_fold(F.logsigmoid(beta * m))
+    kr = torch.floor(torch.log2(S) + torch.div(g + gamma * ls, ln2) + 0.5)
+    return torch.clamp(kr, cfg["lo"], cfg["hi"]), kr < cfg["lo"]
+
+
 def ste_blend_weights(score: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, q: torch.Tensor, k: torch.Tensor,
                       skip: torch.Tensor, drop: torch.Tensor) -> torch.Tensor:
     """Per-cell weights [..., 2] with value exactly (2^k', 2^(k'-q)) (0 when skipped / dropped) and the gradient of the
@@ -211,13 +224,25 @@ def int_blend_read(packed: torch.Tensor, bits: int, D: int, flat_idx: torch.Tens
                               "(add a reader beside int8_blend_read)")
 
 
+@torch.no_grad()
+def int_single_read(packed: torch.Tensor, bits: int, D: int, flat_idx: torch.Tensor, k: torch.Tensor,
+                    skip: torch.Tensor, chunk_bags: Optional[int] = 4096) -> torch.Tensor:
+    """The read_top_n = 1 integer read: each table's one row shifted left by k' + 6 (nothing when skipped). flat_idx
+    [N, H, T, 1] row indices into `packed`. Returns int32 [N, H, D] head sums in units of 2^-6."""
+    if bits == 8:
+        sh = torch.where(skip, torch.full_like(k, float(N_SHIFTS)), k + FIXED_POINT_SHIFT).to(torch.int64)
+        return int8_blend_read(packed, D, flat_idx, sh.unsqueeze(-1), chunk_bags)
+    raise NotImplementedError(f"no integer reader for bits={bits}: int{bits} is not implemented "
+                              "(add a reader beside int8_blend_read)")
+
+
 def int8_accumulate(packed: torch.Tensor, flat_idx: torch.Tensor, group: torch.Tensor) -> torch.Tensor:
     """int8 shift-add accumulation, one expression (the form torch.compile fuses into a single kernel that reads the int8
     bytes, shifts and sums without materialising the gathered rows). packed int8 [n_tables * K, D]; flat_idx / group
-    [N, H, T, 2]. Returns int32 [N, H, D]."""
-    N, H, T, _ = flat_idx.shape
-    rows = packed[flat_idx.reshape(N * H, 2 * T)].to(torch.int32)                      # bytes gathered, widened
-    g = group.reshape(N * H, 2 * T, 1)
+    [N, H, T, n] (n cells read per table: 2, or 1 for read_top_n = 1). Returns int32 [N, H, D]."""
+    N, H, T, n = flat_idx.shape
+    rows = packed[flat_idx.reshape(N * H, n * T)].to(torch.int32)                      # bytes gathered, widened
+    g = group.reshape(N * H, n * T, 1)
     keep = g < N_SHIFTS
     shifted = torch.bitwise_left_shift(rows, torch.where(keep, g, torch.zeros_like(g)).to(torch.int32))
     return torch.where(keep, shifted, torch.zeros_like(shifted)).sum(dim=1, dtype=torch.int32).view(N, H, -1)
@@ -226,8 +251,8 @@ def int8_accumulate(packed: torch.Tensor, flat_idx: torch.Tensor, group: torch.T
 @torch.no_grad()
 def int8_blend_read(packed: torch.Tensor, D: int, flat_idx: torch.Tensor, group: torch.Tensor,
                     chunk_bags: Optional[int] = 4096) -> torch.Tensor:
-    """int8 shift-add read over int8 rows [n_tables * K, D] (no unpack step). Each bag (token, head) sums its tables' two
-    rows shifted left by k' + 6 and k' + 6 - q. Eager callers chunk the bags; compiled callers pass chunk_bags=None."""
+    """int8 shift-add read over int8 rows [n_tables * K, D] (no unpack step). Each bag (token, head) sums its tables'
+    rows shifted left by their group's shift (two rows, k' + 6 and k' + 6 - q, for n = 2; one, k' + 6, for n = 1). Eager callers chunk the bags; compiled callers pass chunk_bags=None."""
     if packed.dtype != torch.int8 or packed.shape[-1] != D:
         raise ValueError(f"int8_blend_read needs int8 rows of width {D}, got {packed.dtype} {tuple(packed.shape)}")
     N = flat_idx.shape[0]

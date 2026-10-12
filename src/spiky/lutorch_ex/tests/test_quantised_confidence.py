@@ -128,7 +128,10 @@ def test_quant_forward_backward_runs(read_top_n, anchor_mode, h_in, h_out, devic
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 @pytest.mark.parametrize("device", DEVICES)
 def test_fakequant_eval_matches_int8_read(read_top_n, anchor_mode, device):
-    """The fake-quant eval value equals the int8 shift-add integer read (note §6), bit-exact."""
+    """The fake-quant eval value equals the int8 shift-add integer read (note §6), bit-exact. Then the round trip, both
+    read widths: a trained cartridge exported (to_deployment) and loaded (from_deployment, the format registry's
+    rebuilder) into DeployedQuantisedConfidenceLUT, whose int8 read -- its raw accumulator times the folded scale
+    2^(e - 6) -- equals the trained cartridge's int8 read bit for bit and its eval fake-quant read as above."""
     spec = LUTSpec(h_in=3, h_out=3, tph=4, nap=4, d_in=6, d_out=5, anchor_mode=anchor_mode)
     m = QuantisedConfidenceLUT(spec, seed=2, weight_init_std=1.0, read_top_n=read_top_n).to(device).eval()
     x = torch.randn(48, 3, 6, device=device)
@@ -136,6 +139,29 @@ def test_fakequant_eval_matches_int8_read(read_top_n, anchor_mode, device):
         yq = m(x)
         yi = m.forward_int(x)
     assert _normrel(yq, yi) < 1e-6
+    # train a little, so the exported tables, scalars and exponents are not the initial ones
+    m.train()
+    opt = torch.optim.Adam(m.parameters(), lr=1e-2)
+    g = torch.Generator(device=device).manual_seed(11)
+    for _ in range(20):
+        xb = torch.randn(64, 3, 6, device=device, generator=g)
+        loss = (m(xb) - xb[..., :5].roll(1, dims=1)).pow(2).mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    m.eval()
+    payload = m.to_deployment()
+    assert payload["meta"]["read_top_n"] == read_top_n
+    d = QuantisedConfidenceLUT.from_deployment(spec, payload["tensors"], payload["meta"], device=device).eval()
+    assert type(d).__name__ == "DeployedQuantisedConfidenceLUT" and d.read_top_n == read_top_n
+    scale = payload["decompress_scale"].to(device).reshape(spec.n_groups, spec.d_out)
+    with torch.no_grad():
+        yq = m(x)
+        yi = m.forward_int(x)
+        yd = d(x) * scale
+    assert _normrel(yq, yi) < 1e-6
+    assert torch.equal(yd, yi), f"deployed int8 read differs from the trained int8 read (max {float((yd - yi).abs().max()):.2e})"
+    assert _normrel(yd, yq) < 1e-6
 
 
 @pytest.mark.parametrize("read_top_n", [1, 2])

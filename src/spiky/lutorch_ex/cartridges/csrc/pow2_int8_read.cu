@@ -9,6 +9,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <type_traits>
 
 #include "pow2_scalars.cuh"
 
@@ -495,6 +496,158 @@ int threads_for(int d_out) {
 }
 }  // namespace qf
 
+// ============================================================================================================================
+// DeployedQuantisedConfidenceLUT's forward: deploy_fwd, the Stage 1 template specialised for the stored int8 rows and for
+// the read width N (1 or 2, a template parameter: the export's read_top_n). One CTA per (group g, QF_ROWS samples).
+//   phase A  thread per table: the margins (z[a] - z[b], or z[a] for single anchors), the address c1 (bits d_p > cmp_eps),
+//            then p2::table_scalars (N = 2: k', q, skip, drop, the argmin mj, c2 = c1 ^ 2^(nap-1-mj)) or p2::single_scalars
+//            (N = 1: k', skip), giving each cell's left shift k' + 6 (and k' + 6 - q), or -1 for a cell that is not read.
+//   phase B  stripe x chunk: VEC int8 bytes per load (8, 4, 2 or 1: the widest dividing d_out; 8 measured faster than 16
+//            at the champion, which leaves too few chunks per row and too many stripes), widened to int32 in
+//            registers and shifted; a cell that is not read is not loaded. int32 accumulation: exact, so the value does not
+//            depend on the order (bounded by 2 tph 127 2^10 < 2^31).
+//   phase C  the stripe partials in order, then ONE conversion int32 -> fp32 (round to nearest, as torch's .to(float32)):
+//            the RAW accumulator in units of 2^-6 (the scale 2^(e - 6) is folded into the decompress weight at export).
+//   No backward (inference only). The margins never reach global memory.
+namespace dq {
+constexpr int DQ_THREADS = 64;
+
+struct Params {
+  const float* z;           // [B, G, d_in]
+  const int16_t* anc_a;     // [G, tph, nap]
+  const int16_t* anc_b;     // [G, tph, nap], nullptr = single anchors
+  const int8_t* P;          // [G * tph * K, d_out] the packed int8 table
+  const float* log_beta;
+  const float* log_gamma;
+  const float* log_tau;
+  int B, G, tph, nap, d_in, d_out, lo, hi, Q;
+  float cmp_eps;
+};
+
+template <int VEC> struct Bytes;
+template <> struct Bytes<1> { using T = int8_t; };
+template <> struct Bytes<2> { using T = int16_t; };
+template <> struct Bytes<4> { using T = int32_t; };
+template <> struct Bytes<8> { using T = int2; };
+template <> struct Bytes<16> { using T = int4; };
+
+template <int VEC>
+__device__ inline void load_bytes(const int8_t* p, int (&v)[VEC]) {
+  typename Bytes<VEC>::T x = __ldg(reinterpret_cast<const typename Bytes<VEC>::T*>(p));
+  const int8_t* b = reinterpret_cast<const int8_t*>(&x);
+#pragma unroll
+  for (int k = 0; k < VEC; ++k) v[k] = b[k];
+}
+
+struct Smem {
+  size_t zs, sh, cs, part, sa, sb, total;
+  __host__ __device__ Smem(int tph, int nap, int d_in, int d_out, int nstripe, int n) {
+    size_t o = 0;
+    zs = o;   o = qf::align16(o + sizeof(float) * d_in);
+    sh = o;   o = qf::align16(o + sizeof(int) * tph * n);
+    cs = o;   o = qf::align16(o + sizeof(int) * tph * n);
+    part = o; o = qf::align16(o + sizeof(int) * nstripe * d_out);
+    sa = o;   o = qf::align16(o + sizeof(int16_t) * tph * nap);
+    sb = o;   o = qf::align16(o + sizeof(int16_t) * tph * nap);
+    total = o;
+  }
+};
+
+template <int VEC, int N>
+__global__ void deploy_fwd_kernel(Params p, float* __restrict__ out) {
+  extern __shared__ __align__(16) unsigned char smem_raw[];
+  const int nchunk = p.d_out / VEC;
+  const int nstripe = blockDim.x / nchunk;
+  const Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, N);
+  float* zs = reinterpret_cast<float*>(smem_raw + L.zs);
+  int* sh = reinterpret_cast<int*>(smem_raw + L.sh);        // [tph][N] shift, -1 = not read
+  int* cs = reinterpret_cast<int*>(smem_raw + L.cs);        // [tph][N] cell (table offset included)
+  int* part = reinterpret_cast<int*>(smem_raw + L.part);
+  int16_t* sa = reinterpret_cast<int16_t*>(smem_raw + L.sa);
+  int16_t* sb = reinterpret_cast<int16_t*>(smem_raw + L.sb);
+
+  const int tid = threadIdx.x, bd = blockDim.x;
+  const int g = blockIdx.x % p.G;
+  const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * qf::QF_ROWS);
+  const int nap = p.nap, an = p.tph * nap;
+  const bool single = p.anc_b == nullptr;
+  for (int i = tid; i < an; i += bd) {
+    sa[i] = p.anc_a[(size_t)g * an + i];
+    if (!single) sb[i] = p.anc_b[(size_t)g * an + i];
+  }
+  const float beta = expf(*p.log_beta), gamma = expf(*p.log_gamma);
+  const float tau = N == 2 ? expf(*p.log_tau) : 1.f;
+  const int stripe = tid / nchunk, chunk = tid % nchunk;
+
+  for (int r = 0; r < qf::QF_ROWS; ++r) {
+    const int b = b0 + r;
+    if (b >= p.B) break;                                    // uniform across the CTA
+    const size_t row = (size_t)b * p.G + g;
+    for (int i = tid; i < p.d_in; i += bd) zs[i] = p.z[row * p.d_in + i];
+    __syncthreads();
+    for (int t = tid; t < p.tph; t += bd) {                 // phase A
+      float d[qf::NAP_MAX];
+      int c1 = 0;
+#pragma unroll
+      for (int j = 0; j < qf::NAP_MAX; ++j)
+        if (j < nap) {
+          d[j] = single ? zs[sa[t * nap + j]] : zs[sa[t * nap + j]] - zs[sb[t * nap + j]];
+          if (d[j] > p.cmp_eps) c1 |= 1 << (nap - 1 - j);
+        }
+      const int base = (g * p.tph + t) << nap;
+      if constexpr (N == 2) {
+        const p2::TableScalars s = p2::table_scalars(d, nap, tau, 0.f, beta, gamma, p.lo, p.hi, p.Q);
+        cs[t * 2] = base + c1;
+        cs[t * 2 + 1] = base + (c1 ^ (1 << (nap - 1 - s.mj)));
+        sh[t * 2] = s.skip ? -1 : (int)s.kc + 6;
+        sh[t * 2 + 1] = (s.skip || s.drop) ? -1 : (int)s.kc + 6 - (int)s.q;
+      } else {
+        const p2::SingleScalars s = p2::single_scalars(d, nap, 0.f, beta, gamma, p.lo, p.hi);
+        cs[t] = base + c1;
+        sh[t] = s.skip ? -1 : (int)s.kc + 6;
+      }
+    }
+    __syncthreads();
+    if (stripe < nstripe) {                                 // phase B
+      int acc[VEC];
+#pragma unroll
+      for (int k = 0; k < VEC; ++k) acc[k] = 0;
+      for (int t = stripe; t < p.tph; t += nstripe) {
+#pragma unroll
+        for (int n = 0; n < N; ++n) {
+          const int s = sh[t * N + n];
+          if (s < 0) continue;
+          int v[VEC];
+          load_bytes<VEC>(p.P + (size_t)cs[t * N + n] * p.d_out + chunk * VEC, v);
+#pragma unroll
+          for (int k = 0; k < VEC; ++k) acc[k] += v[k] * (1 << s);
+        }
+      }
+#pragma unroll
+      for (int k = 0; k < VEC; ++k) part[stripe * p.d_out + chunk * VEC + k] = acc[k];
+    }
+    __syncthreads();
+    for (int i = tid; i < p.d_out; i += bd) {               // phase C
+      int y = 0;
+      for (int s = 0; s < nstripe; ++s) y += part[s * p.d_out + i];
+      out[row * p.d_out + i] = __int2float_rn(y);
+    }
+    __syncthreads();
+  }
+}
+
+int vec_for(int d_out) {
+  for (int v = 8; v > 1; v >>= 1)
+    if (d_out % v == 0) return v;
+  return 1;
+}
+
+int threads_for(int d_out) {
+  const int need = ((d_out / vec_for(d_out) + 31) / 32) * 32;
+  return need > DQ_THREADS ? need : DQ_THREADS;
+}
+}  // namespace dq
+
 torch::Tensor table_exponents(const torch::Tensor& W, int64_t G, double shift) {
   TORCH_CHECK(W.is_cuda() && W.scalar_type() == torch::kFloat32 && W.is_contiguous() && W.dim() == 2,
               "W: contiguous fp32 CUDA [rows, d_out]");
@@ -610,9 +763,75 @@ std::vector<torch::Tensor> quant_bwd(const torch::Tensor& go, const torch::Tenso
   return {gz, gW, gscal};
 }
 
+// DeployedQuantisedConfidenceLUT's forward. z fp32 [B, G, d_in]; anchors int16 [G, tph, nap] (anc_b None: single
+// anchors); P int8 [G * tph * 2^nap, d_out]; n = 1 or 2 (the export's read_top_n). Returns the raw accumulator, fp32.
+torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
+                         const torch::Tensor& P, const torch::Tensor& log_beta, const torch::Tensor& log_gamma,
+                         const c10::optional<torch::Tensor>& log_tau, int64_t n, int64_t lo, int64_t hi, int64_t Q,
+                         double cmp_eps) {
+  TORCH_CHECK(z.is_cuda() && z.scalar_type() == torch::kFloat32 && z.is_contiguous() && z.dim() == 3,
+              "z: contiguous fp32 CUDA [B, G, d_in]");
+  TORCH_CHECK(P.is_cuda() && P.scalar_type() == torch::kInt8 && P.is_contiguous() && P.dim() == 2,
+              "P: contiguous int8 CUDA [rows, d_out]");
+  TORCH_CHECK(anc_a.scalar_type() == torch::kInt16 && anc_a.is_contiguous() && anc_a.dim() == 3,
+              "anchors: contiguous int16 [G, tph, nap]");
+  if (anc_b.has_value())
+    TORCH_CHECK(anc_b->scalar_type() == torch::kInt16 && anc_b->is_contiguous() && anc_b->sizes() == anc_a.sizes(),
+                "anc_b: contiguous int16, the shape of anc_a");
+  TORCH_CHECK(n == 1 || n == 2, "n must be 1 or 2");
+  const c10::cuda::CUDAGuard guard(z.device());
+  dq::Params p{};
+  p.z = z.data_ptr<float>();
+  p.anc_a = anc_a.data_ptr<int16_t>();
+  p.anc_b = anc_b.has_value() ? anc_b->data_ptr<int16_t>() : nullptr;
+  p.P = P.data_ptr<int8_t>();
+  p.B = z.size(0); p.G = z.size(1); p.d_in = z.size(2);
+  p.tph = anc_a.size(1); p.nap = anc_a.size(2); p.d_out = P.size(1);
+  p.lo = lo; p.hi = hi; p.Q = Q; p.cmp_eps = (float)cmp_eps;
+  TORCH_CHECK(p.nap >= 1 && p.nap <= qf::NAP_MAX, "nap must be in [1, 8]");
+  TORCH_CHECK(anc_a.size(0) == p.G, "anchor groups != z groups");
+  TORCH_CHECK(P.size(0) == ((int64_t)p.G * p.tph << p.nap), "P rows != G * tph * 2**nap");
+  TORCH_CHECK(n == 1 || log_tau.has_value(), "the n = 2 read needs log_tau");
+  for (const auto* t : {&log_beta, &log_gamma})
+    TORCH_CHECK(t->is_cuda() && t->scalar_type() == torch::kFloat32 && t->numel() == 1, "log scalars: one-element fp32 CUDA");
+  if (log_tau.has_value())
+    TORCH_CHECK(log_tau->is_cuda() && log_tau->scalar_type() == torch::kFloat32 && log_tau->numel() == 1,
+                "log_tau: one-element fp32 CUDA");
+  p.log_beta = log_beta.data_ptr<float>();
+  p.log_gamma = log_gamma.data_ptr<float>();
+  p.log_tau = log_tau.has_value() ? log_tau->data_ptr<float>() : nullptr;   // read only by the n = 2 kernel
+  auto out = torch::empty({p.B, p.G, p.d_out}, z.options());
+  if (p.B == 0) return out;
+  const int vec = dq::vec_for(p.d_out), threads = dq::threads_for(p.d_out);
+  TORCH_CHECK(threads <= 1024, "d_out too wide for one CTA");
+  const int nstripe = threads / (p.d_out / vec);
+  const dq::Smem L(p.tph, p.nap, p.d_in, p.d_out, nstripe, (int)n);
+  const int grid = p.G * ((p.B + qf::QF_ROWS - 1) / qf::QF_ROWS);
+  auto stream = at::cuda::getCurrentCUDAStream();
+  auto launch = [&](auto kernel) {
+    if (L.total > 48 * 1024) C10_CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)L.total));
+    kernel<<<grid, threads, L.total, stream>>>(p, out.data_ptr<float>());
+  };
+  auto by_vec = [&](auto n_const) {
+    constexpr int NN = decltype(n_const)::value;
+    switch (vec) {
+      case 16: launch(dq::deploy_fwd_kernel<16, NN>); break;
+      case 8: launch(dq::deploy_fwd_kernel<8, NN>); break;
+      case 4: launch(dq::deploy_fwd_kernel<4, NN>); break;
+      case 2: launch(dq::deploy_fwd_kernel<2, NN>); break;
+      default: launch(dq::deploy_fwd_kernel<1, NN>);
+    }
+  };
+  if (n == 2) by_vec(std::integral_constant<int, 2>{});
+  else by_vec(std::integral_constant<int, 1>{});
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return out;
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("scalars", &p2_scalars, "p2::table_scalars for every table: forward of the lutorch_ex::p2_scalars op");
   m.def("table_exponents", &table_exponents, "per-(group, channel) fake-quant exponents e of the table");
   m.def("quant_fwd", &quant_fwd, "FusedQuantisedConfidenceLUT's fused forward: addressing, p2 integers, fake-quant read");
   m.def("quant_bwd", &quant_bwd, "FusedQuantisedConfidenceLUT's fused backward (recomputes phase A from z)");
+  m.def("deploy_fwd", &deploy_fwd, "DeployedQuantisedConfidenceLUT's int8 read (read_top_n 1 or 2), the raw accumulator");
 }

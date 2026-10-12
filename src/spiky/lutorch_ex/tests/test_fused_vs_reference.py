@@ -472,3 +472,28 @@ def test_quantised_exact_ties_round_half_up():
     _, cells, kq = torch.ops.lutorch_ex.p2_scalars(d, tau, g0, beta, gamma0, cfg["lo"], cfg["hi"], cfg["Q"])
     qo, ko = _pow2_int8._integers_from(cells, kq, cfg["Q"])[:2]
     assert float(k) == 4.0 and float(ko) == 4.0 and float(qo) == float(q), (float(k), float(ko))
+
+
+# -- DeployedQuantisedConfidenceLUT: the CUDA kernel vs the torch definition, bit for bit ------------------------------
+
+@pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
+@pytest.mark.parametrize("read_top_n", [1, 2])
+def test_deployed_kernel_bit_exact_vs_torch_definition(read_top_n, anchor_mode):
+    """At the champion scale (8.4M tables), the deployed class's CUDA kernel (deploy_fwd) returns exactly the raw int32
+    accumulator of the torch definition of the same read (its _forward_impl, the CPU path, run here on the same CUDA
+    input): the same integers per table, then an exact integer sum. No tolerance. Also equal to the trained cartridge's
+    own integer read (forward_int) once the folded scale is applied."""
+    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
+    requires_extension("quantised")
+    spec = LUTSpec(**dict(CHAMPION, anchor_mode=anchor_mode))
+    q = QuantisedConfidenceLUT(spec, seed=0, **dict(QUANT_KW, read_top_n=read_top_n)).cuda().eval()
+    payload = q.to_deployment()
+    d = DeployedQuantisedConfidenceLUT(spec, payload["tensors"], payload["meta"], device="cuda").eval()
+    x = torch.randn(8192, 16, 48, device="cuda", generator=torch.Generator(device="cuda").manual_seed(4321))
+    with torch.no_grad():
+        yk = d(x)
+        yt = d._forward_impl(x)
+        yi = q.forward_int(x)
+    assert torch.equal(yk, yt), f"{int((yk != yt).any(-1).sum())} rows differ from the torch definition"
+    scale = payload["decompress_scale"].cuda().reshape(spec.n_groups, spec.d_out)
+    assert torch.equal(yk * scale, yi), "the deployed read differs from the trained cartridge's integer read"

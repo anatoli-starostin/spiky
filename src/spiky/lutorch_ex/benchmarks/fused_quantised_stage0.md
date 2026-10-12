@@ -509,3 +509,83 @@ Throwaway script: fused vs the eager reference in fp32, and vs the reference in 
 - **Full GPU suite: 1575 passed / 0 failed / 0 skipped** (main: 1573; the 2 new cases are the tph128 Layer 1 parametrisations).
 - **CPU suite: 417 passed / 1010 skipped** (main: 417 / 1008; the 2 new GPU-only cases skip on CPU).
 - No assertion changed, no tolerance added or widened; Layer 1 stays zero-tolerance.
+
+## Stage 3: DeployedQuantisedConfidenceLUT on the kernel template, and read_top_n = 1
+
+### Part A: `deploy_fwd_kernel<VEC, N>` (csrc/pow2_int8_read.cu)
+
+The Stage 1 template, specialised for the stored int8 rows and for the read width N. **One launch per forward** (from 134 at 32k / 5 at 8k), no backward.
+- **Structure:** one CTA per (group, 4 samples), 64 threads. The z row and the group's int16 anchors are staged in shared memory.
+- **Phase A (thread per table):** the margins (z[a] − z[b], or z[a] for single anchors), the address c1 (bits d_p > cmp_eps), then `p2::table_scalars` (N = 2) or the new `p2::single_scalars` (N = 1). These give each cell's left shift, k' + 6 and k' + 6 − q, or "not read".
+- **Phase B (stripe × chunk):** 8 int8 bytes per load (`int2` `__ldg`: the widest of 8 / 4 / 2 / 1 dividing d_out), widened to int32 in registers and shifted. A cell that is not read (skipped / dropped) is not loaded at all.
+- **Phase C:** the stripe partials summed in order. Then ONE int32 → fp32 conversion (round to nearest, as torch's `.to(float32)`): the raw accumulator in units of 2^−6.
+- **Exactness and order:** int32 accumulation is exact (|sum| ≤ 2·tph·127·2^10 < 2^31), so the value is order-independent.
+- **Bit-identical to the torch definition** (the class's CPU path, `_forward_impl`) at the champion scale for n ∈ {1, 2} × {pairs, single}. This is a new zero-tolerance test, `test_deployed_kernel_bit_exact_vs_torch_definition`. It is also bit-identical to the trained cartridge's own `forward_int` once the folded scale is applied.
+- **NOTHING of size `[B, G, tph, nap]`** is in global memory: margins and integers are in registers, shifts and cells in shared memory.
+- **N is a template parameter** (two instantiations per vector width). The inner loop has no runtime branch on the read width.
+- **Tuning (measured, a scratch ablation outside the repo, all variants bit-identical):**
+
+  | variant (32k eval, ms) | n=2 | n=1 |
+  |---|---|---|
+  | VEC 16 (first version) | 1.50 | 1.38 |
+  | **VEC 8 (kept)** | **1.21** | **0.87** |
+  | VEC 4 | 1.46 | 0.91 |
+  | VEC 16, 32 threads | 1.53 | 1.10 |
+  | VEC 8, 96 threads | 1.27 | 0.98 |
+  | VEC 8, 2 / 8 rows per CTA | 1.38 / 1.31 | 0.93 / 0.93 |
+  | VEC 16, phase B removed (no row loads) | 1.05 | 1.03 |
+  | VEC 16, phase-A maths replaced by constants | 1.32 | 1.22 |
+
+- **Where the time goes:** phase B (the row loads) is the minority. Phase A plus the per-row staging, syncs and stripe sum dominate. The per-table maths alone is ~0.18 ms. Overlapping the nap transcendental chains in `p2::table_scalars` (an unrolled rewrite) measured no gain and was reverted.
+
+**Measured** (RTX 5090, `bench_snapshot.measure`, fresh process per cell, two runs; ms / GiB, eval forward):
+
+| cell | Deployed Stage 0 | **Deployed n=2** | **Deployed n=1** | FusedQuantised n=2 (parent) | FusedConfidence n=2 fp32 | FusedConfidence n=2 bf16 |
+|---|---|---|---|---|---|---|
+| 32k | 16.802 / 1.656 | **1.252–1.256 / 0.094** | **0.899 / 0.094** | 1.956–2.014 / 0.094 | 1.869–1.873 / 0.094 | 1.206–1.218 / 0.047 |
+| 8k | 2.909 / 0.414 | **0.311 / 0.023** | **0.223 / 0.023** | 0.526 / 0.023 | 0.473–0.474 / 0.023 | 0.315 / 0.012 |
+
+- **Deployed n=2 against each reference:**
+  - **Stage 0:** 13.4× faster at 32k, 9.4× at 8k.
+  - **The fused quantised parent:** beaten, −37% at 32k, −41% at 8k (**goal 2 met**).
+  - **FusedConfidence fp32:** beaten, −33% at 32k, −34% at 8k (the "ideally" part of goal 2 met).
+  - **FusedConfidence bf16:** **not beaten at 32k**, +3–4% (1.25 vs 1.21; inside the ±6% noise floor, but consistent in both runs). At 8k it is level (0.311 vs 0.315). Its eval peak is twice bf16's (fp32 input and output).
+- **The 0.9–1.3 ms target at 32k is met** (1.25).
+- **Deployed n=1** beats every cell above, including bf16: 0.899 ms at 32k, 0.223 at 8k.
+- **Effective gather bandwidth** (int8 row bytes actually read ÷ kernel time; 32k):
+  - n=2: 1.94 cells per table read (the rest are dropped second cells), 3.13 GB in 1.250 ms = **2.50 TB/s**.
+  - n=1: 1.61 GB in 0.899 ms = **1.79 TB/s**.
+  - The fp32 kernels move 6.5–7.0 TB/s. The int8 table (12.6 MB) is L2-resident, and this kernel is bound by phase A and the per-row structure rather than by the gather. So the row bytes being 4× smaller buys ~1.6× (n=2), not 4×.
+
+### Part B: read_top_n = 1
+
+- **Not a separate class.** `QuantisedConfidenceLUT(read_top_n=1)` is now exportable (`to_deployment` no longer refuses it). The export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` takes the read width from there, never from the user. No switch, no negotiation, no fallback.
+- **An n = 1 export carries no `log_read_tau`:** there is no blend temperature.
+- **The n = 1 integers have one definition in kernel order.** `_pow2.single_exponent` (torch) and `p2::single_scalars` (CUDA) compute k' = floor(log2 S + (g + γ·ls)/ln2 + 1/2) with S and ls left-folded and a true fp32 division by ln2, as `blend_exponents` does for n = 2.
+  - **This changes the reference's n=1 rounding expression.** Previously it was `round_half_up(log2(m.sum()) + γ·ls.sum()/LN2)`: torch's reduction order and a reciprocal multiply. A value within an ulp of a rounding boundary can now land on the other side. The n = 2 reference made the same move in #162.
+- **`forward_int` is now a real integer read for n = 1** (one row per table shifted by k' + 6, `_pow2.int_single_read`). Before, it returned the fake-quant eval itself.
+- **Coverage (test_fakequant_eval_matches_int8_read, extended; n ∈ {1, 2} × {pairs, single} × {cpu, cuda}):**
+  - First, the existing check (fake-quant eval ≈ int8 read, unchanged).
+  - Then 20 Adam steps, export → `from_deployment` (the registry's rebuilder) → `DeployedQuantisedConfidenceLUT`.
+  - Asserted: the deployed raw accumulator × the folded scale 2^(e−6) equals the trained cartridge's `forward_int` **bit for bit** and its eval fake-quant read within the existing 1e-6.
+  - test_deploy's file-level export → load round trip gained n=1 cases (pairs and single anchors).
+- **No accuracy or bpb claim is made for n = 1.** It is a different model (quant n=1 vs n=2 relative L2 0.64) and is only meaningful trained as n=1; that run is out of scope.
+
+### Deviations to note
+
+- **The deployed class has one device split.** On CUDA it runs the kernel: fp32 input only, nap ≤ 8, d_in ≤ 32767. Anything else raises naming the case, and a missing extension raises the classified NativeUnavailableError (no fallback). On CPU it runs the torch definition (fp32 / fp64), which was its only path before.
+  - This is decided by the input's device, not by a user or a runtime negotiation.
+  - The two compute the same integers, and the CUDA one is pinned to the torch one bit for bit.
+  - **Change in behaviour:** fp64 input on CUDA, accepted before (computed in fp64), now raises.
+  - **Change in behaviour:** a CUDA device outside VALIDATED_ARCHES (or without nvcc) now raises instead of compiling the torch read.
+- **`cmp_eps`:** the deployed kernel honours it in the address bits. FusedQuantisedConfidenceLUT's forward kernel (Stage 1) does not: it addresses with d > 0 regardless of `cmp_eps`. That gives a different read for a non-zero `cmp_eps` (default 0, which every test and the champion use). Not changed here; flagged.
+- **`bench_snapshot`:** the deployed row is now built per read width ("DeployedQuantisedConfidenceLUT" = n=2, the earlier name, plus a new "DeployedQuantisedConfidenceLUT n=1" row). Inference-only cells are recognised by class. bench_compare's row order gained the n=1 row.
+
+### Tests
+
+- **Full GPU suite: 1584 passed / 0 failed / 0 skipped.** Stage 2+4 state: 1575. The +9:
+  - 4 `test_deployed_kernel_bit_exact_vs_torch_definition`;
+  - 2 deployed without-extension cases and 1 deployed fp64-on-CUDA case in test_extension_unavailable;
+  - 2 n=1 cases in test_deploy's round trip.
+- **CPU suite: 419 passed / 1017 skipped** (from 417 / 1010). The 2 test_deploy n=1 cases run on CPU; the 7 GPU-only new tests skip there.
+- No assertion weakened, no tolerance added or widened. The extended round-trip test adds an exact (`torch.equal`) assertion.
