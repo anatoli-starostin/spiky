@@ -883,3 +883,39 @@ All are within noise; no new snapshot of record is needed.
 
 - **Honest floor:** #2 alone brings 8k to ~+8.5%. With #1 as well, the estimate is ~+5–7%. Without #1 the remaining gap is the diffuse phase-A arithmetic, which cannot be removed without either storing the integers (#1) or changing the quantisation maths.
 - **Recommendation:** #2 is cheap and exact and worth doing. #1 is a memory-for-time trade and is Anatoly's call. #3 changes numbers and is not worth ≤0.1 ms. And at 8k the gap itself sits half inside the ±5–10% noise.
+
+## `read_tau_*` at `read_top_n=1` now raise; the frozen-scalar configurations are now tested
+
+**The defect:** `read_tau_learnable` and `read_tau_init` were accepted at `read_top_n=1` and silently dropped, in all four classes built on `ConfidenceBase`.
+- Nebius found it during real training runs: an n=1 cartridge exposed only `weights`, `confidence_log_beta` and `confidence_log_gamma`, despite `read_tau_learnable=True`.
+- **n=1 having no τ is by design.** τ is the temperature of the two-cell blend σ(−2|u_j*|/τ), and the single-cell read has no blend. The defect was only that the arguments were accepted without a word.
+- **A learnable-scalar audit of every reference/fused pair found no other instance,** and no fused Parameter that misses its gradient (see the report on #164).
+
+**The fix** (`cartridges/confidence_base.py`):
+- Both arguments default to None ("not given") and resolve to the previous defaults (True, 0.5).
+- At `read_top_n=1`, giving either raises `ValueError`. The message names the argument and value, explains that τ is the two-cell blend's temperature and the n=1 read has none, and says to pass `read_top_n=2` for the τ-blend read.
+- **Why ValueError rather than TypeError:** each value is individually valid; only the combination is meaningless.
+- **Unchanged behaviour:**
+  - A bare n=1 construction is unchanged.
+  - At n=2 the module is structurally and numerically identical: parameter and buffer lists, dtypes, init values, forward values and reference gradients are bit-identical before and after, for every flag combination of all four classes. The fused gradients differ only by their usual atomic run-to-run noise.
+  - Deployed never runs `ConfidenceBase.__init__`, so n=1 and n=2 exports rebuild as before.
+  - No kernel or numeric path changed.
+- **Five in-repo test call sites were themselves instances of the defect.** All now pass `read_tau_init` only at n=2 (kwargs only; at n=1 the value was already ignored, so those tests check exactly what they checked):
+  - four in `tests/test_fused_confidence.py`: `_pair`, `_model`, the bf16-input test and the d_out test;
+  - one in `tests/test_fused_vs_reference.py`, the Stage 3 `test_deployed_kernel_bit_exact_vs_torch_definition` (n=1 cases).
+- **The fifth surfaced only when the raise was added.** Its argument came through the shared `QUANT_KW` dict rather than literally at the call, so a text search missed it.
+  - An AST scan of every tracked .py file then followed every dict and kwargs holder containing either name through `dict(...)` merges and `**` splats to its constructor. It found no further instance.
+- **No kernel or numeric path changed:** the change is construction-time validation only.
+- **New tests** (`tests/test_confidence.py`):
+  - `test_score_params_and_tau_wiring` is extended with n=2 + explicit True / False / init;
+  - `test_tau_arguments_at_read_top_n_1_raise`: 4 classes × learnable=True / False / init / both;
+  - `test_bare_read_top_n_1_constructs_without_tau`: 3 classes.
+
+**The frozen-scalar blind spots, now covered** (`tests/test_fused_vs_reference.py::test_frozen_scalars_are_buffers_and_the_pair_still_agrees`, 7 cases):
+- **The configurations:**
+  - `learnable_temps=False` on ManifestoHard / ManifestoSoft with softsign;
+  - `learnable_score=False` and / or `read_tau_learnable=False` on Confidence n=1 / n=2 and Quantised n=2.
+- **What each case asserts, on both the reference and the fused twin:**
+  - the frozen scalars are buffers with no gradient after a real backward;
+  - the table and any scalar left learnable still get gradients;
+  - the pair still agrees under `test_fused_matches_reference`'s own checks and tolerances (Layer 1 bit-exactness for the quantised pair).

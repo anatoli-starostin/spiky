@@ -244,6 +244,63 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
         assert e < bound, f"{name} {leaf} ({check}): error {e:.2e} >= {bound:.1e}"
 
 
+# -- frozen learned scalars: the configurations CARTRIDGES (flags at their defaults) never runs -----------------------
+#
+# Each learned scalar has a constructor flag that freezes it as a buffer. Per case: on both the reference and the fused
+# twin the frozen scalars are buffers (not in named_parameters(), no requires_grad) and get no gradient from a real
+# backward, while every remaining Parameter -- the table and any scalar left learnable -- still does; then the pair is
+# compared by test_fused_matches_reference itself (its checks and tolerances), at fp32 on the small per-head geometry.
+
+#: (id, fused class, reference class, kwargs, extension, the scalars the kwargs freeze)
+FROZEN = [
+    ("ManifestoHard[softsign] temps frozen", FusedManifestoHardLUT, ManifestoHardLUT,
+     dict(weight="softsign", learnable_temps=False), "manifesto", ("log_soft_score_temp", "log_select_temp")),
+    ("ManifestoSoft[softsign] temps frozen", FusedManifestoSoftLUT, ManifestoSoftLUT,
+     dict(weight="softsign", learnable_temps=False), "manifesto", ("log_soft_score_temp", "log_select_temp")),
+    ("Confidence n=1 score frozen", FusedConfidenceLUT, ConfidenceLUT,
+     dict(read_top_n=1, beta_init=1.7, gamma_init=0.8, learnable_score=False), "confidence",
+     ("confidence_log_beta", "confidence_log_gamma")),
+    ("Confidence n=2 score and tau frozen", FusedConfidenceLUT, ConfidenceLUT,
+     dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6, learnable_score=False,
+          read_tau_learnable=False), "confidence", ("confidence_log_beta", "confidence_log_gamma", "log_read_tau")),
+    ("Confidence n=2 tau frozen", FusedConfidenceLUT, ConfidenceLUT,
+     dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6, read_tau_learnable=False), "confidence",
+     ("log_read_tau",)),
+    ("Quantised n=2 score and tau frozen", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
+     dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6, learnable_score=False,
+          read_tau_learnable=False), "quantised", ("confidence_log_beta", "confidence_log_gamma", "log_read_tau")),
+    ("Quantised n=2 tau frozen", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
+     dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6, read_tau_learnable=False), "quantised",
+     ("log_read_tau",)),
+]
+
+
+@pytest.mark.parametrize("case", FROZEN, ids=[c[0] for c in FROZEN])
+def test_frozen_scalars_are_buffers_and_the_pair_still_agrees(case):
+    name, Fused, Ref, kw, ext, frozen = case
+    cart = (name, Fused, Ref, kw, ext)
+    dt, geom = DTYPES[0], GEOMS[0]                        # fp32, small-per-head
+    ref, fused, x, go = _pair(cart, dt, "pairs", geom)
+    for m in (ref, fused):
+        who = type(m).__name__
+        params, bufs = dict(m.named_parameters()), dict(m.named_buffers())
+        for s in frozen:
+            assert s not in params, f"{who}: {s} is a Parameter although frozen"
+            assert s in bufs and not bufs[s].requires_grad, f"{who}: {s} is not a frozen buffer"
+        m.train()
+        m.zero_grad(set_to_none=True)
+        xi = x.clone().requires_grad_(True)
+        m(xi).backward(go)
+        assert xi.grad is not None and torch.isfinite(xi.grad).all()
+        for s in frozen:
+            assert getattr(m, s).grad is None, f"{who}: frozen {s} received a gradient"
+        for n, p in params.items():                    # the table and any scalar left learnable still train
+            assert p.grad is not None and torch.isfinite(p.grad).all() and p.grad.abs().sum() > 0, \
+                f"{who}: {n} got no gradient with {sorted(frozen)} frozen"
+        m.zero_grad(set_to_none=True)
+    test_fused_matches_reference(cart, dt, "pairs", geom)
+
+
 # -- the quantised pair at the champion scale: two layers -------------------------------------------------------------
 #
 # Why two layers. The exponents q and k' are floor(x + 1/2) of fp32 transcendental expressions; a value within an ulp
