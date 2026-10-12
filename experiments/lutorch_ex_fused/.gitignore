@@ -1,0 +1,9 @@
+# run artifacts — code only in git
+__pycache__/
+*.pyc
+ckpt.pt
+metrics.csv
+summary.json
+stdout.log
+loss.png
+wandb/
