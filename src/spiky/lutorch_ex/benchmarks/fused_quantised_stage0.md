@@ -970,3 +970,52 @@ All are within noise; no new snapshot of record is needed.
 - **The exponent kernel was not the main reason for the 8k training gap:** 0.07 ms of a ~0.25 ms gap. The remainder is the backward kernel's diffuse quant-specific arithmetic (see the diagnosis section).
 - **Deployed is not on this path:** it reads the exported int8 table and computes no exponents.
 - Nothing else changed.
+
+## Snapshot of record for #164, and the delta against #160
+
+**Files:**
+- `benchmarks/snapshot_164.json` / `.md`: #164 HEAD `a251a82f`.
+- `benchmarks/snapshot_160_remeasured.json` / `.md`: #160's library code `a811390e`, the commit `snapshot_160.json` was measured at.
+- `benchmarks/figures_160_vs_164/`, drawn by `bench_compare.py --same-session`: `bars_time_A.png` (eval forward, train total), `bars_time_B.png` (train forward, train backward), `bars_memory_A.png`, `bars_memory_B.png` and `ratio_strip.png`.
+- The earlier `figures_162_vs_164/` show the first #164 snapshot (code 41df6f25) and are kept as that record.
+
+**The before-side is #160 re-measured today, not #160's published numbers.**
+- #160's code still builds and runs on the current toolchain. A probe reproduced its own published FusedQuantised 8k eval: 2.523 vs 2.52 ms.
+- So both sides were measured in one session (2026-10-13), interleaved cell by cell, under each tree's own bench_snapshot.
+- Conditions: SM 2.65–3.07 GHz, 33–42 C, no throttle or power-cap flag.
+- One row (ConfidenceLUT n=2 champion eval) caught a transient on the #164 side (1.74 / 1.91 ms against 1.28–1.31 in three re-checks of all trees). It was re-measured for both trees and replaced; both `.md` headers record it.
+
+**The cell set is #160's own:**
+- 15 cartridges × {fp32, bf16} × {8,192, 32,768} vectors;
+- eval forward / train forward / train backward / train total;
+- median ms and peak GiB.
+- #164 adds a DeployedQuantisedConfidenceLUT n=1 row (after-only).
+
+**`bench_compare.py` was extended in place** (commit a251a82f). Each cell is judged against its own noise floor: ±15% for timings under 0.5 ms, ±10% for timings at ≤ 8k, ±6% for other timings, ±5% for memory. The floor is drawn as a band around the before value. In-noise cells are hatched and labelled in grey ("×r · within ±n"), never as a win or a loss.
+
+**Delta (420 comparable values):**
+
+| metric | improved | regressed | within noise | OOM → fits |
+|---|---|---|---|---|
+| time | 20 | 4 | 174 | 12 |
+| peak memory | 26 | 0 | 172 | 12 |
+
+- **Beyond noise, better:**
+  - FusedQuantisedConfidenceLUT: all 8 time cells ×0.20–0.24, all 8 peak cells ×0.06–0.10.
+  - DeployedQuantisedConfidenceLUT eval: ×0.108 / ×0.075 time, ×0.057 peak.
+  - QuantisedConfidenceLUT eval (×0.87 / ×0.88 time; peaks ×0.44–0.83): #162's compile hint.
+  - ManifestoHard / ManifestoHard·softsign 8k train forward (×0.33) and train total (×0.59), and their peaks: #162.
+- **OOM → fits:** ManifestoHard·{rational, softsign} 32k training, all 12 cells (#162).
+- **Beyond noise, worse:** only ManifestoHard / ManifestoHard·softsign 8k **train backward ×1.21–1.23** (7.33 → 8.95–9.30 ms). This is the known cost of #162's single-embedding_bag surrogate, the change that made 32k training fit at all; it is not from this PR.
+- **Everything else is within its noise floor.**
+
+**FusedQuantised against FusedConfidence fp32 in this session:**
+
+| | 8k | 32k |
+|---|---|---|
+| train | 2.691 vs 2.477 ms = **+8.6%** | 10.142 vs 9.370 ms = **+8.2%** |
+| eval | 0.516 vs 0.473 ms = **+9.1%** | 1.921 vs 1.870 ms = **+2.7%** |
+
+- Earlier runs measured 32k train at +6–7%. This session's +8.2% is inside the ±6% floor of each cell but above the ~+6% bound.
+- **Deployed n=2** eval: 0.310 / 1.252 ms. FusedConfidence bf16: 0.317 / 1.230.
+- **Deployed n=1** eval: 0.221 / 0.892 ms.
