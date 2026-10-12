@@ -6,7 +6,8 @@ gradcheckable; the correct target is the SMOOTH SURROGATE that carries the STE's
 n=2), and (b) assert the real STE forward's gradient equals the surrogate's — so the gradcheck'd
 surrogate is exactly the quant-aware backward. Plus: quant-aware run matrix, fake-quant eval ==
 int8 shift-add read (bit-exact), train == eval value, bf16 raises, both anchor modes, both
-read_top_n.
+read_top_n. These are the reference class's own checks; FusedQuantisedConfidenceLUT (the p2_scalars op) is checked
+against it in test_fused_vs_reference.py.
 """
 import pytest
 import torch
@@ -20,7 +21,7 @@ DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 
 
 def _normrel(a, b):
-    return (a.double() - b.double()).norm().item() / max(b.double().norm().item(), 1e-12)
+    return (a - b).norm().item() / max(b.norm().item(), 1e-12)
 
 
 def _param_leaves(m):

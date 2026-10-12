@@ -38,13 +38,18 @@ def test_fresh_projection_outputs_exact_zero(cart_name, input_dim, output_dim, t
     import spiky.lutorch_ex as lx
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=8, d_out=8)
     torch.manual_seed(0)
-    proj = ProjectionMHL(getattr(lx, cart_name)(spec, seed=3), input_dim=input_dim, output_dim=output_dim)
+    dev = "cpu"
+    if cart_name.startswith("Fused"):                        # the fused classes run only on their CUDA kernels
+        from spiky.lutorch_ex.tests._requires_extension import requires_extension
+        requires_extension("manifesto")
+        dev = "cuda"
+    proj = ProjectionMHL(getattr(lx, cart_name)(spec, seed=3), input_dim=input_dim, output_dim=output_dim).to(dev)
     proj.train(train)
     b = proj.decompress.bias
     assert isinstance(b, torch.nn.Parameter) and b.requires_grad
     assert torch.equal(b, torch.zeros_like(b))
     assert torch.equal(proj.decompress.weight, torch.zeros_like(proj.decompress.weight))
-    x = torch.randn(7, input_dim) * 5.0
+    x = torch.randn(7, input_dim, device=dev) * 5.0
     y = proj(x)
     assert torch.equal(y, torch.zeros_like(y)), f"fresh layer must output exact zeros, max |y| = {y.abs().max()}"
     if train:

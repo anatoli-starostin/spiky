@@ -22,6 +22,18 @@ the fake-quant value to round-off.
 Scope: constant cells only, both anchor modes (inherited), read_top_n ∈ {1,2}, no hard forward, no
 trainable anchors. fp32/fp64 only (bf16 raises via the base). p2_int8 is the only preset; n=1 quant
 is a lutorch_ex extension of the reference (which was n=2-only).
+
+Implementations (spec rules 3 and 5: the class is the implementation, there is no selector):
+* :class:`QuantisedConfidenceLUT` -- the reference: the torch definition (``_pow2``) only, every case, CPU and CUDA,
+  compiled on CUDA. It loads no extension.
+* :class:`FusedQuantisedConfidenceLUT` -- the fused twin: the ``lutorch_ex::p2_scalars`` CUDA op (``_pow2_int8``)
+  computes the per-table integers and straight-through cell weights; n=2 training runs the flat monolith read
+  (:meth:`FusedQuantisedConfidenceLUT._quant_read_monolith`). Cases the op does not cover (read_top_n=1, single
+  anchors, a CPU input, a non-fp32 input or table) raise, naming the case, and so does a missing extension.
+* :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form; torch, no extension.
+
+Both trainable classes share the quant scaffolding (:class:`QuantisedScaffold`: config, fake-quant tables, the integer
+read, deployment export) and the state_dict; neither inherits the other's forward (spec amendment B).
 """
 from __future__ import annotations
 
@@ -32,37 +44,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..lut_spec import LUTSpec
-from . import _pow2, _pow2_int8
+from . import _fallback, _pow2, _pow2_int8   # _pow2_int8: FusedQuantisedConfidenceLUT only
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
+from .confidence_base import ConfidenceBase
 from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION, resolve_index_dtype
 
 
-class QuantisedConfidenceLUT(ConfidenceLUT):
-    """p2_int8 quant-aware twin of :class:`ConfidenceLUT`; see module docstring."""
+class QuantisedScaffold:
+    """The quant scaffolding shared by :class:`QuantisedConfidenceLUT` and :class:`FusedQuantisedConfidenceLUT` (no
+    forward): the p2_int8 config, the fake-quant tables, the integer read and the deployment export."""
 
-    # The n=2 quant train path is the flat monolith (see _quant_read_monolith). For its cheaper fused
-    # backward it compiles with torch.compile(dynamic=None) (auto: specialise on the first shape), not
-    # the base's dynamic=True. With dynamic=True the backward
-    # fuses ~0.65 ms worse; dynamic=None closes it (step 24.9 -> 24.4, backward 21.0 -> 20.3).
-    _COMPILE_TRAIN_DYNAMIC = None
-
-    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
-        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the
-        # only one deployment supports. read_top_n=1 stays constructible and trainable, just not exportable.
-        for opt in ("fused_read", "bag_eval_read"):
-            if kw.get(opt):
-                raise ValueError(f"QuantisedConfidenceLUT has its own fake-quant table read; {opt} is a ConfidenceLUT "
-                                 "option and cannot be combined with it")
-        super().__init__(spec, read_top_n=read_top_n, **kw)
+    def _init_quant(self, quant_mode, quant_overrides):
         self._quant = _pow2.resolve_quant_config(quant_mode, quant_overrides)
         if self._quant is None:
-            raise ValueError("QuantisedConfidenceLUT requires a quant_mode (e.g. 'p2_int8')")
-        # Eagerly build/register the native p2_scalars op (standalone JIT; returns False and falls
-        # back to the pure _pow2 path on CPU / no nvcc / build failure — never raises).
-        _pow2_int8.ensure_registered()
-
-    # -- quant-aware building blocks -------------------------------------------------------
+            raise ValueError(f"{type(self).__name__} requires a quant_mode (e.g. 'p2_int8')")
 
     def _betagamma(self, dtype):
         return (self.confidence_log_beta.to(dtype).exp(), self.confidence_log_gamma.to(dtype).exp())
@@ -75,161 +71,15 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
                              n_heads=G, bits=self._quant["bits"], offset=self._quant["offset"])
         return W.reshape(G * tph * K, d_out)
 
-    def _ste_score_weight(self, s, k1, skip):
-        """Single-cell (n=1) STE weight: value 2^k' (0 if skipped), gradient the exact score s."""
-        b = torch.pow(2.0, k1).to(s.dtype)
-        val = torch.where(skip, torch.zeros_like(b), b)
-        st = s * (b / s.detach().clamp_min(1e-30))
-        return val + (st - st.detach())
-
-    def _quant_grp_out(self, u, c, c_alt, u_abs_star, frozen_coef=None):
-        """The quant-aware (fake-quant + STE weights) score-weighted read -> [B, G, d_out].
-
-        ``frozen_coef`` (test/analysis only) injects the STE's stop-grad per-cell ratio
-        ``b / (s·σ)_base`` captured at a base point, and replaces the straight-through weight by the
-        SMOOTH ``(s·σ)·ratio``. With the ratio frozen the forward is smooth and its gradient equals
-        the real STE backward exactly — so it is the function fp64 gradcheck validates (the
-        staircase STE value itself is piecewise-constant and not directly gradcheckable)."""
+    def _blend_read(self, psw2, c, c_alt, W2):
+        """The n=2 read: cells c and c_alt of every table, weighted by psw2 [B, G, tph, 2] -> [B, G, d_out]."""
         G, tph, K, d_out = self.weights.shape
         B = c.shape[0]
-        cfg = self._quant
-        beta, gamma = self._betagamma(u.dtype)
-        g0 = torch.zeros((), dtype=u.dtype, device=u.device)       # g dropped (== 0)
-        W2 = self._fake_quant_tables()
-        m = u.abs()
-        mv = u_abs_star.unsqueeze(-1)                              # [B, G, tph, 1]
-        dmask = self._table_dropout_mask(B, u.device, u.dtype)    # [B,G,tph] keep-mask or None
-        if self.read_top_n == 2:
-            tau = self.log_read_tau.to(u.dtype).exp()
-            if frozen_coef is None:
-                # Straight-through per-cell blend weights. TRAIN uses the PURE fused path
-                # (blend_exponents + ste_cell_weights -- the `val + (st - st.detach())` STE), so the
-                # whole forward AND backward fuse in the compiled region with NO graph break and NO
-                # surrogate-recompute backward (the opaque p2_scalars op's autograd re-runs the
-                # surrogate + an inner autograd.grad, ~1 ms). This matches the n=1 quant path and the
-                # float scored cartridge. EVAL (no grad) keeps the native op: its single-pass
-                # exponent kernel is the fastest forward and there is no backward to fuse. Both give
-                # bit-identical psw; cells come from our own c / c_alt below (any op-returned indices
-                # are discarded, so there is no bit-convention coupling either way).
-                if self.training:
-                    q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
-                    psw2 = _pow2_int8.ste_cell_weights(u, tau, g0, beta, gamma, q, k, skip, drop)
-                else:
-                    psw2 = _pow2_int8.cell_weights(u, c, self.powers, tau, g0, beta, gamma, cfg)[0]
-            else:
-                s = self._score(u)
-                x2 = 2.0 * mv / tau
-                ex = s.unsqueeze(-1) * torch.cat([torch.sigmoid(x2), torch.sigmoid(-x2)], dim=-1)
-                psw2 = ex * frozen_coef                                          # smooth, frozen ratio
-            if dmask is not None:
-                psw2 = psw2 * dmask.unsqueeze(-1)       # table dropout (one Bernoulli/table, both cells)
-            gc = _global_cells(c, G, tph, K)
-            gca = _global_cells(c_alt, G, tph, K)
-            idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
-            psw = torch.cat([psw2[..., 0], psw2[..., 1]], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
-            return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
-        # read_top_n == 1: single scored cell, score rounded to a power of two (STE). The native
-        # p2_scalars op is a 2-cell-blend kernel (q / c_q / neighbour) and has no single-cell form
-        # in the reference, so n=1 stays on the pure path — but shares ONE logsigmoid pass between
-        # the linear score s and its log2 (k'), instead of computing the score twice.
-        msum = m.sum(dim=-1)
-        lse = F.logsigmoid(beta * m).sum(dim=-1)
-        s = msum * torch.exp(gamma * lse)                          # == self._score(u)
-        if frozen_coef is None:
-            k1 = _pow2.round_half_up(torch.log2(msum) + gamma * lse / _pow2.LN2)
-            skip = k1 < cfg["lo"]
-            k1 = torch.clamp(k1, cfg["lo"], cfg["hi"])
-            psw = self._ste_score_weight(s, k1, skip).reshape(B * G, tph).to(W2.dtype)
-        else:
-            psw = (s * frozen_coef).reshape(B * G, tph).to(W2.dtype)            # smooth, frozen ratio
-        if dmask is not None:
-            psw = psw * dmask.reshape(B * G, tph).to(psw.dtype)                 # table dropout
-        gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
-        return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
-
-    def _quant_read_monolith(self, x: torch.Tensor) -> torch.Tensor:
-        """n=2 CUDA-fp32 TRAIN read, written flat as one compile unit.
-
-        This cartridge is ALLOWED to diverge from the shared ManifestoLUT primitives for the hot quant
-        n=2 train path (owner-approved): instead of composing _addresses / _quant_grp_out / _route /
-        _fake_quant_tables / _global_cells, it inlines one flat op sequence -- margins, the native
-        p2_scalars op (cells + straight-through power-of-two weights), ste_tables at the read site, and
-        an offsets-based 1-D flat_idx embedding_bag -- so aot-autograd/inductor see a single FX graph and
-        emit a cheaper fused backward. Pairs mode only; the gate in :meth:`_forward_impl` keeps
-        n=1 / eval / CPU / single-anchor / no-op on the shared path. Forward value + grads are bit-
-        identical to the shared path (the op's cells equal our c/c_alt; same ste_tables / embedding_bag)."""
-        G, tph, K, d_out = self.weights.shape
-        nap = self.spec.nap
-        B = x.shape[0]
-        cfg = self._quant
-        z = x[:, self.in_head, :]                                           # route (identity when h_in==G)
-        idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
-        idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
-        d = (z.gather(2, idx_a) - z.gather(2, idx_b)).view(B, G, tph, nap)  # signed margins
-        beta, gamma = self._betagamma(d.dtype)
-        g0 = torch.zeros((), dtype=d.dtype, device=d.device)
-        tau = self.log_read_tau.to(d.dtype).exp()
-        psw, idx = _pow2_int8.cell_weights(d, None, self.powers, tau, g0, beta, gamma, cfg)  # [B,G,tph,2]
-        dmask = self._table_dropout_mask(B, d.device, d.dtype)
-        if dmask is not None:
-            psw = psw * dmask.unsqueeze(-1)            # table dropout (one Bernoulli/table, both cells)
-        W = _pow2.ste_tables(self.weights.reshape(G * tph, K, d_out), n_heads=G,
-                             bits=cfg["bits"], offset=cfg["offset"])
-        flat_q = W.reshape(-1, d_out)
-        # embedding_bag wants indices and offsets of one dtype; int32 offsets reach B*G*2*tph, so fall back to int64
-        # for batches where that would not fit.
-        dt = self.index_dtype
-        if dt == torch.int32 and B * G * 2 * tph > torch.iinfo(torch.int32).max:
-            dt = torch.long
-        toff = (torch.arange(G * tph, device=x.device, dtype=dt) * K).view(1, G, tph, 1)
-        flat_idx = (idx.to(dt) + toff).reshape(-1)
-        offsets = torch.arange(B * G, device=x.device, dtype=dt) * (2 * tph)
-        grp_out = F.embedding_bag(flat_idx, flat_q, offsets=offsets, mode="sum",
-                                  per_sample_weights=psw.reshape(-1).to(flat_q.dtype)).view(B, G, d_out)
-        # Apply the routing invariant: a no-op passthrough for the per-head/fan-out case (h_out == G,
-        # the champion -- adds nothing to the FX graph), a group-sum for fan-in (h_out < G).
-        return self._route(grp_out, x)
-
-    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
-        # Hot path: n=2 CUDA-fp32 TRAIN uses the flat monolith (see _quant_read_monolith) for its
-        # cheaper fused backward. Everything else -- n=1, eval, CPU, single-anchor, or when
-        # the native op is unavailable -- uses the shared _addresses + _quant_grp_out + _route path.
-        if (self.training and self.read_top_n == 2 and not self.single
-                and x.is_cuda and x.dtype == torch.float32 and _pow2_int8._enabled):
-            return self._quant_read_monolith(x)
-        # Quant-aware read for both train (STE grads) and eval (no_grad -> the pure quantised value;
-        # ste_tables' W - W.detach() term is 0 under no_grad). The base forward compiles the WHOLE
-        # _forward_impl on CUDA (eval always; train via _COMPILE_TRAIN, inherited from ConfidenceLUT).
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
-        grp_out = self._quant_grp_out(u, c, c_alt, u_abs_star)
-        return self._route(grp_out, x)
-
-    @torch.no_grad()
-    def frozen_ratio(self, x: torch.Tensor):
-        """The STE's per-cell stop-grad ratio ``b / (s·σ)_base`` at ``x`` (test/analysis). For the
-        frozen-surrogate gradcheck: returned detached, it holds the power-of-two magnitudes fixed so
-        the surrogate is smooth and gradcheckable."""
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
-        cfg = self._quant
-        beta, gamma = self._betagamma(u.dtype)
-        g0 = torch.zeros((), dtype=u.dtype, device=u.device)
-        s = self._score(u)
-        m = u.abs(); mv = u_abs_star.unsqueeze(-1)
-        if self.read_top_n == 2:
-            tau = self.log_read_tau.to(u.dtype).exp()
-            q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
-            x2 = 2.0 * mv / tau
-            ex = s.unsqueeze(-1) * torch.cat([torch.sigmoid(x2), torch.sigmoid(-x2)], dim=-1)
-            b = torch.pow(2.0, torch.stack([k, k - q], dim=-1)).to(ex.dtype)
-            return (b / ex.clamp_min(1e-30)).detach()
-        k1 = torch.clamp(_pow2.round_half_up(_pow2.log2_score(m, g0, beta, gamma)), cfg["lo"], cfg["hi"])
-        return (torch.pow(2.0, k1).to(s.dtype) / s.clamp_min(1e-30)).detach()
-
-    def _forward_surrogate(self, x: torch.Tensor, frozen_coef) -> torch.Tensor:
-        """Smooth-surrogate forward with a frozen ratio (test/analysis): same gradient as the STE
-        forward at the base point, smooth value. Used for fp64 gradcheck of the quant backward."""
-        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
-        return self._route(self._quant_grp_out(u, c, c_alt, u_abs_star, frozen_coef=frozen_coef), x)
+        gc = _global_cells(c, G, tph, K)
+        gca = _global_cells(c_alt, G, tph, K)
+        idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
+        psw = torch.cat([psw2[..., 0], psw2[..., 1]], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
+        return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
     # -- integer int8 shift-add read (inference / cross-check), equals the fake-quant value --------
 
@@ -322,6 +172,219 @@ class QuantisedConfidenceLUT(ConfidenceLUT):
         return DeployedQuantisedConfidenceLUT(spec, tensors, meta, device=device)
 
 
+class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
+    """p2_int8 quant-aware twin of :class:`ConfidenceLUT`, the reference implementation; see module docstring."""
+
+    _ACCEPTS_LOW_PRECISION = False   # outside spec amendment C (the quantised-cartridges work decides its precision)
+
+    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
+        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the
+        # only one deployment supports. read_top_n=1 stays constructible and trainable, just not exportable.
+        super().__init__(spec, read_top_n=read_top_n, **kw)
+        self._init_quant(quant_mode, quant_overrides)
+
+    # -- quant-aware building blocks -------------------------------------------------------
+
+    def _ste_score_weight(self, s, k1, skip):
+        """Single-cell (n=1) STE weight: value 2^k' (0 if skipped), gradient the exact score s."""
+        b = torch.pow(2.0, k1).to(s.dtype)
+        val = torch.where(skip, torch.zeros_like(b), b)
+        st = s * (b / s.detach().clamp_min(1e-30))
+        return val + (st - st.detach())
+
+    def _quant_grp_out(self, u, c, c_alt, u_abs_star, frozen_coef=None):
+        """The quant-aware (fake-quant + STE weights) score-weighted read -> [B, G, d_out].
+
+        ``frozen_coef`` (test/analysis only) injects the STE's stop-grad per-cell ratio
+        ``b / (s·σ)_base`` captured at a base point, and replaces the straight-through weight by the
+        SMOOTH ``(s·σ)·ratio``. With the ratio frozen the forward is smooth and its gradient equals
+        the real STE backward exactly — so it is the function fp64 gradcheck validates (the
+        staircase STE value itself is piecewise-constant and not directly gradcheckable)."""
+        G, tph, K, d_out = self.weights.shape
+        B = c.shape[0]
+        cfg = self._quant
+        beta, gamma = self._betagamma(u.dtype)
+        g0 = torch.zeros((), dtype=u.dtype, device=u.device)       # g dropped (== 0)
+        W2 = self._fake_quant_tables()
+        m = u.abs()
+        mv = u_abs_star.unsqueeze(-1)                              # [B, G, tph, 1]
+        dmask = self._table_dropout_mask(B, u.device, u.dtype)    # [B,G,tph] keep-mask or None
+        if self.read_top_n == 2:
+            tau = self.log_read_tau.to(u.dtype).exp()
+            if frozen_coef is None:
+                # Straight-through per-cell blend weights from the torch definition (blend_exponents +
+                # ste_cell_weights -- the `val + (st - st.detach())` STE), train and eval alike.
+                q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
+                psw2 = _pow2.ste_cell_weights(u, tau, g0, beta, gamma, q, k, skip, drop)
+            else:
+                s = self._score(u)
+                x2 = 2.0 * mv / tau
+                ex = s.unsqueeze(-1) * torch.cat([torch.sigmoid(x2), torch.sigmoid(-x2)], dim=-1)
+                psw2 = ex * frozen_coef                                          # smooth, frozen ratio
+            if dmask is not None:
+                psw2 = psw2 * dmask.unsqueeze(-1)       # table dropout (one Bernoulli/table, both cells)
+            return self._blend_read(psw2, c, c_alt, W2)
+        # read_top_n == 1: single scored cell, score rounded to a power of two (STE). One logsigmoid pass is shared
+        # between the linear score s and its log2 (k'), instead of computing the score twice.
+        msum = m.sum(dim=-1)
+        lse = F.logsigmoid(beta * m).sum(dim=-1)
+        s = msum * torch.exp(gamma * lse)                          # == self._score(u)
+        if frozen_coef is None:
+            k1 = _pow2.round_half_up(torch.log2(msum) + gamma * lse / _pow2.LN2)
+            skip = k1 < cfg["lo"]
+            k1 = torch.clamp(k1, cfg["lo"], cfg["hi"])
+            psw = self._ste_score_weight(s, k1, skip).reshape(B * G, tph).to(W2.dtype)
+        else:
+            psw = (s * frozen_coef).reshape(B * G, tph).to(W2.dtype)            # smooth, frozen ratio
+        if dmask is not None:
+            psw = psw * dmask.reshape(B * G, tph).to(psw.dtype)                 # table dropout
+        gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
+        return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        # Quant-aware read for both train (STE grads) and eval (no_grad -> the pure quantised value;
+        # ste_tables' W - W.detach() term is 0 under no_grad). The base forward compiles the WHOLE
+        # _forward_impl on CUDA (eval always; train via _COMPILE_TRAIN, inherited from ConfidenceLUT).
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        grp_out = self._quant_grp_out(u, c, c_alt, u_abs_star)
+        return self._route(grp_out, x)
+
+    @torch.no_grad()
+    def frozen_ratio(self, x: torch.Tensor):
+        """The STE's per-cell stop-grad ratio ``b / (s·σ)_base`` at ``x`` (test/analysis). For the
+        frozen-surrogate gradcheck: returned detached, it holds the power-of-two magnitudes fixed so
+        the surrogate is smooth and gradcheckable."""
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        cfg = self._quant
+        beta, gamma = self._betagamma(u.dtype)
+        g0 = torch.zeros((), dtype=u.dtype, device=u.device)
+        s = self._score(u)
+        m = u.abs(); mv = u_abs_star.unsqueeze(-1)
+        if self.read_top_n == 2:
+            tau = self.log_read_tau.to(u.dtype).exp()
+            q, k, skip, drop = _pow2.blend_exponents(m, mv, tau, g0, beta, gamma, cfg)
+            x2 = 2.0 * mv / tau
+            ex = s.unsqueeze(-1) * torch.cat([torch.sigmoid(x2), torch.sigmoid(-x2)], dim=-1)
+            b = torch.pow(2.0, torch.stack([k, k - q], dim=-1)).to(ex.dtype)
+            return (b / ex.clamp_min(1e-30)).detach()
+        k1 = torch.clamp(_pow2.round_half_up(_pow2.log2_score(m, g0, beta, gamma)), cfg["lo"], cfg["hi"])
+        return (torch.pow(2.0, k1).to(s.dtype) / s.clamp_min(1e-30)).detach()
+
+    def _forward_surrogate(self, x: torch.Tensor, frozen_coef) -> torch.Tensor:
+        """Smooth-surrogate forward with a frozen ratio (test/analysis): same gradient as the STE
+        forward at the base point, smooth value. Used for fp64 gradcheck of the quant backward."""
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        return self._route(self._quant_grp_out(u, c, c_alt, u_abs_star, frozen_coef=frozen_coef), x)
+
+
+class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
+    """The fused twin of :class:`QuantisedConfidenceLUT`: the p2_scalars CUDA op; see the module docstring.
+
+    Covers read_top_n=2, pairs anchors, a CUDA fp32 input and an fp32 table; anything else raises, naming the case and
+    the reference class, and a missing extension raises :class:`~spiky.lutorch_ex.cartridges._fallback.
+    NativeUnavailableError` with its classified cause. Same parameters, state_dict and deployment export as the
+    reference."""
+
+    #: torch.compile(dynamic=None) for the train monolith (specialise on the first shape): its backward fuses ~0.65 ms
+    #: better than with dynamic=True (step 24.9 -> 24.4, backward 21.0 -> 20.3).
+    _COMPILE_TRAIN_DYNAMIC = None
+
+    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
+        super().__init__(spec, read_top_n=read_top_n, **kw)
+        self._init_quant(quant_mode, quant_overrides)
+        # Build / register the op eagerly (before any compiled forward); never raises -- _require raises per call.
+        _pow2_int8.ensure_registered()
+        self._compiled = None
+        self._compiled_train = None
+
+    def _require(self, x: torch.Tensor) -> None:
+        """Raise unless the op can run this call: a RuntimeError naming the unsupported case, or the classified
+        NativeUnavailableError when only the extension is missing."""
+        problems = []
+        if self.read_top_n != 2:
+            problems.append(f"read_top_n={self.read_top_n} (the op is the two-cell read; read_top_n=2 only)")
+        if self.single:
+            problems.append("anchor_mode='single' (pairs only)")
+        if not x.is_cuda:
+            problems.append(f"the input is on {x.device}, the op runs on CUDA only")
+        if x.dtype != torch.float32:
+            problems.append(f"input dtype {x.dtype} (float32 only)")
+        if self.weights.dtype != torch.float32:
+            problems.append(f"table dtype {self.weights.dtype} (float32 only)")
+        if problems:
+            raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}. "
+                               f"Construct QuantisedConfidenceLUT (the reference class) for this case.")
+        if not _pow2_int8.ensure_registered():
+            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT_NAME)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        self._check_input(x)
+        self._require(x)
+        if _COMPILE_ENABLED:
+            if self.training:
+                if self._compiled_train is None:
+                    self._compiled_train = torch.compile(self._forward_impl, dynamic=self._COMPILE_TRAIN_DYNAMIC)
+                return self._compiled_train(x)
+            if self._compiled is None:
+                self._compiled = torch.compile(self._forward_impl, dynamic=True)
+            return self._compiled(x)
+        return self._forward_impl(x)
+
+    def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            return self._quant_read_monolith(x)
+        # Eval: the op's straight-through weights (their value: no grad here), the shared n=2 read.
+        z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
+        beta, gamma = self._betagamma(u.dtype)
+        g0 = torch.zeros((), dtype=u.dtype, device=u.device)
+        tau = self.log_read_tau.to(u.dtype).exp()
+        psw2 = _pow2_int8.p2_cell_weights(u, tau, g0, beta, gamma, self._quant)[0]
+        dmask = self._table_dropout_mask(x.shape[0], u.device, u.dtype)
+        if dmask is not None:
+            psw2 = psw2 * dmask.unsqueeze(-1)
+        return self._route(self._blend_read(psw2, c, c_alt, self._fake_quant_tables()), x)
+
+    def _quant_read_monolith(self, x: torch.Tensor) -> torch.Tensor:
+        """n=2 CUDA-fp32 TRAIN read, written flat as one compile unit.
+
+        Instead of composing _addresses / _quant_grp_out / _route / _fake_quant_tables / _global_cells, it inlines
+        one flat op sequence -- margins, the p2_scalars op (cells + straight-through power-of-two weights),
+        ste_tables at the read site, and an offsets-based 1-D flat_idx embedding_bag -- so aot-autograd/inductor see a
+        single FX graph and emit a cheaper fused backward. Pairs mode only. Equal to the reference's read (the op's
+        cells equal its c/c_alt; same ste_tables / embedding_bag): tests/test_fused_vs_reference.py."""
+        G, tph, K, d_out = self.weights.shape
+        nap = self.spec.nap
+        B = x.shape[0]
+        cfg = self._quant
+        z = x[:, self.in_head, :]                                           # route (identity when h_in==G)
+        idx_a = self.anchor_a.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+        idx_b = self.anchor_b.reshape(1, G, tph * nap).expand(B, G, tph * nap)
+        d = (z.gather(2, idx_a) - z.gather(2, idx_b)).view(B, G, tph, nap)  # signed margins
+        beta, gamma = self._betagamma(d.dtype)
+        g0 = torch.zeros((), dtype=d.dtype, device=d.device)
+        tau = self.log_read_tau.to(d.dtype).exp()
+        psw, idx = _pow2_int8.p2_cell_weights(d, tau, g0, beta, gamma, cfg)  # [B,G,tph,2]
+        dmask = self._table_dropout_mask(B, d.device, d.dtype)
+        if dmask is not None:
+            psw = psw * dmask.unsqueeze(-1)            # table dropout (one Bernoulli/table, both cells)
+        W = _pow2.ste_tables(self.weights.reshape(G * tph, K, d_out), n_heads=G,
+                             bits=cfg["bits"], offset=cfg["offset"])
+        flat_q = W.reshape(-1, d_out)
+        # embedding_bag wants indices and offsets of one dtype; int32 offsets reach B*G*2*tph, so fall back to int64
+        # for batches where that would not fit.
+        dt = self.index_dtype
+        if dt == torch.int32 and B * G * 2 * tph > torch.iinfo(torch.int32).max:
+            dt = torch.long
+        toff = (torch.arange(G * tph, device=x.device, dtype=dt) * K).view(1, G, tph, 1)
+        flat_idx = (idx.to(dt) + toff).reshape(-1)
+        offsets = torch.arange(B * G, device=x.device, dtype=dt) * (2 * tph)
+        grp_out = F.embedding_bag(flat_idx, flat_q, offsets=offsets, mode="sum",
+                                  per_sample_weights=psw.reshape(-1).to(flat_q.dtype)).view(B, G, d_out)
+        # Apply the routing invariant: a no-op passthrough for the per-head/fan-out case (h_out == G,
+        # the champion -- adds nothing to the FX graph), a group-sum for fan-in (h_out < G).
+        return self._route(grp_out, x)
+
+
 class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     """Inference-only p2_int8 cartridge: holds the int8 ``packed`` table (NO fp32 master Parameter),
     the anchors and the β/γ/τ scalars as buffers. Reuses the base addressing (which needs only
@@ -347,7 +410,6 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         self.table_dropout_rate = 0.0
         self._compiled = None
         self._compiled_train = None
-        self._compiled_addr = None
         dev = torch.device(device) if device is not None else None
         self.register_buffer("packed", tensors["packed"].to(dev) if dev else tensors["packed"])  # int8 [n_tables,K,d_out]
         names = ["anchor_a", "powers", "in_head", "out_head", "confidence_log_beta", "confidence_log_gamma",
@@ -363,12 +425,9 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     def decompress_scale(self) -> Optional[torch.Tensor]:
         return None   # the pow2 output scale is already folded (statically) into the stored decompress weight
 
-    def _supports_low_precision(self) -> bool:
-        return False
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference; fp32/fp64
-        # This class has no fp32 ``weights`` Parameter (int8 ``packed`` instead), so the base
-        # ManifestoLUT.forward low-precision guard (which reads ``self.weights.dtype``) cannot run on
+        # This class has no fp32 ``weights`` Parameter (int8 ``packed`` instead), so the reference
+        # forward's low-precision guard (ReferenceForward) (which reads ``self.weights.dtype``) cannot run on
         # it -- hence the override. We keep the bf16/fp16 rejection on the *input* dtype alone (int8
         # deploy inference is fp32/fp64 only), then mirror the base compile-on-CUDA path: eval is
         # always torch.compiled (built lazily per instance), so the int8 read is fused by inductor

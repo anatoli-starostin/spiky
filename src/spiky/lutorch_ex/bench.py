@@ -50,7 +50,6 @@ class BenchRow:
     min_ms: Optional[float] = None
     throughput_rows_per_s: Optional[float] = None
     note: str = ""
-    backend: str = ""                 # the backend that actually ran (cartridges._fallback.backend_of)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -161,14 +160,13 @@ def benchmark(
 ) -> list[BenchRow]:
     """Benchmark a cartridge over the (operation x batch x device) grid. See module docstring.
 
-    An involuntary fallback to a slow path raises (cartridges/_fallback.py), so it is an error cell, never a silently
-    slow timing; every ok row carries the backend that actually ran."""
+    A fused class has no fallback: a case its kernels do not cover, or a missing extension, raises, so it is an error
+    cell, never a silently slow timing. The class is the implementation, so the cartridge name says what ran."""
     return _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats,
                       measure_cuda)
 
 
 def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, devices, warmup, repeats, measure_cuda):
-    from .cartridges._fallback import backend_of
     make_input = make_input or _default_make_input
     rows: list[BenchRow] = []
     for label in devices:
@@ -184,8 +182,7 @@ def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, device
                     cart = make_cartridge().to(device)
                     times, note = _measure_cell(cart, make_input, op, batch, device, warmup, repeats)
                     med, mn, thr = _stats(times, batch)
-                    rows.append(BenchRow(name, label, op, batch, "ok", med, mn, thr, note,
-                                         backend=backend_of(cart)))   # raises (-> error row) if unknown
+                    rows.append(BenchRow(name, label, op, batch, "ok", med, mn, thr, note))
                 except Exception as e:  # OOM, etc. — one cell failing must not kill the grid
                     rows.append(BenchRow(name, label, op, batch, "error", note=f"{type(e).__name__}: {e}"))
                 finally:
@@ -196,11 +193,11 @@ def _benchmark(make_cartridge, name, make_input, batch_sizes, operations, device
 
 def format_table(rows: Sequence[BenchRow]) -> str:
     """Render rows as a fixed-width text table."""
-    header = ("cartridge", "backend", "device", "operation", "batch", "status", "median_ms", "min_ms", "rows/s")
+    header = ("cartridge", "device", "operation", "batch", "status", "median_ms", "min_ms", "rows/s")
 
     def cell(r: BenchRow) -> tuple:
         fmt = lambda v, f: (f % v) if v is not None else "-"
-        return (r.cartridge, r.backend or "-", r.device, r.operation, str(r.batch_size), r.status,
+        return (r.cartridge, r.device, r.operation, str(r.batch_size), r.status,
                 fmt(r.median_ms, "%.3f"), fmt(r.min_ms, "%.3f"), fmt(r.throughput_rows_per_s, "%.1f"))
 
     table = [header] + [cell(r) for r in rows]

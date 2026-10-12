@@ -1,146 +1,88 @@
-"""ConfidenceLUT fused_read: the fused gather -> x score -> sum read from the fp32 master table.
-
-Oracle: the default embedding_bag read. Output, score gradient and input gradient agree to fp32 re-association (~1e-7,
-measured 2026-10-09). The table gradient depends on the accumulation mode (cartridges/_fused_read.py TABLE_GRAD):
-  * embedding_bag: BIT-IDENTICAL to the default read (both go through aten._embedding_bag_dense_backward from the same
-    fp32 output grad and scores);
-  * index_add (the default) / scatter_add: atomic fp32 adds in a nondeterministic order, so they agree with the sorted
-    embedding_bag reduction to fp32 re-association (measured 1.1e-7 rel-norm), not bit for bit.
+"""The ConfidenceLUT read: compiled, the fused gather × weight → sum (cartridges/_fused_read.py); eager, one
+F.embedding_bag. The two forms of the same maths agree to fp32 re-association, not bit for bit: the fused table
+gradient is an index_add_ with atomic fp32 adds in a nondeterministic order (measured 1.1e-7 rel-norm against
+embedding_bag's sorted reduction, 2026-10-09).
 """
-import contextlib
-import os
 import re
-import warnings
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 import spiky.lutorch_ex as lx
 from spiky.lutorch_ex import LUTSpec
+from spiky.lutorch_ex.cartridges import confidence as conf
 from spiky.lutorch_ex.cartridges import _fused_read as fr
 
 SPEC = LUTSpec(h_in=4, h_out=4, tph=16, nap=8, d_in=16, d_out=12)
 DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
-REL_TOL = 1e-5
-
-
-@contextlib.contextmanager
-def _deterministic():
-    prev = torch.are_deterministic_algorithms_enabled()
-    torch.use_deterministic_algorithms(True, warn_only=True)
-    try:
-        yield
-    finally:
-        torch.use_deterministic_algorithms(prev)
-
-
-@contextlib.contextmanager
-def _table_grad(mode):
-    prev = fr.TABLE_GRAD
-    fr.TABLE_GRAD = mode
-    try:
-        yield
-    finally:
-        fr.TABLE_GRAD = prev
-
-
-def _pair(device, read_top_n=1):
-    torch.manual_seed(0)
-    ref = lx.ConfidenceLUT(SPEC, seed=1, read_top_n=read_top_n).to(device).train()
-    with torch.no_grad():
-        ref.weights.normal_(0, 0.05)                              # trained-like spread, not the 1e-3 init
-    m = lx.ConfidenceLUT(SPEC, seed=1, read_top_n=read_top_n, fused_read=True).to(device).train()
-    m.load_state_dict(ref.state_dict())
-    return ref, m
-
-
-def _run(m, x, g):
-    m.zero_grad(set_to_none=True)
-    xi = x.clone().requires_grad_(True)
-    y = m(xi)
-    y.backward(g)
-    return y.detach(), xi.grad, {n: p.grad.clone() for n, p in m.named_parameters()}
 
 
 def _rel(a, b):
     return ((a - b).norm() / b.norm().clamp_min(1e-30)).item()
 
 
-def test_default_is_off():
-    assert lx.ConfidenceLUT(SPEC, seed=1).fused_read is False
-
-
-@pytest.mark.skipif("LUTORCH_EX_TABLE_GRAD" in os.environ, reason="LUTORCH_EX_TABLE_GRAD is set for this run")
-def test_default_table_grad_is_index_add():
-    assert fr.TABLE_GRAD == "index_add"
-
-
-def test_quantised_refuses_fused_read():
-    with pytest.raises(ValueError, match="fused_read"):
-        lx.QuantisedConfidenceLUT(SPEC, seed=1, fused_read=True)
-
-
-@pytest.mark.parametrize("mode", fr.TABLE_GRAD_MODES)
+@pytest.mark.parametrize("dtype,tol", [(torch.float32, 1e-5), (torch.float64, 1e-12)])
 @pytest.mark.parametrize("device", DEVICES)
+def test_the_two_forms_agree(device, dtype, tol):
+    """fused_scored_read and F.embedding_bag: same value, weight gradient and table gradient. The tolerance is far
+    above re-association (fp32 measured 1.1e-7) and far below any wrong row, index or weight (O(1) relative)."""
+    torch.manual_seed(0)
+    rows = torch.randint(0, 300, (64, 24), device=device)
+    table0 = torch.randn(300, 12, device=device, dtype=dtype)
+    w0 = torch.rand(64, 24, device=device, dtype=dtype)
+    go = torch.randn(64, 12, device=device, dtype=dtype)
+    got, want = [], []
+    for read, out in ((lambda r, w, t: fr.fused_scored_read(r, w, t), got),
+                      (lambda r, w, t: F.embedding_bag(r, t, per_sample_weights=w, mode="sum"), want)):
+        table, w = table0.clone().requires_grad_(True), w0.clone().requires_grad_(True)
+        y = read(rows, w, table)
+        y.backward(go)
+        out += [y.detach(), w.grad, table.grad]
+    for g, r in zip(got, want):
+        assert _rel(g, r) < tol
+
+
+def test_eager_reads_through_embedding_bag_only(monkeypatch):
+    """CPU (never compiled): train and eval run without ever touching the fused read."""
+    def boom(*a, **k):
+        raise AssertionError("the fused read ran eagerly")
+    monkeypatch.setattr(conf, "fused_scored_read", boom)
+    for n in (1, 2):
+        m = lx.ConfidenceLUT(SPEC, seed=1, read_top_n=n)
+        x = torch.randn(32, SPEC.h_in, SPEC.d_in, requires_grad=True)
+        m.train()(x).sum().backward()
+        with torch.no_grad():
+            m.eval()(x)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="the cartridge forward compiles on CUDA only")
+@pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 @pytest.mark.parametrize("read_top_n", [1, 2])
-def test_against_embedding_bag_oracle(device, read_top_n, mode):
-    # Both sides must run in the same (compiled) mode: after the suite's many configurations the dynamo recompile
-    # limit would send one side to eager, where the n=2 blend weights s*(1-v), s*v round differently by 1 ulp - and
-    # the table grad (sum of psw * grad) is only bit-identical given identical scores.
+def test_compiled_cartridge_matches_its_eager_form(read_top_n, anchor_mode):
+    """m(x) on CUDA is compiled (the fused read); m._forward_impl(x) is eager (embedding_bag). Value, input gradient
+    and every parameter gradient, train mode with table dropout under the same keep mask."""
     import torch._dynamo
     torch._dynamo.reset()
-    ref, m = _pair(device, read_top_n)
-    x = torch.randn(512, SPEC.h_in, SPEC.d_in, device=device)
-    g = torch.randn(512, SPEC.h_out, SPEC.d_out, device=device)
-    with _deterministic(), _table_grad(mode):
-        yr, gxr, gr = _run(ref, x, g)
-        yn, gxn, gn = _run(m, x, g)
-    if mode == "embedding_bag":
-        assert torch.equal(gn["weights"], gr["weights"]), "embedding_bag table grad must be bit-identical"
-    else:
-        # index_add_ / scatter_add_ accumulate with atomic fp32 adds whose ORDER is nondeterministic, so bit-equality
-        # with the sorted embedding_bag reduction is not a meaningful assertion here. Measured: 1.1e-7 rel-norm; the
-        # tolerance is ~100x that (any wrong row, index or weight is O(1) relative and fails it).
-        ref_w = gr["weights"]
-        torch.testing.assert_close(gn["weights"], ref_w, rtol=1e-5, atol=1e-5 * ref_w.abs().max().item())
-        assert _rel(gn["weights"], ref_w) < REL_TOL
-    assert _rel(yn, yr) < REL_TOL
-    assert _rel(gxn, gxr) < REL_TOL
-    for n in gr:
-        if n != "weights":
-            assert _rel(gn[n], gr[n]) < REL_TOL, n
-    assert gn["weights"].dtype == torch.float32
-
-
-# --------------------------------------------------------------------------------------- eager-memory warning (CUDA)
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="the eager-rows warning is CUDA-only")
-def test_eager_cuda_backward_warns_once_about_the_materialised_rows(monkeypatch):
-    monkeypatch.setattr(fr, "EAGER_WARN_GIB", 0.0)
-    monkeypatch.setattr(fr, "_EAGER_WARNED", False)
-    idx = torch.randint(0, 64, (32, 8), device="cuda", dtype=torch.int32)
-    w = torch.randn(64, 12, device="cuda", requires_grad=True)
-    s = torch.rand(32, 8, device="cuda", requires_grad=True)
-    with warnings.catch_warnings(record=True) as wl:
-        warnings.simplefilter("always")
-        for _ in range(2):
-            fr.fused_scored_read(idx, s, w).sum().backward()
-    ours = [x for x in wl if "fused read running EAGER" in str(x.message)]
-    assert len(ours) == 1 and issubclass(ours[0].category, RuntimeWarning)
-
-
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="the eager-rows warning is CUDA-only")
-def test_compiled_backward_does_not_warn(monkeypatch):
-    import torch._dynamo
-    torch._dynamo.reset()
-    monkeypatch.setattr(fr, "EAGER_WARN_GIB", 0.0)
-    monkeypatch.setattr(fr, "_EAGER_WARNED", False)
-    m = lx.ConfidenceLUT(SPEC, seed=1, fused_read=True).cuda().train()   # compiled train forward on CUDA
-    with warnings.catch_warnings(record=True) as wl:
-        warnings.simplefilter("always")
-        for _ in range(2):
-            m(torch.randn(256, SPEC.h_in, SPEC.d_in, device="cuda")).sum().backward()
-    assert not [x for x in wl if "fused read running EAGER" in str(x.message)]
+    spec = LUTSpec(h_in=4, h_out=4, tph=16, nap=8, d_in=16, d_out=12, anchor_mode=anchor_mode)
+    m = lx.ConfidenceLUT(spec, seed=1, read_top_n=read_top_n, table_dropout_rate=0.2).cuda().train()
+    with torch.no_grad():
+        m.weights.normal_(0, 0.05)                                   # trained-like spread, not the 1e-3 init
+    torch.manual_seed(0)
+    x = torch.randn(512, spec.h_in, spec.d_in, device="cuda")
+    go = torch.randn(512, spec.h_out, spec.d_out, device="cuda")
+    keep = torch.rand(512, spec.n_groups, spec.tph, device="cuda") < 0.8
+    m._table_dropout_mask = lambda B, dev, dt: keep.to(dt) / 0.8      # same mask on both sides (patched before tracing)
+    res = []
+    for fwd in (m, m._forward_impl):
+        m.zero_grad(set_to_none=True)
+        xi = x.clone().requires_grad_(True)
+        fwd(xi).backward(go)
+        res.append((fwd(x).detach(), xi.grad, {n: p.grad.clone() for n, p in m.named_parameters()}))
+    (yc, gxc, gc), (ye, gxe, ge) = res
+    assert _rel(yc, ye) < 1e-5 and _rel(gxc, gxe) < 1e-5
+    for n in ge:
+        assert _rel(gc[n], ge[n]) < 1e-5, n
 
 
 # --------------------------------------------------------------------------------------- fusion property (CUDA)
@@ -156,7 +98,7 @@ def _compiled_step_code(read_top_n):
     from torch._inductor.utils import run_and_get_code
     torch._dynamo.reset()
     counters.clear()
-    m = lx.ConfidenceLUT(SPEC, seed=1, read_top_n=read_top_n, fused_read=True).cuda().train()
+    m = lx.ConfidenceLUT(SPEC, seed=1, read_top_n=read_top_n).cuda().train()
     x = torch.randn(512, SPEC.h_in, SPEC.d_in, device="cuda", requires_grad=True)
     _, code = run_and_get_code(lambda: m(x).sum().backward())
     return ({k: dict(v) for k, v in counters.items()}, code)
@@ -171,8 +113,6 @@ def test_compiled_fused_read_is_one_graph_with_the_scatter_fused(read_top_n):
     correctness test still passes - this happened once during development (an is_fake() check graph-broke the step).
     So: 0 graph breaks, 1 graph, and exactly one generated kernel that does the atomic scatter AND the score-grad
     reduction. Matched on kernel CONTENT (atomic_add / tl.sum), not on Inductor's generated kernel names."""
-    if fr.TABLE_GRAD != "index_add":
-        pytest.skip(f"LUTORCH_EX_TABLE_GRAD={fr.TABLE_GRAD} for this run; the fusion property is about index_add")
     counters, code = _compiled_step_code(read_top_n)
     breaks = counters.get("graph_break", {})
     assert sum(breaks.values()) == 0, f"graph break(s) in the compiled fused read: {list(breaks)[:2]}"
@@ -205,7 +145,7 @@ def _need_gib(gib):
 
 
 def test_real_compiled_n2_path_past_the_embedding_bag_cliff():
-    """The real training path (ConfidenceLUT n=2, fused read, compiled train forward with the library's dynamic=True,
+    """The real training path (ConfidenceLUT n=2, compiled train forward = the fused read with the library's dynamic=True,
     warmed at 32k tokens) at 180,000 tokens = 368.6M index entries: past embedding_bag's cliff (332.9M) AND past the
     numel * d_out = 2^34 point where a STATIC-shape bare scatter fails to compile (see the next test). Table grad
     checked against a chunked reference: embedding_bag's dense backward per 32k-token chunk (each below the cliff),
@@ -218,7 +158,7 @@ def test_real_compiled_n2_path_past_the_embedding_bag_cliff():
     tokens = 180_000
     assert tokens * G * TPH * 2 > max(_EB_CLIFF, 2 ** 34 // D)
     torch.manual_seed(0)
-    m = lx.ConfidenceLUT(_LARGE_SPEC, seed=1, read_top_n=2, fused_read=True).cuda().train()
+    m = lx.ConfidenceLUT(_LARGE_SPEC, seed=1, read_top_n=2).cuda().train()
     with torch.no_grad():
         m.weights.normal_(0, 0.05)
     m(torch.randn(32_768, 16, 48, device="cuda")).sum().backward()          # warm: compile at the training size

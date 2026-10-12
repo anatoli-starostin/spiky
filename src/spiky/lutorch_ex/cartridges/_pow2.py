@@ -1,6 +1,7 @@
-"""Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT's straight-through reads and
-forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it, and on CUDA the
-p2_scalars op in ``_pow2_int8`` computes the same integers (that agreement is tested, see there).
+"""Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT (the reference class),
+its forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it; FusedQuantisedConfidenceLUT's
+p2_scalars op (``_pow2_int8``) computes the same integers and recomputes its backward with :func:`ste_cell_weights`
+(the agreement is tested in tests/test_fused_vs_reference.py).
 
 It is pure PyTorch (no CUDA / no extension dependency) and holds the whole p2_int8 quantisation
 math — the power-of-two scale, the log-domain score exponent, the two-cell blend exponents, the
@@ -70,34 +71,43 @@ def log2_score(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torc
     return torch.log2(m.sum(dim=-1)) + (g + gamma * F.logsigmoid(beta * m).sum(dim=-1)) / LN2
 
 
-def q_exponent(mv: torch.Tensor, tau: torch.Tensor) -> torch.Tensor:
-    """q = clamp(floor(2 u* / (tau ln 2) + 1/2), 0, J) as a float tensor of integers. mv = u* (the smallest margin)."""
-    return torch.clamp(torch.floor(mv * (2.0 / (tau * LN2)) + 0.5), 0, J)
-
-
 def c_q(q: torch.Tensor) -> torch.Tensor:
     """c_q = log2(1 + 2^-q) for q < C, else 0."""
     return torch.where(q < C, torch.log2(1.0 + torch.pow(2.0, -q)), torch.zeros_like(q))
 
 
-def blend_candidates(d: torch.Tensor, index: torch.Tensor, powers: torch.Tensor):
-    """The two cells a table reads. d [..., NAP] margins (differentiable), index [...] packed address (MSB-first).
-    Returns m = |d| [..., NAP], mv = min margin [..., 1] (differentiable), idx [..., 2] = [c1, c2] where c2 flips the
-    least certain bit."""
-    m = d.abs()
-    mv, mj = m.min(dim=-1, keepdim=True)
-    bsel = (torch.gather(d, -1, mj) > 0).to(torch.int64)
-    idx = torch.cat([index.unsqueeze(-1), index.unsqueeze(-1) + powers[mj] * (1 - 2 * bsel)], dim=-1)
-    return m, mv, idx
+def _left_fold(t: torch.Tensor) -> torch.Tensor:
+    """sum over the last dim as ((t0 + t1) + t2) + ..., the kernel's order (not torch's .sum reduction tree)."""
+    s = t[..., 0]
+    for i in range(1, t.shape[-1]):
+        s = s + t[..., i]
+    return s
 
 
 @torch.no_grad()
 def blend_exponents(m: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, g: torch.Tensor, beta: torch.Tensor,
                     gamma: torch.Tensor, cfg: dict):
     """The note's per-table integers. m [..., NAP], mv [..., 1]. Returns float tensors of integers q, k [...] (k already
-    clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read)."""
-    q = q_exponent(mv.squeeze(-1), tau)
-    kr = round_half_up(log2_score(m, g, beta, gamma) - c_q(q))
+    clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read).
+
+    Written in the CUDA kernel's operation order (csrc/pow2_scalars.cuh), one elementwise op at a time: the nap terms
+    of S and of the logsigmoid sum left-folded, and every division a true fp32 tensor division (a Python-scalar divisor
+    would make torch multiply by its reciprocal instead, and 2.0 / t is reciprocal(t) * 2). Each integer is a floor of
+    these fp32 values, so the same operations in the same order give the kernel's integers, at every nap.
+    Trade-off, accepted on purpose: (1) the reference now partly encodes the kernel's operation order, so agreement
+    between the two is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate
+    than torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7 (measured at
+    the champion geometry); (3) the bit-agreement relies on the same libdevice log2 / log1p / exp in torch's build and in
+    the extension's nvcc build -- measured identical on this toolkit, not guaranteed across a CUDA or torch upgrade.
+    tests/test_fused_vs_reference.py therefore compares the fused class with this reference BIT FOR BIT, with no
+    tolerance and no gate: an upgrade that changes libdevice shows up as a test failure rather than being silently
+    absorbed by a tolerance."""
+    ln2 = torch.full((), LN2, dtype=m.dtype, device=m.device)
+    two = torch.full((), 2.0, dtype=m.dtype, device=m.device)
+    q = torch.clamp(torch.floor(mv.squeeze(-1) * torch.div(two, tau * ln2) + 0.5), 0, J)      # kernel: 2/(tau ln2)
+    S = _left_fold(m)
+    ls = _left_fold(F.logsigmoid(beta * m))                         # min(0, x) - log1p(exp(-|x|)), as in the kernel
+    kr = torch.floor(torch.log2(S) + torch.div(g + gamma * ls, ln2) - c_q(q) + 0.5)
     skip = kr < cfg["lo"]
     k = torch.clamp(kr, cfg["lo"], cfg["hi"])
     drop = q > cfg["Q"]
@@ -116,6 +126,23 @@ def ste_blend_weights(score: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, 
     val = torch.where(keep, b, torch.zeros_like(b))
     s = e * (b / e.detach().clamp_min(1e-30))
     return val + (s - s.detach())
+
+
+def score_from_margins(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor) -> torch.Tensor:
+    """learned_margin score s = (sum_i m_i) exp(g + gamma sum_i logsigmoid(beta m_i)), m = |d| [..., NAP] -> [...].
+    ConfidenceLUT._score plus an additive log-gain g (always 0 in lutorch_ex), with beta = exp(log_beta),
+    gamma = exp(log_gamma) given."""
+    return m.sum(dim=-1) * torch.exp(g + gamma * F.logsigmoid(beta * m).sum(dim=-1))
+
+
+def ste_cell_weights(d: torch.Tensor, tau: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma: torch.Tensor,
+                     q: torch.Tensor, k: torch.Tensor, skip: torch.Tensor, drop: torch.Tensor) -> torch.Tensor:
+    """The straight-through per-cell weights [..., 2] for given integers: value (2^k', 2^(k'-q)) or 0, gradient through
+    s v, s (1 - v) times the ratios. THE torch expression: the reference read uses it, and the fused op's backward
+    recomputes it with the op's integers held fixed."""
+    m = d.abs()
+    mv = m.min(dim=-1, keepdim=True).values
+    return ste_blend_weights(score_from_margins(m, g, beta, gamma), mv, tau, q, k, skip, drop)
 
 
 @torch.no_grad()

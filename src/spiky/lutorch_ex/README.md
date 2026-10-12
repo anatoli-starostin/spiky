@@ -25,11 +25,12 @@ language-model sweep against a dense baseline, is the report
 `lutorch_ex` is part of the `spiky` package; follow the [repository README](../../../README.md)
 (`pip install -e .` from the repository root). The library itself is pure PyTorch and runs on CPU.
 
-On CUDA, some cartridges have native kernels that are compiled on first use with
-`torch.utils.cpp_extension`. This needs `nvcc` and `ninja`. On CPU every cartridge runs its pure-PyTorch
-path. On CUDA, a fused cartridge whose kernel cannot be built raises `NativeUnavailableError` naming the
-cause, rather than silently running a slower path; set `LUTORCH_EX_NO_CUDA_EXT=1` to run the pure-PyTorch
-paths on purpose (same mathematics, not bit-identical: summation order differs).
+The `Fused…` classes run on hand-written CUDA kernels, compiled on first use with
+`torch.utils.cpp_extension` (this needs `nvcc` and `ninja`). They have no fallback: a fused class whose
+extension cannot be built raises `NativeUnavailableError` naming the cause, and a case its kernels do not
+cover (a CPU input, an fp64 input, ...) raises naming the case. Construct the reference class
+(`ManifestoHardLUT`, `ManifestoSoftLUT`, `ConfidenceLUT`) for those: same mathematics and state_dict, plain
+PyTorch, runs anywhere.
 
 ## Quickstart
 
@@ -121,33 +122,29 @@ row `c`.
 
 | class | gen | value (`a`, `b`) | training gradient | learned scalars | fused twin |
 | --- | --- | --- | --- | --- | --- |
-| `ManifestoHardLUT` | 1 | `1`, `0` | surrogate `1-U`, `U`; weight grad on row `c` only | — | `FusedManifestoHardLUT` |
-| `ManifestoSoftLUT` | 1 | `1-U`, `U` | the value itself; both rows | — | `FusedManifestoSoftLUT` |
-| `SoftSignHardLUT` | 2 | `1`, `0` | surrogate `1-w`, `w`; weight grad on row `c` only | `T_soft`, `T_sel` | `FusedSoftSignHardLUT` |
-| `SoftSignSmoothLUT` | 2 | `1-w`, `w` | the value itself; both rows | `T_soft`, `T_sel` | `FusedSoftSignSmoothLUT` |
+| `ManifestoHardLUT` | 1 / 2 | `1`, `0` | surrogate `1-w`, `w`; weight grad on row `c` only | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoHardLUT` |
+| `ManifestoSoftLUT` | 1 / 2 | `1-w`, `w` | the value itself; both rows | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoSoftLUT` |
 | `ConfidenceLUT` (`read_top_n=1`) | 3 | `s`, `0` | the value itself | `β`, `γ` | — |
 | `ConfidenceLUT` (`read_top_n=2`) | 3 | `s(1-v)`, `s·v` | the value itself | `β`, `γ`, `τ` | — |
 | `QuantisedConfidenceLUT` | 3 | as above, int8 rows and power-of-two weights | straight-through to the float values | `β`, `γ`, `τ` | — |
 
 All classes are importable from `spiky.lutorch_ex`.
 
-### Gen-1 — Manifesto
+### Gen-1 and Gen-2 — Manifesto, `weight="rational" | "softsign"`
 
-The uncertainty `U = 0.5 / (1 + u*)`, in `(0, 0.5]`, is a fixed function, exported as
-`rational_uncertainty`. `ManifestoHardLUT` returns the hard read and sends the input gradient through the
-blend, onto the two anchors of the deciding probe only. `ManifestoSoftLUT` makes the blend the value, at
-training and at evaluation. Neither has learnable scalars: the tables are the only parameters.
+`ManifestoHardLUT` returns the hard read and sends the input gradient through the blend, onto the two anchors of the
+deciding probe only. `ManifestoSoftLUT` makes the blend the value, at training and at evaluation. The two generations
+differ only in the neighbour weight `w`, chosen by `weight=`:
 
-### Gen-2 — SoftSign
+- **`weight="rational"`** (Gen-1, the default): the fixed uncertainty `w = U = 0.5 / (1 + u*)`, in `(0, 0.5]`,
+  exported as `rational_uncertainty`. No learnable scalars: the tables are the only parameters.
+- **`weight="softsign"`** (Gen-2): a blend weight with two temperatures, learned per layer:
 
-The fixed `U` becomes a blend weight with two temperatures, learned per layer:
+  ```text
+  rho = u* / (T_soft + u*)          w = sigmoid(-2 * rho / T_sel)    in (0, 0.5]
+  ```
 
-```text
-rho = u* / (T_soft + u*)          w = sigmoid(-2 * rho / T_sel)    in (0, 0.5]
-```
-
-They are stored as `log_soft_score_temp` and `log_select_temp`. `SoftSignHardLUT` and
-`SoftSignSmoothLUT` relate to each other as Gen-1's hard and soft cartridges do.
+  They are stored as `log_soft_score_temp` and `log_select_temp`, and exist only with `weight="softsign"`.
 
 ### Gen-3 — Confidence
 
@@ -188,25 +185,28 @@ only int32 and int64, so int16 and int8 are rejected.
 
 - **The rule:** `index_dtype=None` (the default) uses int32 when `n_groups·tph·2^nap − 1` fits it and int64
   otherwise. An explicit `torch.int32` that doesn't fit raises; an explicit `torch.int64` is always accepted.
-- **Only storage narrows.** Offset arithmetic (inside the native kernels too), the bit-powers buffer and bag
-  offsets stay int64, and the state_dict is unchanged.
+- **Only storage narrows.** Offset arithmetic, the bit-powers buffer and bag offsets stay int64, and the
+  state_dict is unchanged.
 - **Large eval calls widen automatically:** in auto mode, a call whose read could exceed 2^31 − 1 index
   entries uses int64, because PyTorch's CUDA `embedding_bag` forward fails above that with int32.
 
 What int32 gives you:
 - It halves the stored index tensors, including those saved for the backward.
 - It narrows the radix-sort keys in `embedding_bag`'s weight gradient.
-- The fused twins' native CUDA kernels read int32 directly (they template on the index type) and create no
-  int64 copy. Their host functions reject any other index dtype.
+- The fused classes' kernels do not read the stored indices at all: they recompute the addressing from the
+  input (int16 anchors).
 - Training gradients are bit-identical to int64 under `torch.use_deterministic_algorithms(True)`.
 
-SoftSign (`SoftSignHardLUT`, `SoftSignSmoothLUT` and their fused twins):
+Manifesto (`ManifestoHardLUT`, `ManifestoSoftLUT` and their fused twins):
 
 | argument | default | meaning |
 | --- | --- | --- |
-| `soft_score_temp` | `0.5` | initial `T_soft` |
-| `select_temp` | `0.5` | initial `T_sel` |
-| `learnable_temps` | `True` | `False` stores both temperatures as frozen buffers |
+| `weight` | `"rational"` | the neighbour weight: `"rational"` (Gen-1) or `"softsign"` (Gen-2) |
+| `soft_score_temp` | `0.5` | `weight="softsign"` only: initial `T_soft` |
+| `select_temp` | `0.5` | `weight="softsign"` only: initial `T_sel` |
+| `learnable_temps` | `True` | `weight="softsign"` only: `False` stores both temperatures as frozen buffers |
+
+The three temperature arguments raise with `weight="rational"`.
 
 Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 
@@ -217,26 +217,20 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
-| `fused_read` | `False` | `ConfidenceLUT` only. `False` uses the `embedding_bag` read. `True` uses the fused gather read on the fp32 table (see below) |
-| `bag_eval_read` | `None` | `ConfidenceLUT` / the `pure` path of `FusedConfidenceLUT`. `None` (auto): `read_top_n=2` reads eval through the training `embedding_bag` read (no `[B, G, tph, d_out]` tensors: fp32, h16 d48 tph64 nap8, 32k tokens, compiled CUDA eval 14.40 ms / 6.75 GiB → 8.46 ms / 0.85 GiB); `read_top_n=1` keeps the plain gather, which Inductor fuses (embedding_bag is 23–34% slower there). `True` / `False` force either read. The two reads agree to fp32 re-association (max relative 6.7e-7), not bitwise. `fused_read=True` takes precedence |
 
-`fused_read=True` replaces all of `embedding_bag`'s kernels: a gather and score-weighted sum forward, a
-re-gather of the same rows for the score gradient, and an `index_add_` of the score-weighted rows for the
-table gradient. It reads the fp32 table itself (the trained parameter; no copy). These fuse into a few
-kernels only when Inductor compiles the cartridge forward (CUDA, the default).
+`ConfidenceLUT` has one read, `y = Σ_t s_t · W_t[c_t]` (n=1) or its two-cell blend (n=2), in train and eval, in one
+of two forms of the same maths:
 
-- **Correctness:** outputs and the score/input gradients agree with the default read to fp32 re-association.
-  The `index_add_` table gradient uses atomic adds, so it agrees to fp32 re-association too (1.1e-7) but is not
-  bit-reproducible run to run, like the rest of the CUDA training step.
-- **Where the win comes from:** fusion. At h=16, tph=64, nap=8 and 32k tokens the default read's backward is
-  dominated by PyTorch's per-sample-weight kernel and the sort-based table gradient; compiled, the re-gather and
-  the weighted-row scatter fuse into Inductor kernels instead.
-- **No embedding_bag size limit:** the fused read no longer calls `_embedding_bag_dense_backward` (see below).
-- **Table-gradient switch:** `LUTORCH_EX_TABLE_GRAD=index_add` (default) `| scatter_add | embedding_bag`, read at
-  import. `embedding_bag` restores the bit-identical-to-default table gradient, with that op's size limit.
-- **Eager caveat:** without `torch.compile` nothing fuses, and the backward materialises the gathered and
-  weighted `[tokens * groups * tph * read_top_n, d_out]` fp32 rows (about 6 GiB each at 32k tokens). An eager CUDA
-  backward above `LUTORCH_EX_EAGER_ROWS_WARN_GIB` (default 1) warns once.
+- **Compiled** (CUDA, the default): a fused gather × score → sum with its own backward (a re-gather of the same rows
+  for the score gradient and an `index_add_` of the score-weighted rows for the table gradient), read straight from
+  the fp32 table. Inductor fuses these into a few kernels. Fp32, h16 d48 tph64 nap8, 8,192 vectors, against
+  `F.embedding_bag`: train step 6.55 → 3.48 ms (n=1) and 11.83 → 5.35 ms (n=2), eval 0.89 → 0.94 ms (n=1) and
+  2.16 → 1.86 ms (n=2).
+- **Eager** (CPU, or `LUTORCH_EX_NO_COMPILE=1`): one `F.embedding_bag` with the scores as per-sample weights.
+  Uncompiled, the fused form would materialise its gathered rows (CPU n=1 train step 97.6 → 350.7 ms at 1,024
+  vectors; CUDA eager n=2 train 20.3 ms / 1.92 GiB → 47.5 ms / 7.27 GiB at 8,192).
+- **Agreement:** to fp32 re-association (≤ 7e-7), not bitwise. The compiled table gradient's `index_add_` uses atomic
+  adds, so it is not bit-reproducible run to run, like the rest of the CUDA training step.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
@@ -261,62 +255,66 @@ This is a known upstream constraint. lutorch_ex documents it but doesn't enforce
   tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
   (~10× and ~5× headroom).
 - **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
-  ConfidenceLUT n=1/n=2 (the default read), QuantisedConfidenceLUT, SoftSignHard/Smooth, and the fused twins'
-  `tier1` reads.
-- **Not exposed:** the fused read (`fused_read=True`, whose table gradient is an `index_add_`; verified correct on
-  the compiled n=2 path past the cliff, to 819M entries where memory ran out first), the native backends,
-  `FusedHardSTE`, and every eval / `no_grad` path. With `LUTORCH_EX_TABLE_GRAD=embedding_bag` the fused read is
-  exposed again.
-- **Workaround:** use `fused_read=True`, or reduce the micro-batch size and raise gradient accumulation.
+  ConfidenceLUT's eager read (CPU, `LUTORCH_EX_NO_COMPILE=1`), QuantisedConfidenceLUT and the Manifesto
+  references' train reads.
+- **Not exposed:** ConfidenceLUT's compiled read (its table gradient is an `index_add_`; verified correct on the
+  compiled n=2 path past the cliff, to 819M entries where memory ran out first), the fused classes'
+  kernels, and every eval / `no_grad` path.
+- **Workaround:** reduce the micro-batch size and raise gradient accumulation.
 
 ## Reference and fused cartridges
 
-The plain cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT`, `SoftSignHardLUT` and `SoftSignSmoothLUT`,
-are readable PyTorch. They are the **oracle**: `tests/test_fused_equivalence.py` and
-`tests/test_fused_softsign.py` check that the fused twins give the same values and gradients.
+Each class has exactly one implementation; there is no `backend=` argument (ARCHITECTURE.md, rules 3 and 5).
+The reference cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT` (either weight) and `ConfidenceLUT`, are
+readable PyTorch (compiled on CUDA) and run anywhere. They are the **oracle**: `tests/test_fused_vs_reference.py` is the required equivalence
+harness (spec amendment D): every fused class against its reference class, per dtype, on the value, the input
+gradient, the table gradient and every learned scalar, with explicit tolerances justified in its docstring.
+`tests/test_fused_manifesto_cuda.py` and `tests/test_fused_confidence.py` add the kernel-specific checks.
 
-The `Fused…` twins have identical mathematics but pick the fastest available implementation for each
-call on their own: an `F.embedding_bag` read that runs anywhere, or, on CUDA, the native
-`lutorch_ex_lprojection` kernels when they are available.
-
-`FusedManifestoHardLUT` and `FusedManifestoSoftLUT` also have a `backend="cuda"`: one hand-written
-forward and one backward kernel (`cartridges/csrc/fused_manifesto.cu`, the `lutorch_ex_fused_manifesto`
-extension), built like `FusedConfidenceLUT`'s. The kernels do the addressing, the read summed over each
-head's tables, the table-gradient scatter (fp32 vector atomics) and the margin gradient. Nothing per
-table goes through global memory, and the backward recomputes the addressing from the input. `auto` picks
-it for every CUDA step, training and eval, with an fp32 or bf16 table, nap ≤ 16, d_in ≤ 32767 and a d_out
-one CTA can cover; other cases take the earlier backends.
+`FusedManifestoHardLUT` and `FusedManifestoSoftLUT` run one hand-written forward and one backward kernel
+(`cartridges/csrc/fused_manifesto.cu`, the `lutorch_ex_fused_manifesto` extension). The kernels do the
+addressing, the read summed over each head's tables, the table-gradient scatter (fp32 vector atomics) and the
+margin gradient. Nothing per table goes through global memory, and the backward recomputes the addressing from
+the input. They cover a CUDA input with an fp32 or bf16 table, nap ≤ 16, d_in ≤ 32767 and a d_out one CTA can
+cover; anything else raises, naming the case and the reference class.
 Launch knobs: `knobs=ManifestoCudaKnobs(...)` (from `cartridges._fused_manifesto_cuda`) or the
 `LUTORCH_EX_MANI_CUDA_*` variables. The table
 gradient is accumulated with atomics, so it is not bit-reproducible run to run (the forward is).
 
-The Gen-3 `ConfidenceLUT` has the hand-written twin `FusedConfidenceLUT` (`cartridges/fused_confidence.py`);
-`QuantisedConfidenceLUT` has none (its compiled `embedding_bag` read is its fast path).
+The Gen-3 `ConfidenceLUT` has the hand-written twin `FusedConfidenceLUT` (`cartridges/fused_confidence.py`,
+the `lutorch_ex_fused_confidence` extension), with the same coverage and errors; neither inherits the other's
+forward (both build on `ConfidenceBase`).
 
-**Precision.** The plain cartridges, `ConfidenceLUT` and `QuantisedConfidenceLUT` run in fp32 or fp64,
-and raise a `TypeError` on bf16/fp16. The five fused classes (`FusedManifestoHardLUT`, `FusedManifestoSoftLUT`,
-`FusedSoftSignHardLUT`, `FusedSoftSignSmoothLUT`, `FusedConfidenceLUT`) accept bf16/fp16: addressing runs in
-fp32, so a lossy margin cannot flip a bit; reads and reductions accumulate in fp32; and the output is cast back
-once.
+`QuantisedConfidenceLUT` (the reference: the torch definition in `cartridges/_pow2.py`, every case) has the twin
+`FusedQuantisedConfidenceLUT`: the `lutorch_ex::p2_scalars` CUDA op (`csrc/pow2_int8_read.cu`, the
+`lutorch_ex_pow2_int8_read` extension) computes the per-table power-of-two integers and straight-through cell weights,
+and n=2 training runs one flat compiled read. The op is the two-cell read on CUDA fp32, so read_top_n=1, single
+anchors, a CPU input or a non-fp32 input / table raise, naming the case; it is enabled only on validated
+architectures (sm_120, sm_90), elsewhere it raises with that cause. Despite the file name the extension is not an
+int8 read: int8 tables are always read with the torch definition (`_pow2.int_blend_read`).
+
+**Precision.** Every Manifesto and confidence class, reference and fused, runs fp32 and accepts a bf16 / fp16
+input and a bf16 table with one contract: addressing runs in fp32, so a lossy margin cannot flip a bit; reads and
+reductions accumulate in fp32; and each result is rounded once (the output and the input gradient to the input dtype,
+a parameter's gradient to its dtype). The reference classes do it by running their fp32 maths on fp32 views; the
+result is bit-identical to the fp32 run rounded once -- measured at test sizes (tests/test_reference_low_precision.py), and on CUDA under torch.use_deterministic_algorithms (otherwise the fp32 run's own atomic scatters are not reproducible). The reference
+classes also run fp64; the fused ones do not (and take no fp16 table). `QuantisedConfidenceLUT` stays fp32 / fp64
+and raises a `TypeError` on bf16/fp16; `FusedQuantisedConfidenceLUT` is fp32 only.
 
 **Compilation and kernels.**
 
-- Through the base forward, eval is `torch.compile`d on CUDA, and training too for Gen-3; CPU always runs
-  eager. The hand-written `cuda` backends (`FusedManifesto*`, `FusedConfidenceLUT`) bypass compile: they call
-  their kernels directly.
-- Native extensions are built lazily, on first use. The build is cached in `TORCH_EXTENSIONS_DIR`, which
+- The reference cartridges' forward (`cartridges/reference_base.py`) is `torch.compile`d on CUDA in eval,
+  and in training too for Gen-3; CPU always runs eager. The fused classes bypass compile: they call their
+  kernels directly.
+- CUDA extensions are built lazily, on first use. The build is cached in `TORCH_EXTENSIONS_DIR`, which
   defaults to `~/.cache/torch_extensions_lutorch_ex`.
-- A fused cartridge that wants its kernel for a CUDA input, for a case the kernel covers, and cannot have it
-  raises `NativeUnavailableError` with the classified cause (setuptools / ninja / toolkit missing, a compile
-  error, ...). Explicit backends, CPU inputs and shapes or dtypes the kernels do not cover are deliberate and
-  stay quiet. With `LUTORCH_EX_NO_CUDA_EXT=1` every fused cartridge runs its pure-PyTorch path: the same
-  mathematics, equal to fp32 re-association (not bit-identical).
+- A fused class whose extension cannot be built raises `NativeUnavailableError` with the classified cause
+  (setuptools / ninja / toolkit missing, a compile error, ...), every call. A case its kernels do not cover
+  raises a `RuntimeError` naming the case and the reference class.
 
 | environment variable | effect |
 | --- | --- |
 | `LUTORCH_EX_NO_COMPILE=1` | disable `torch.compile` everywhere |
-| `LUTORCH_EX_NO_CUDA_EXT=1` | skip every native extension (`lprojection`, single-anchor, soft-sign surrogate, `fused_manifesto`, `fused_confidence` and the int8 read); the fused cartridges then run their pure-PyTorch paths on purpose |
-| `SPIKY_P2_CUDA_DISABLE=1` | deprecated alias, still honoured: skips the int8 read extension only |
 
 ## The wrapper: `ProjectionMHL`
 
@@ -376,10 +374,10 @@ little.
 `1/(1-p)`. Nothing is dropped at evaluation, or when gradients are disabled.
 
 ```python
-from spiky.lutorch_ex import LUTSpec, FusedSoftSignSmoothLUT, ProjectionMHL, cell_tv_penalty
+from spiky.lutorch_ex import LUTSpec, FusedManifestoSoftLUT, ProjectionMHL, cell_tv_penalty
 
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
-ffn = ProjectionMHL(FusedSoftSignSmoothLUT(spec, seed=1, table_dropout_rate=0.2), d_model=384)
+ffn = ProjectionMHL(FusedManifestoSoftLUT(spec, seed=1, weight="softsign", table_dropout_rate=0.2), d_model=384)
 opt = torch.optim.AdamW(ffn.parameters(), lr=3e-4)
 
 x = torch.randn(256, 384)
@@ -456,10 +454,13 @@ Scope today:
 - `read_top_n=2` and `h_out == n_groups` only; fan-in would need a scale applied before routing.
 - The wrapper must have a `decompress` layer to fold the scale into.
 - Only int8 is implemented; other bit widths have no packer.
-- The int8 CUDA read is enabled only on validated architectures, sm_120 and sm_90. Elsewhere the
-  pure-torch read is used.
+- The deployed int8 read is the torch definition (`_pow2.int_blend_read`, compiled on CUDA); no extension is
+  involved.
 
 ## Benchmarking
+
+The performance snapshot of record (every class, fp32 and bf16, 8k and 32k vectors, RTX 5090) is
+`benchmarks/snapshot_160.md`, made by `python -m spiky.lutorch_ex.bench_snapshot`.
 
 `spiky.lutorch_ex.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
 grid of batch sizes and devices. It reports the median and minimum milliseconds and the throughput:
@@ -524,19 +525,24 @@ lutorch_ex/
 ├── deploy.py            export_deployment / load_deployment
 ├── deploy_registry.py   format tag -> rebuilder registry
 ├── bench.py             the benchmark harness
+├── bench_snapshot.py    the performance snapshot of record (every class, one fresh process per cell)
+├── bench_fused_confidence.py   FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
 ├── cartridges/
 │   ├── manifesto_base.py            ManifestoLUT: tables, anchors, addressing, routing, cell TV, table dropout
-│   ├── manifesto_hard.py, manifesto_soft.py           Gen-1 reference cartridges
-│   ├── softsign_base.py, softsign_hard.py, softsign_smooth.py   Gen-2 reference cartridges
-│   ├── fused_manifesto_hard.py, fused_manifesto_soft.py, fused_softsign.py   fused twins
+│   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
+│   ├── fused_manifesto_hard.py, fused_manifesto_soft.py   fused twins
 │   ├── confidence.py                Gen-3 ConfidenceLUT
-│   ├── quantised_confidence.py      QuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
-│   ├── _pow2.py, _pow2_int8.py      power-of-two quantisation maths and its CUDA read
+│   ├── quantised_confidence.py      QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
+│   ├── _pow2.py                     the power-of-two quantisation maths (the torch definition)
+│   ├── _pow2_int8.py                FusedQuantisedConfidenceLUT glue: the p2_scalars op (csrc/pow2_int8_read.cu)
 │   ├── fused_confidence.py          FusedConfidenceLUT (glue for csrc/fused_confidence.cu)
-│   ├── _fused_ops.py, _native_ops.py, _native_softsign.py   tier-1 ops and native-extension glue
-│   ├── _fused_manifesto_cuda.py     the FusedManifesto* 'cuda' backend (glue for csrc/fused_manifesto.cu)
+│   ├── reference_base.py            ReferenceForward: the reference classes' (compiled) forward
+│   ├── confidence_base.py           ConfidenceBase: ConfidenceLUT / FusedConfidenceLUT parameters and scaffolding
+│   ├── _fused_ops.py                the reference reads (embedding_bag)
+│   ├── _fused_read.py               ConfidenceLUT's compiled score-weighted read (one autograd Function)
+│   ├── _fused_manifesto_cuda.py     FusedManifesto* glue for csrc/fused_manifesto.cu
 │   ├── _cuda_ext.py                 the JIT build of every extension, the kernel launch knobs and launch fit
-│   ├── _fallback.py                 classified "fast path unavailable" errors (NativeUnavailableError), provenance
+│   ├── _fallback.py                 classified "extension unavailable" errors (NativeUnavailableError)
 │   ├── uncertainty.py               rational_uncertainty
 │   └── csrc/                        CUDA / C++ kernel sources
 └── tests/               pytest suite

@@ -1,4 +1,4 @@
-"""Benchmark FusedConfidenceLUT against the compiled ConfidenceLUT (default and fused read), cartridge only, train
+"""Benchmark FusedConfidenceLUT against the compiled ConfidenceLUT, cartridge only, train
 forward and fwd+bwd, at the d24 LUT-FFN geometry (h 16, d 48, tph 64, nap 8, table dropout 0.2), with an fp32 and a
 bf16 table. Also reports each path's error against an fp64 eager reference (same keep mask), and optionally sweeps
 the CUDA launch knobs (--sweep: fp32 table; --sweep-bf16: bf16 table).
@@ -16,31 +16,17 @@ import statistics
 
 import torch
 
-# A timing run never silently measures a slow fallback: an involuntary fallback raises (cartridges/_fallback.py).
-from spiky.lutorch_ex.cartridges._fallback import backend_of
 from spiky.lutorch_ex.cartridges.confidence import ConfidenceLUT
 from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT, CudaKnobs
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
 
-def provenance(mod) -> str:
-    """The backend that actually ran, for the row label; raises if it cannot be determined (never report blind)."""
-    if isinstance(mod, FusedConfidenceLUT):
-        return backend_of(mod)
-    return "compiled ConfidenceLUT, " + ("fused read" if mod.fused_read else "default read")
-
-SPEC = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
-KW = dict(seed=1, table_dropout_rate=0.2)
-KINDS = ("compiled", "compiled-fused", "cuda", "cuda-bf16")
-
-
 def build(kind, n, knobs=None):
     spec = LUTSpec(**SPEC)
     if kind in ("cuda", "cuda-bf16"):
-        m = FusedConfidenceLUT(spec, read_top_n=n, backend="cuda", knobs=knobs, **KW).cuda().train()
+        m = FusedConfidenceLUT(spec, read_top_n=n, knobs=knobs, **KW).cuda().train()
         return m.to(torch.bfloat16) if kind == "cuda-bf16" else m
-    return ConfidenceLUT(spec, read_top_n=n, fused_read=(kind == "compiled-fused"), index_dtype=torch.int32,
-                         **KW).cuda().train()
+    return ConfidenceLUT(spec, read_top_n=n, index_dtype=torch.int32, **KW).cuda().train()
 
 
 def time_step(mod, x, go, iters=20, warmup=5, reps=3, fwd_only=False):
@@ -124,8 +110,6 @@ def sweep(kind, n, x, go):
         k = mk(ft, bt, r, v)
         mod = build(kind, n, k)
         ms, _ = time_step(mod, x, go, iters=10, reps=1)
-        if provenance(mod) != "cuda":
-            raise RuntimeError(f"sweep row ran backend {provenance(mod)!r}, not 'cuda'; refusing to report")
         rows.append((ms, k))
     for ms, k in sorted(rows, key=lambda t: t[0])[:8]:
         print(f"    {ms:8.3f} ms  {k}")
@@ -149,7 +133,7 @@ def main():
             fwd, _ = time_step(mod, x, go, fwd_only=True)
             ms, peak = time_step(mod, x, go)
             print(f"  {kind:15s} fwd {fwd:7.3f} ms   fwd+bwd {ms:7.3f} ms  {peak:6.2f} GiB   "
-                  f"[backend: {provenance(mod)}]")
+                  f"[{type(mod).__name__}]")
             torch._dynamo.reset()
         if a.sweep:
             print("  sweep, fp32 table (fwd_threads, bwd_threads, rows_per_cta, vec):")

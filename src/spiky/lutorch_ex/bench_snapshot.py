@@ -9,10 +9,9 @@ runs the full matrix (every cartridge and alternative, every geometry, fp32 and 
 Methodology:
 - Every cell is built with a fixed seed (``seed=1`` tables, ``torch.manual_seed(0)`` inputs). Eval forward runs in
   eval mode under ``no_grad``; train forward / backward / total run in train mode, ``y.backward(go)``.
-- Each class runs with its defaults (``backend='auto'``, default read options), i.e. what a user gets, marked ``*``.
-  Every implementation choice the class offers is also measured as its own row, so each default is checked against
-  its alternatives: the explicit backends of the fused classes, and ConfidenceLUT's ``bag_eval_read`` (the read the
-  n-dependent default does not pick) and ``fused_read``. The backend that actually ran is recorded.
+- Each class runs with its defaults, i.e. what a user gets. A class has exactly one implementation (the class name
+  says which): the fused classes their CUDA kernels (a case those do not cover is an error cell), the reference
+  classes plain PyTorch, compiled on CUDA.
 - Every cell runs in its own fresh Python process (``--no-isolate`` runs them all in this one).
 - Per mode, the first call (build / compile) and ``--warmup`` iterations are discarded. Then ``--repeats``
   iterations are timed one by one with CUDA events, with ``torch.cuda.synchronize()`` around each, and reported as
@@ -23,7 +22,7 @@ Methodology:
   gradients excluded), measured on one extra iteration: eval forward; train forward (including what it saves for
   the backward); train backward (the peak while the backward runs, which still holds those saved tensors); train
   total = the larger of the two.
-- A cell that runs out of memory, or that the class refuses (the reference cartridges reject bf16), is recorded as
+- A cell that runs out of memory, or that the class refuses (QuantisedConfidenceLUT rejects bf16), is recorded as
   such, never dropped.
 - ``torch._dynamo.reset()`` before every cell: all cartridges of a class compile the same ``_forward_impl``, so without
   it the cells after the first eight compiles hit Dynamo's recompile limit and silently measure eager execution.
@@ -43,7 +42,6 @@ import torch
 import torch._dynamo
 
 import spiky.lutorch_ex as lx
-from spiky.lutorch_ex.cartridges.fused_confidence import FusedConfidenceLUT
 from spiky.lutorch_ex.lut_spec import LUTSpec
 
 #: name -> (spec kwargs, batch of vectors). "reference" is the library's h8 / tph64 / nap8 geometry at r = h*d = 64.
@@ -58,43 +56,28 @@ def _conf(cls, n, **kw):
     return lambda s: cls(s, seed=1, read_top_n=n, **kw)
 
 
-def _fused(cls, backend):
-    return lambda s: cls(s, seed=1, backend=backend)
+def _fused(cls, **kw):
+    return lambda s: cls(s, seed=1, **kw)
 
 
-#: (name, constructor, is the default). Every concrete cartridge class, read from the package (reference and fused),
-#: with its defaults, then each implementation choice it offers. DeployedQuantisedConfidenceLUT is inference-only
-#: (forward only, built from an export). The reference classes, QuantisedConfidenceLUT and the deployed form have one
-#: implementation each.
+#: (name, constructor). Every concrete cartridge class (reference and fused) with its defaults.
+#: DeployedQuantisedConfidenceLUT is inference-only (forward only, built from an export).
 CARTRIDGES = [
-    ("ManifestoHardLUT", lambda s: lx.ManifestoHardLUT(s, seed=1), True),
-    ("ManifestoSoftLUT", lambda s: lx.ManifestoSoftLUT(s, seed=1), True),
-    ("FusedManifestoHardLUT", _fused(lx.FusedManifestoHardLUT, "auto"), True),
-    *[(f"FusedManifestoHardLUT backend={b}", _fused(lx.FusedManifestoHardLUT, b), False)
-      for b in ("native", "tier1", "pure_eval")],
-    ("FusedManifestoSoftLUT", _fused(lx.FusedManifestoSoftLUT, "auto"), True),
-    *[(f"FusedManifestoSoftLUT backend={b}", _fused(lx.FusedManifestoSoftLUT, b), False)
-      for b in ("native", "tier1", "pure")],
-    ("SoftSignHardLUT", lambda s: lx.SoftSignHardLUT(s, seed=1), True),
-    ("SoftSignSmoothLUT", lambda s: lx.SoftSignSmoothLUT(s, seed=1), True),
-    ("FusedSoftSignHardLUT", _fused(lx.FusedSoftSignHardLUT, "auto"), True),
-    *[(f"FusedSoftSignHardLUT backend={b}", _fused(lx.FusedSoftSignHardLUT, b), False)
-      for b in ("native", "tier1", "pure_eval")],
-    ("FusedSoftSignSmoothLUT", _fused(lx.FusedSoftSignSmoothLUT, "auto"), True),
-    *[(f"FusedSoftSignSmoothLUT backend={b}", _fused(lx.FusedSoftSignSmoothLUT, b), False)
-      for b in ("native", "tier1", "pure_eval")],
-    ("ConfidenceLUT n=1", _conf(lx.ConfidenceLUT, 1), True),
-    ("ConfidenceLUT n=1 bag_eval_read=True", _conf(lx.ConfidenceLUT, 1, bag_eval_read=True), False),
-    ("ConfidenceLUT n=1 fused_read=True", _conf(lx.ConfidenceLUT, 1, fused_read=True), False),
-    ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2), True),
-    ("ConfidenceLUT n=2 bag_eval_read=False", _conf(lx.ConfidenceLUT, 2, bag_eval_read=False), False),
-    ("ConfidenceLUT n=2 fused_read=True", _conf(lx.ConfidenceLUT, 2, fused_read=True), False),
-    ("FusedConfidenceLUT n=1", _conf(FusedConfidenceLUT, 1), True),
-    ("FusedConfidenceLUT n=1 backend=pure", _conf(FusedConfidenceLUT, 1, backend="pure"), False),
-    ("FusedConfidenceLUT n=2", _conf(FusedConfidenceLUT, 2), True),
-    ("FusedConfidenceLUT n=2 backend=pure", _conf(FusedConfidenceLUT, 2, backend="pure"), False),
-    ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2), True),
-    ("DeployedQuantisedConfidenceLUT", None, True),      # built from QuantisedConfidenceLUT.to_deployment()
+    ("ManifestoHardLUT", lambda s: lx.ManifestoHardLUT(s, seed=1)),
+    ("ManifestoSoftLUT", lambda s: lx.ManifestoSoftLUT(s, seed=1)),
+    ("FusedManifestoHardLUT", _fused(lx.FusedManifestoHardLUT)),
+    ("FusedManifestoSoftLUT", _fused(lx.FusedManifestoSoftLUT)),
+    ("ManifestoHardLUT weight=softsign", lambda s: lx.ManifestoHardLUT(s, seed=1, weight="softsign")),
+    ("ManifestoSoftLUT weight=softsign", lambda s: lx.ManifestoSoftLUT(s, seed=1, weight="softsign")),
+    ("FusedManifestoHardLUT weight=softsign", _fused(lx.FusedManifestoHardLUT, weight="softsign")),
+    ("FusedManifestoSoftLUT weight=softsign", _fused(lx.FusedManifestoSoftLUT, weight="softsign")),
+    ("ConfidenceLUT n=1", _conf(lx.ConfidenceLUT, 1)),
+    ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2)),
+    ("FusedConfidenceLUT n=1", _conf(lx.FusedConfidenceLUT, 1)),
+    ("FusedConfidenceLUT n=2", _conf(lx.FusedConfidenceLUT, 2)),
+    ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2)),
+    ("FusedQuantisedConfidenceLUT n=2", _conf(lx.FusedQuantisedConfidenceLUT, 2)),
+    ("DeployedQuantisedConfidenceLUT", None),      # built from QuantisedConfidenceLUT.to_deployment()
 ]
 
 
@@ -185,27 +168,14 @@ def _time_train(m, xx, go, warmup: int, repeats: int):
     return _stats(f), _stats(b), _stats(t)
 
 
-def _backend(m, x) -> str:
-    """What ran: the fused cartridges that record it (last_backend); else an explicit backend; else the class's own
-    dispatch (_pick); else the class's single implementation."""
-    be = getattr(m, "last_backend", None)
-    if be:
-        return be
-    if getattr(m, "backend", None) not in (None, "auto"):  # an explicit backend runs as asked (or raises)
-        return m.backend
-    if hasattr(m, "_pick"):
-        return m._pick(x)
-    return "reference"
-
-
 def _deployed(spec):
     q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=2)
     payload = q.to_deployment()
     return lx.DeployedQuantisedConfidenceLUT(spec, payload["tensors"], payload["meta"])
 
 
-def measure(name, make, spec, B, dtype, warmup, repeats, default=True) -> dict:
-    row = {"cartridge": name, "default": default, "dtype": str(dtype).replace("torch.", ""), "batch": B}
+def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
+    row = {"cartridge": name, "dtype": str(dtype).replace("torch.", ""), "batch": B}
     # Every cartridge of a class compiles the same _forward_impl code; across geometries and train / eval that exceeds
     # Dynamo's recompile limit (8) within one process and later cells would silently run EAGER. Each cell starts from
     # an empty compile cache, as a fresh process would.
@@ -225,7 +195,6 @@ def measure(name, make, spec, B, dtype, warmup, repeats, default=True) -> dict:
                 return m(x)
         fwd()                                              # first call: build / compile outside the timing
         row["eval_forward"] = _time(fwd, warmup, repeats)
-        row["backend_eval"] = _backend(m, x)
         torch.cuda.synchronize()
         base = torch.cuda.memory_allocated()
         torch.cuda.reset_peak_memory_stats()
@@ -240,7 +209,6 @@ def measure(name, make, spec, B, dtype, warmup, repeats, default=True) -> dict:
         y.backward(go.to(y.dtype))
         del y
         tf, tb, tt = _time_train(m, xx, go, warmup, repeats)
-        row["backend_train"] = _backend(m, x)
         # Peak memory: the gradients exist from here on, so they are part of the base, as in a training loop.
         torch.cuda.synchronize()
         base = torch.cuda.memory_allocated()
@@ -270,16 +238,14 @@ MEASUREMENTS = ("eval_forward", "train_forward", "train_backward", "train_total"
 
 
 def markdown(env, rows, obs) -> str:
-    """One line per cell: median ms and peak GiB for each of the four measurements (the IQRs are in the JSON). The
-    class defaults are marked ``*``."""
+    """One line per cell: median ms and peak GiB for each of the four measurements (the IQRs are in the JSON); the
+    status column says why a cell has no numbers (out of memory, refused, an error)."""
     def cell(t):
         return "- | -" if not t or "peak_gib" not in t else f"{t['median_ms']:.3f} | {t['peak_gib']:.3f}"
     head = " | ".join(f"{m.replace('_', ' ')} ms | GiB" for m in MEASUREMENTS)
-    out = [f"| geometry | cartridge | dtype | backend (train / eval) | {head} |", "|---" * (4 + 2 * len(MEASUREMENTS)) + "|"]
+    out = [f"| geometry | cartridge | dtype | status | {head} |", "|---" * (4 + 2 * len(MEASUREMENTS)) + "|"]
     for r in rows:
-        be = r.get("status") or f"{r.get('backend_train', '') or '-'} / {r.get('backend_eval', '') or '-'}"
-        star = "*" if r.get("default", True) else ""
-        out.append(f"| {r['geometry']} | {r['cartridge']}{star} | {r['dtype']} | {be} | "
+        out.append(f"| {r['geometry']} | {r['cartridge']} | {r['dtype']} | {r.get('status', 'ok')} | "
                    + " | ".join(cell(r.get(m)) for m in MEASUREMENTS) + " |")
     return "\n".join(out)
 
@@ -320,15 +286,15 @@ def main():
     for g in a.geometries.split(","):
         kw, B = GEOMETRIES[g]
         spec = LUTSpec(**kw)
-        for name, make, default in CARTRIDGES:
+        for name, make in CARTRIDGES:
             if keep and name not in keep:
                 continue
             for d in a.dtypes.split(","):
                 if a.isolate:
                     r = _isolated(g, name, d, a)
                 else:
-                    r = measure(name, make, spec, B, getattr(torch, d), a.warmup, a.repeats, default)
-                r.update(geometry=g, default=default, batch=B)
+                    r = measure(name, make, spec, B, getattr(torch, d), a.warmup, a.repeats)
+                r.update(geometry=g, batch=B)
                 rows.append(r)
                 print(json.dumps(r), flush=True)
         obs[f"after_{g}"] = observe()
