@@ -69,7 +69,7 @@ Each **table** reads a `d_in`-wide vector `z` and owns `nap` **probes**. A probe
 pair `(a, b)`, giving the margin `u = z[a] - z[b]`, or a single anchor `a`, giving `u = z[a]`. Anchors
 are coordinate indices: drawn once from the seed, stored as buffers and never trained.
 
-1. **Address.** Each probe contributes one bit, `[u > cmp_eps]`, and the `nap` bits form a cell index
+1. **Address.** Each probe contributes one bit, `[u > 0]`, and the `nap` bits form a cell index
    `c = sum_j bit_j * 2**(nap-1-j)` in `[0, 2**nap)`: probe 0 gives the highest bit, the last probe the
    lowest. For example, with `nap = 3` and bits `(1, 0, 1)` from probes 0, 1, 2, `c = 4 + 0 + 1 = 5`.
    Each cell holds a learnable row of width `d_out`.
@@ -173,7 +173,6 @@ arguments are shared by all of them:
 | --- | --- | --- |
 | `seed` | `0` | anchors (group `g` seeded `seed + g`) and the table init |
 | `weight_init_std` | `1e-3` | tables start as `Uniform[-std, +std]`, drawn per head |
-| `cmp_eps` | `0.0` | the threshold `eps` in the bit test `u > eps` |
 | `table_dropout_rate` | `0.0` | whole-table dropout, see [Regularisers](#regularisers) |
 | `device` | `None` | where to build parameters and buffers |
 | `index_dtype` | `None` | dtype of the **stored** cell-index tensors, produced once in the shared addressing. `None` picks `torch.int32` when the table fits it, else `torch.int64`; an explicit `torch.int32` or `torch.int64` is honoured (see below) |

@@ -206,3 +206,19 @@ def test_export_load_round_trip_keeps_spec_and_wrapper_options(tmp_path, anchor_
         y_dep = dep(x)
     rel = (y_dep - y_ref).norm() / y_ref.norm().clamp_min(1e-30)
     assert rel < 1e-2, f"deployed vs trained output rel diff too large: {rel.item():.3e}"
+
+
+def test_legacy_cmp_eps_key_in_an_export():
+    """Exports written before cmp_eps was removed carry meta["cmp_eps"] (always 0.0). Such a payload loads and reads
+    exactly as one without the key; a non-zero value, which would select different cells, is refused."""
+    spec = _spec()
+    q = QuantisedConfidenceLUT(spec, seed=1, quant_mode="p2_int8", weight_init_std=1e-2, read_top_n=2)
+    payload = q.to_deployment()
+    assert "cmp_eps" not in payload["meta"]
+    x = torch.randn(32, spec.h_in, spec.d_in)
+    with torch.no_grad():
+        y = DeployedQuantisedConfidenceLUT(spec, payload["tensors"], payload["meta"]).eval()(x)
+        legacy = DeployedQuantisedConfidenceLUT(spec, payload["tensors"], {**payload["meta"], "cmp_eps": 0.0}).eval()
+        assert torch.equal(legacy(x), y)
+    with pytest.raises(ValueError, match="cmp_eps"):
+        DeployedQuantisedConfidenceLUT(spec, payload["tensors"], {**payload["meta"], "cmp_eps": 1e-3})

@@ -99,32 +99,32 @@ def require_cuda(module, x: torch.Tensor) -> None:
 
 class _FusedManifesto(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, z, weights, temps, anc_a, anc_b, mask, nap, eps, mode, knobs, out_bf16=False):
+    def forward(ctx, z, weights, temps, anc_a, anc_b, mask, nap, mode, knobs, out_bf16=False):
         # z: fp32 or bf16 [B, G, d_in]. weights: fp32 or bf16 [G, tph, K, d_out] (read in place). temps: fp32 [2]
         # (T_soft, T_select) for weight="softsign", None for "rational". mask: fp32 [B, G, tph] or None. out_bf16: the
         # kernel stores its (fp32-accumulated) output as bf16; only for a bf16 z.
         ext = fused_manifesto_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
-        out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, temps, nap, eps, mode, fwd_threads, knobs.rows_per_cta,
+        out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, temps, nap, mode, fwd_threads, knobs.rows_per_cta,
                                 vec, out_bf16)
         ctx.save_for_backward(z, weights, temps, anc_a, anc_b, mask)
-        ctx.cfg = (nap, eps, mode, knobs, vec, bwd_threads)
+        ctx.cfg = (nap, mode, knobs, vec, bwd_threads)
         return out                                                   # fp32 [B, G, d_out]
 
     @staticmethod
     def backward(ctx, go):
         z, weights, temps, anc_a, anc_b, mask = ctx.saved_tensors
-        nap, eps, mode, knobs, vec, bwd_threads = ctx.cfg
+        nap, mode, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
         gW, gz, gtemps = fused_manifesto_ext().manifesto_bwd(
-            go.float().contiguous(), z, anc_a, anc_b, W2, mask, temps, nap, eps, mode,
+            go.float().contiguous(), z, anc_a, anc_b, W2, mask, temps, nap, mode,
             bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         # gW accumulates in fp32 whatever the table dtype; cast once to the parameter's dtype.
         # gz comes back in z's dtype (a bf16 z: rounded once, in the kernel's store); the .to is then a no-op.
         gt = gtemps if temps is not None and ctx.needs_input_grad[2] else None
         return (gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), gt,
-                None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None)
 
 
 def init_cuda(module, knobs) -> None:
@@ -164,5 +164,5 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     # back to the log-parametrised leaves.
     temps = torch.stack(module._softsign_temps(torch.float32)).contiguous() if module.weight == "softsign" else None
     grp = _FusedManifesto.apply(z, module.weights, temps, module._anc_a16, module._anc_b16, mask,
-                                module.spec.nap, module.cmp_eps, mode, module.knobs, out_bf16)
+                                module.spec.nap, mode, module.knobs, out_bf16)
     return module._route(grp, x).to(x.dtype)

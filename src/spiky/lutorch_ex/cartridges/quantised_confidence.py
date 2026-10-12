@@ -166,7 +166,7 @@ class QuantisedScaffold:
             "meta": {
                 "cartridge": "QuantisedConfidenceLUT", "quant_mode": "p2_int8",
                 "quant_cfg": {k: int(v) for k, v in cfg.items() if isinstance(v, (int, bool))},
-                "read_top_n": int(self.read_top_n), "cmp_eps": float(self.cmp_eps),
+                "read_top_n": int(self.read_top_n),
                 "spec": {"h_in": self.spec.h_in, "h_out": self.spec.h_out, "tph": self.spec.tph,
                          "nap": self.spec.nap, "d_in": self.spec.d_in, "d_out": self.spec.d_out,
                          "anchor_mode": self.spec.anchor_mode},
@@ -401,7 +401,12 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
             raise ValueError(f"DeployedQuantisedConfidenceLUT reads 1 or 2 cells per table; the export says "
                              f"read_top_n={self.read_top_n}")
         self.single = (spec.anchor_mode == "single")
-        self.cmp_eps = float(meta.get("cmp_eps", 0.0))
+        # Exports written before cmp_eps was removed carry meta["cmp_eps"]. Like every other meta key this class does
+        # not use (cartridge, quant_cfg, spec, the wrapper's dims), it is ignored -- but only at 0.0, the only value
+        # ever written: a non-zero threshold would select different cells, which this read no longer implements.
+        if float(meta.get("cmp_eps", 0.0)) != 0.0:
+            raise ValueError(f"this export has cmp_eps={meta['cmp_eps']}; the address threshold was removed (bits are "
+                             "u > 0), so it cannot be loaded faithfully")
         self._quant = _pow2.resolve_quant_config(meta.get("quant_mode", "p2_int8"))
         self.table_dropout_rate = 0.0
         self._compiled_train = None
@@ -464,8 +469,8 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         z = (x if self.spec.h_in == self.spec.n_groups else x[:, self.in_head, :]).contiguous()
         grp_out = ext.deploy_fwd(z, self._anc_a16, self._anc_b16, self.packed.reshape(-1, self.spec.d_out),
                                  self.confidence_log_beta.float().reshape(1), self.confidence_log_gamma.float().reshape(1),
-                                 self.log_read_tau.float().reshape(1) if self.read_top_n == 2 else None, self.read_top_n, cfg["lo"], cfg["hi"], cfg["Q"],
-                                 self.cmp_eps)
+                                 self.log_read_tau.float().reshape(1) if self.read_top_n == 2 else None,
+                                 self.read_top_n, cfg["lo"], cfg["hi"], cfg["Q"])
         return self._route(grp_out, x)   # RAW (units 2^-6); scale folded into decompress
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:

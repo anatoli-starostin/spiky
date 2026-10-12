@@ -499,7 +499,7 @@ int threads_for(int d_out) {
 // ============================================================================================================================
 // DeployedQuantisedConfidenceLUT's forward: deploy_fwd, the Stage 1 template specialised for the stored int8 rows and for
 // the read width N (1 or 2, a template parameter: the export's read_top_n). One CTA per (group g, QF_ROWS samples).
-//   phase A  thread per table: the margins (z[a] - z[b], or z[a] for single anchors), the address c1 (bits d_p > cmp_eps),
+//   phase A  thread per table: the margins (z[a] - z[b], or z[a] for single anchors), the address c1 (bits d_p > 0),
 //            then p2::table_scalars (N = 2: k', q, skip, drop, the argmin mj, c2 = c1 ^ 2^(nap-1-mj)) or p2::single_scalars
 //            (N = 1: k', skip), giving each cell's left shift k' + 6 (and k' + 6 - q), or -1 for a cell that is not read.
 //   phase B  stripe x chunk: VEC int8 bytes per load (8, 4, 2 or 1: the widest dividing d_out; 8 measured faster than 16
@@ -521,7 +521,6 @@ struct Params {
   const float* log_gamma;
   const float* log_tau;
   int B, G, tph, nap, d_in, d_out, lo, hi, Q;
-  float cmp_eps;
 };
 
 template <int VEC> struct Bytes;
@@ -592,7 +591,7 @@ __global__ void deploy_fwd_kernel(Params p, float* __restrict__ out) {
       for (int j = 0; j < qf::NAP_MAX; ++j)
         if (j < nap) {
           d[j] = single ? zs[sa[t * nap + j]] : zs[sa[t * nap + j]] - zs[sb[t * nap + j]];
-          if (d[j] > p.cmp_eps) c1 |= 1 << (nap - 1 - j);
+          if (d[j] > 0.f) c1 |= 1 << (nap - 1 - j);
         }
       const int base = (g * p.tph + t) << nap;
       if constexpr (N == 2) {
@@ -767,8 +766,8 @@ std::vector<torch::Tensor> quant_bwd(const torch::Tensor& go, const torch::Tenso
 // anchors); P int8 [G * tph * 2^nap, d_out]; n = 1 or 2 (the export's read_top_n). Returns the raw accumulator, fp32.
 torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
                          const torch::Tensor& P, const torch::Tensor& log_beta, const torch::Tensor& log_gamma,
-                         const c10::optional<torch::Tensor>& log_tau, int64_t n, int64_t lo, int64_t hi, int64_t Q,
-                         double cmp_eps) {
+                         const c10::optional<torch::Tensor>& log_tau, int64_t n, int64_t lo, int64_t hi,
+                         int64_t Q) {
   TORCH_CHECK(z.is_cuda() && z.scalar_type() == torch::kFloat32 && z.is_contiguous() && z.dim() == 3,
               "z: contiguous fp32 CUDA [B, G, d_in]");
   TORCH_CHECK(P.is_cuda() && P.scalar_type() == torch::kInt8 && P.is_contiguous() && P.dim() == 2,
@@ -787,7 +786,7 @@ torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, con
   p.P = P.data_ptr<int8_t>();
   p.B = z.size(0); p.G = z.size(1); p.d_in = z.size(2);
   p.tph = anc_a.size(1); p.nap = anc_a.size(2); p.d_out = P.size(1);
-  p.lo = lo; p.hi = hi; p.Q = Q; p.cmp_eps = (float)cmp_eps;
+  p.lo = lo; p.hi = hi; p.Q = Q;
   TORCH_CHECK(p.nap >= 1 && p.nap <= qf::NAP_MAX, "nap must be in [1, 8]");
   TORCH_CHECK(anc_a.size(0) == p.G, "anchor groups != z groups");
   TORCH_CHECK(P.size(0) == ((int64_t)p.G * p.tph << p.nap), "P rows != G * tph * 2**nap");

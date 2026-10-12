@@ -729,3 +729,60 @@ The fp32 maths on a bf16-rounded input (Amendment C for the input), against the 
   1. the reference flag plus the narrowed test;
   2. the fused bf16 table reads.
 - **bf16 input activations:** not unsafe, and not worth having. The exponent arithmetic must stay fp32 in any case (bf16 arithmetic: 0.09).
+
+## `cmp_eps` removed
+
+The address threshold `cmp_eps` (bit = `[u > cmp_eps]`, default 0) is gone from lutorch_ex. Every address bit is now `[u > 0]`.
+- **Removed:**
+  - the base constructor argument and attribute (`ManifestoLUT`), and its use in `_addresses`;
+  - `eps` in the Manifesto and Confidence kernels (Params, make_params, the fwd / bwd host functions) and in their autograd wrappers;
+  - `cmp_eps` in the Deployed kernel and class;
+  - the export's `meta["cmp_eps"]`;
+  - the README's parameter row.
+- **Docstrings** that said `[u > eps]` now say `[u > 0]`.
+- **Six test lines** that read `cart.cmp_eps` now use 0.
+- **Out of scope, untouched:** the old engines' own `cmp_eps` (`lutorch/`, `lut_fused/`, `native/`), which have different semantics (a symmetric dead zone).
+
+**Why:**
+- **It was inconsistent across classes.** FusedQuantisedConfidenceLUT never honoured it: its cells come from `p2::table_scalars`, which tests d > 0. Every other path did honour it: the references, the Manifesto and Confidence kernels, and the Stage 3 Deployed kernel.
+  - That divergence **predates this PR.** It arrived in fcfbbf36 (#160), when the fused quantised forward started taking its cells from the p2_scalars op.
+- **It was never exercised.** No test, script, config or notebook in the repo set it non-zero. The only non-zero use was in the old lut_fused engine's tests.
+- **No rationale was ever recorded.** It came with lutorch_ex's first PR (6693d8bb) as `cmp_eps: float = 0.0`, carried over from the original engine. There it was a dead-zone tolerance for cross-implementation near-ties.
+- **For the confidence family it was incoherent.** The address used the threshold eps, while everything that weights the cells measures distance to zero, not to eps:
+  - the score Σ|u_j| and logsigmoid(β|u_j|);
+  - the least-confident pair j* = argmin |u_j| that picks c_alt;
+  - q = round(2|u_j*|/(τ ln2)) and the blend weight;
+  - k';
+  - the soft-sign neighbour weights.
+  - So a margin in (0, eps] would be addressed as negative but scored as positive and confident.
+
+**Verification (bit-identical at 0, the only value ever used):**
+- **Fingerprint:** every family's eval value, training value and every gradient, before and after, under deterministic algorithms (scripts outside the repo). Covered:
+  - Manifesto Hard / Soft with both weights, Confidence n=1/2, Quantised n=1/2, every fused twin, and Deployed n=1/2;
+  - pairs and single anchors;
+  - CPU (h4 tph16 nap6) and CUDA (champion geometry, 2,048 vectors).
+- **Result:**
+  - **All 53 cases' forward values are bit-identical, and so is every reference-class and Deployed gradient.**
+  - The only leaves that differ are fused-kernel gradients accumulated with atomics (FusedManifesto*, FusedConfidence, FusedQuantised's grad W). Those differ run to run with the unchanged code too: same leaves, same ~1e-8–1e-6 relative size.
+  - The kernel change itself is `u > p.eps` with eps = 0.0f becoming `u > 0.f`, an identical comparison for every float including −0 and NaN.
+- **Suites:** Amendment D Layer 1 is bit-exact for the quantised pair (both seeds, eval and training forward, champion and tph128). The fused-vs-reference harness is unchanged for every family.
+
+**Old exports:**
+- Deployed already ignores meta keys it does not use (`cartridge`, `quant_cfg`, `spec`, the wrapper's dims).
+- A legacy `meta["cmp_eps"]` of 0.0, the only value ever written, is ignored the same way. A non-zero value is refused with a ValueError, because silently reading `u > 0` instead would select different cells.
+- New test: `test_legacy_cmp_eps_key_in_an_export`.
+- Checkpoints never held `cmp_eps` (it was an attribute, not a buffer), so no state_dict changes.
+
+**Suites:** GPU 1585 passed / 0 failed / 0 skipped; CPU 420 passed / 1017 skipped. Both are +1 passed against the Stage 3 state (1584; 419 / 1017): the new legacy-export test runs on both.
+
+**Timing spot-check** (fresh process per cell; ms, eval forward / train total; snapshot_164 in brackets):
+
+| cell | 8k | 32k |
+|---|---|---|
+| FusedQuantised eval | 0.527 (0.526) | 2.015 (1.942; 1.956–2.014 across the Stage 3–4 runs) |
+| FusedQuantised train | 2.733 (2.709) | 10.05 (10.07) |
+| Deployed n=2 eval | 0.310 (0.311) | 1.248 (1.257) |
+| Deployed n=1 eval | 0.221 (0.223) | 0.889 (0.903) |
+| FusedConfidence fp32 eval | 0.477 (0.474) | 1.874 (1.875) |
+
+All are within noise; no new snapshot of record is needed.

@@ -45,7 +45,6 @@ struct Params {
     const float* log_gamma;
     const float* log_tau;    // read only when N == 2
     float keep_scale;        // 1 / keep_prob
-    float eps;
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
 };
 
@@ -150,7 +149,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
             const int i = t * nap + j;
             const float u = zs[sa[i]] - (sb ? zs[sb[i]] : 0.f);
             if (us) us[i] = u;
-            c |= int(u > p.eps) << (nap - 1 - j);
+            c |= int(u > 0.f) << (nap - 1 - j);
             const float m = fabsf(u);
             M += m;
             L += log_sigmoid(beta * m);
@@ -388,7 +387,7 @@ __global__ void confidence_bwd_kernel(Params p, const float* __restrict__ go, fl
 Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
                    const torch::Tensor& W, const c10::optional<torch::Tensor>& keep, double keep_scale,
                    const torch::Tensor& log_beta, const torch::Tensor& log_gamma, const torch::Tensor& log_tau,
-                   int nap, double eps, int rows_per_cta) {
+                   int nap, int rows_per_cta) {
     TORCH_CHECK(z.is_cuda() && (z.scalar_type() == torch::kFloat32 || z.scalar_type() == torch::kBFloat16) && z.is_contiguous()
                 && z.dim() == 3, "z: contiguous fp32 or bf16 CUDA [B, G, d_in]");
     TORCH_CHECK((W.scalar_type() == torch::kFloat32 || W.scalar_type() == torch::kBFloat16) && W.is_contiguous() && W.dim() == 2,
@@ -412,7 +411,6 @@ Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10
     p.log_gamma = log_gamma.data_ptr<float>();
     p.log_tau = log_tau.data_ptr<float>();
     p.keep_scale = float(keep_scale);
-    p.eps = float(eps);
     p.B = z.size(0); p.G = z.size(1); p.d_in = z.size(2);
     p.tph = anc_a.size(1); p.nap = nap; p.d_out = W.size(1);
     p.rows_per_cta = rows_per_cta;
@@ -455,10 +453,10 @@ void dispatch_table(const torch::Tensor& W, Fn&& fn) {
 torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<torch::Tensor> anc_b,
                              torch::Tensor W, c10::optional<torch::Tensor> keep, double keep_scale,
                              torch::Tensor log_beta, torch::Tensor log_gamma, torch::Tensor log_tau,
-                             int64_t nap, double eps, int64_t read_top_n,
+                             int64_t nap, int64_t read_top_n,
                              int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16) {
     const c10::cuda::CUDAGuard guard(z.device());
-    Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
+    Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     // fp32 output for either table dtype, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1
     // onto output heads; a fan-in sums the groups first and keeps fp32 so it rounds once).
@@ -491,10 +489,10 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
                                           c10::optional<torch::Tensor> anc_b, torch::Tensor W,
                                           c10::optional<torch::Tensor> keep, double keep_scale,
                                           torch::Tensor log_beta, torch::Tensor log_gamma, torch::Tensor log_tau,
-                                          int64_t nap, double eps, int64_t read_top_n,
+                                          int64_t nap, int64_t read_top_n,
                                           int64_t threads, int64_t rows_per_cta, int64_t vec, bool vec_atomics) {
     const c10::cuda::CUDAGuard guard(z.device());
-    Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, eps, rows_per_cta);
+    Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
