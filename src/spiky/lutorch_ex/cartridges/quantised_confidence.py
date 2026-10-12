@@ -176,6 +176,17 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     """p2_int8 quant-aware twin of :class:`ConfidenceLUT`, the reference implementation; see module docstring."""
 
     _ACCEPTS_LOW_PRECISION = False   # outside spec amendment C (the quantised-cartridges work decides its precision)
+    #: A scheduling hint, not maths. _pow2.blend_exponents left-folds the nap terms of S and of the logsigmoid sum (the
+    #: kernel's operation order, what makes this reference bit-exact with FusedQuantisedConfidenceLUT): each fold reads
+    #: the [B, G, tph, nap] margins as nap slices, which crosses Inductor's realize_reads_threshold (default 4), and the
+    #: folded producer then exceeds realize_opcount_threshold (default 30), so Inductor writes that ~1 GiB producer (at
+    #: 32,768 vectors) to global memory and re-reads it in a separate kernel. With both raised it keeps the margins in
+    #: registers and still emits the same in-order add chain (the eager maths, which layer 1 pins, is untouched).
+    #: Measured at 32,768 vectors, fp32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
+    #: reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90 (also at 1000). Train total unchanged.
+    #: Version-dependent: a torch upgrade can rename the options or change the heuristic; the snapshot of record
+    #: (bench_snapshot) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
+    _COMPILE_OPTIONS = {"realize_reads_threshold": 8, "realize_opcount_threshold": 100}
 
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
         # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form and the

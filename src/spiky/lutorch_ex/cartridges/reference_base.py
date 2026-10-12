@@ -33,6 +33,9 @@ class ReferenceForward:
     #: Whether bf16 / fp16 run (as fp32 maths, see the module docstring). False only for QuantisedConfidenceLUT,
     #: outside this spec's families: its precision contract belongs to the quantised-cartridges work.
     _ACCEPTS_LOW_PRECISION: bool = True
+    #: Inductor options for both compiles (``torch.compile(..., options=...)``): a fixed property of the class, empty
+    #: (Inductor's defaults) except where a class documents why it needs a scheduling hint. Never maths.
+    _COMPILE_OPTIONS: dict = {}
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         lowp = {n: t for n, t in (*self.named_parameters(), *self.named_buffers()) if t.dtype in _LOW_PRECISION}
@@ -51,10 +54,12 @@ class ReferenceForward:
         if _COMPILE_ENABLED and x.is_cuda:
             if not self.training:
                 if self._compiled is None:
-                    self._compiled = torch.compile(self._forward_impl, dynamic=True)
+                    self._compiled = torch.compile(self._forward_impl, dynamic=True,
+                                                   options=dict(self._COMPILE_OPTIONS) or None)
                 return self._compiled(x)
             if self._COMPILE_TRAIN:
                 if self._compiled_train is None:
-                    self._compiled_train = torch.compile(self._forward_impl, dynamic=self._COMPILE_TRAIN_DYNAMIC)
+                    self._compiled_train = torch.compile(self._forward_impl, dynamic=self._COMPILE_TRAIN_DYNAMIC,
+                                                         options=dict(self._COMPILE_OPTIONS) or None)
                 return self._compiled_train(x)
         return self._forward_impl(x)
