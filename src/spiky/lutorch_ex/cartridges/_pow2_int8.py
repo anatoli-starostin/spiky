@@ -131,6 +131,45 @@ def _integers_from(cells: torch.Tensor, kq: torch.Tensor, Q: int):
     return q, k, skip, drop
 
 
+# ======================================================================================================================
+# the fused forward (csrc/pow2_int8_read.cu: table_exponents + quant_fwd)
+
+
+class FusedQuantRead(torch.autograd.Function):
+    """FusedQuantisedConfidenceLUT's read, ``z [B, G, d_in]`` -> ``[B, G, d_out]``.
+
+    Forward: two launches, the input-independent table exponents and the fused read (addressing, the p2 integers and
+    straight-through weights in registers, the fake-quant gather); the margins never reach global memory.
+
+    Backward (until the hand-written backward kernel): ``recompute(z, weights, log_beta, log_gamma, log_tau, dmask)``,
+    the torch form of the same read (margins, the p2_scalars op, ste_tables, embedding_bag), differentiated with
+    autograd. Its value equals the forward's up to the order of the output sums; its integers are the same (the op
+    and the fused kernel run the same p2::table_scalars on the same fp32 margins)."""
+
+    @staticmethod
+    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, dmask, cfg, recompute):
+        ext = load()
+        W2 = weights.reshape(-1, weights.shape[-1])
+        E = ext.table_exponents(W2, weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
+        lo, hi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
+        out = ext.quant_fwd(z, anc_a16, anc_b16, W2, E, dmask, log_beta, log_gamma, log_tau,
+                            cfg["lo"], cfg["hi"], cfg["Q"], float(lo), float(hi))
+        ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, dmask)
+        ctx.recompute = recompute
+        return out
+
+    @staticmethod
+    def backward(ctx, go):
+        z, weights, log_beta, log_gamma, log_tau, dmask = ctx.saved_tensors
+        need = ctx.needs_input_grad[:5]
+        leaves = [t.detach().requires_grad_(n) for t, n in zip((z, weights, log_beta, log_gamma, log_tau), need)]
+        with torch.enable_grad():
+            y = ctx.recompute(*leaves, dmask)
+            grads = iter(torch.autograd.grad(y, [t for t in leaves if t.requires_grad], go, allow_unused=True))
+        out = [next(grads) if t.requires_grad else None for t in leaves]
+        return (*out, None, None, None, None, None)
+
+
 def p2_cell_weights(d: torch.Tensor, tau, g, beta, gamma, cfg: dict):
     """The op: (psw [..., 2] straight-through cell weights, idx [..., 2] cell numbers c1, c2) from the signed margins
     ``d`` (CUDA fp32). The caller has checked that the op is registered (FusedQuantisedConfidenceLUT._require)."""

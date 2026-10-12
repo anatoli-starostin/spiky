@@ -357,3 +357,72 @@ At 8,192: read 2.26 ms of 2.86 (5 launches).
 4. Re-derive the reference's read order to the kernel's and keep Layer 1 bit-exact.
 
 Not proposed: anything that makes the q / k' inputs depend on reduction order (tree reductions across threads for S or ls). The sequential per-thread fold is already the cheapest deterministic option, because nap = 8 values fit in one thread's registers.
+
+## Stage 1: the fused forward kernel
+
+`csrc/pow2_int8_read.cu` (the same extension, built with `--fmad=false`, gated by the same validated architectures) and `_pow2_int8.FusedQuantRead`. `FusedQuantisedConfidenceLUT`'s public surface is unchanged: no new constructor argument, no switch.
+
+### Kernel structure
+
+**Two launches per forward:**
+1. `table_exponent_kernel`: the per-(group, channel) exponent e of the fake-quant table, `ceil(log2(max |W|)) − (bits − 1) + offset` (`_pow2.head_chan_exponents`).
+   - It is input-independent and needs a reduction over the whole group's table before any row can be quantised, hence its own launch.
+   - It is a max, so the result does not depend on the order. 0.03 ms.
+2. `quant_fwd_kernel<VEC>`: everything else, structured as FusedConfidenceLUT's forward.
+   - One CTA per (group, 4 consecutive samples), 64 threads (raised to cover one table row for wide d_out).
+   - The z row and the group's int16 anchors are staged in shared memory; the 2^e / 2^−e scales go to shared memory per group.
+   - **Phase A, one thread per table:** the margins `d_j = z[a_j] − z[b_j]` (one fp32 subtraction, as the reference). Then `p2::table_scalars`, **the same header function `p2_scalar_kernel` runs**: c1, the first argmin, the sequential left folds S and ls, q, c_q, k', skip / drop, c2. Then the cell weights `w1 = skip ? 0 : 2^k'` and `w2 = skip||drop ? 0 : 2^(k'−q)`, times the table-dropout factor when training. **All in registers; the margins never reach global memory.**
+   - **Phase B, stripe × chunk:** `nchunk = d_out / VEC` threads per row, `nstripe = threads / nchunk` stripes. `__ldg` float4 loads of the fp32 master rows c1 and c2, fake-quantised in registers: `fq = clamp(floor(v · 2^−e + 0.5), −128, 127) · 2^e`, bit-identical to `ste_tables`' value because power-of-two scaling is exact.
+   - **Phase C:** the stripe partials summed in a fixed order, one store.
+
+**Launch count per forward:** 2, from 12.
+
+### The exact reduction order (for Stage 2 to mirror)
+
+The q / k' inputs, per table, in one thread:
+- `S = ((m_0 + m_1) + m_2) + …` and `ls = ((l_0 + l_1) + …)` with `m_j = |d_j|` and `l_j = min(0, βm_j) − log1p(exp(−|βm_j|))`;
+- q and k' exactly as `p2::table_scalars` (unchanged from `p2_scalar_kernel`, which the reference already mirrors in `_pow2.blend_exponents`, layer 1 bit-exact);
+- **no cross-thread reduction feeds q or k'.**
+
+The output, per (sample, group, output channel):
+- `p_s = (((0 + w1[s]·fq(c1[s])) + w2[s]·fq(c2[s])) + w1[s+ns]·fq(c1[s+ns])) + …` for t = s, s+ns, … < tph.
+- Then `y = ((0 + p_0) + p_1) + … + p_{ns−1}`.
+- Here `ns = threads / (d_out / VEC)`, `VEC` = the widest of 4 / 2 / 1 dividing d_out, `threads = max(64, ⌈d_out / VEC⌉ rounded up to 32)`; both are kernel constants, not knobs.
+- Champion: VEC 4, 12 chunks, **ns = 5**.
+- Every product and add is a separate fp32 operation (no contraction).
+
+### Layer 1 did NOT go red
+
+**Measured: the fused output equals the eager reference bit for bit** (layer 1, seeds 0 and 1, eval and the training forward; all 12 quantised harness cases `torch.equal`).
+
+**Reason: the quantised read is exact in fp32 at these sizes, so the summation order cannot change it.**
+- Each term is `2^k' · W_hat · 2^e` or `2^(k'−q) · W_hat · 2^e`, with |W_hat| ≤ 127, k' ∈ [lo, hi] = [−3, 4] and q ≤ Q = 3 (else the cell is dropped).
+- So every term is an integer multiple of 2^(e−6) of magnitude at most 127 · 2^(e+4), and a bag of 2·tph = 128 terms sums to at most 128 · 127 · 2^10 = 16,646,144 units of 2^(e−6), **under 2^24**.
+- Every partial sum is therefore exactly representable in fp32 and no addition rounds: any order gives the same bits.
+
+**Consequences:**
+- **Stage 2's reference re-derivation is not needed for the no-dropout value at tph ≤ 64.**
+- Exactness ends when 2·tph · 127 · 2^(hi − lo + Q) ≥ 2^24, i.e. tph > 64 at the p2_int8 preset. For such geometries Stage 2 must mirror the order above.
+- With table dropout the factor 1/(1 − rate) is not a power of two, so products round. That case is checked by the layer-1-with-dropout test (fp32 tolerance + ROW_SAME), which passes.
+- So Layer 1 is green and keeps zero tolerance. **I recommend Stage 2 be re-scoped** to the cases the exactness argument does not cover (tph > 64, or a preset with wider windows), plus documenting the argument in the reference. It is not needed to make Layer 1 green.
+
+### Measured (RTX 5090, bench_snapshot's own `measure()`, fresh process per cell, two runs each; ms / GiB)
+
+| cell | Stage 0 (snapshot_162) | Stage 1 | FusedConfidence n=2 | vs FusedConfidence |
+|---|---|---|---|---|
+| 32k eval | 9.683 / 1.658 | **1.940–1.946 / 0.094** | 1.866 / 0.094 | **+4%** (+0.08 ms) |
+| 8k eval | 2.521 / 0.415 | **0.526 / 0.023** | 0.473 / 0.023 | **+11%** (+0.05 ms) |
+| 32k train total | 48.500 / 3.641 | 50.363–50.407 / 3.734 | 9.318–9.411 / 0.236 | (Stage 4) |
+| 8k train total | 12.390 / 0.946 | 12.902 / 0.969 | 2.412–2.473 / 0.094 | (Stage 4) |
+
+- **Goal-1 bound** (≤ +24%, the Stage 0 upper bound on the quantisation arithmetic): **met**. At 32k the residual is +4% by wall time (+8% by kernel time incl. the exponent kernel: 2.005 vs 1.852 ms); at 8k +11%.
+- **Effective gather throughput:** 12.9 GB of row reads in 1.977 ms of `quant_fwd_kernel` at 32k = **6.5 TB/s** (FusedConfidence: 7.0 TB/s); 8k likewise 6.5 TB/s.
+- **Eval peak:** 1.658 → 0.094 GiB at 32k (FusedConfidence's), because the margins are no longer materialised.
+- **Training:** +4% time and +0.09 GiB at 32k against Stage 0. The backward, unchanged until Stage 4, now first recomputes the forward in torch: `FusedQuantRead.backward` runs the torch.compiled `_read_torch` (margins, the p2_scalars op, ste_tables, embedding_bag) and differentiates it. An eager recompute measured 85.4 ms / 7.5 GiB; compiling it brought that back to 50.4 / 3.73.
+
+### How Stage 4's backward gets the margins without materialising them
+
+As FusedConfidenceLUT's backward does:
+- The forward saves only z (the routed input, `[B, G, d_in]`), the parameters and the dropout factors.
+- The backward kernel, one CTA per (group, rows), re-stages the z row and anchors in shared memory and **recomputes phase A**: the margins in registers / shared memory for the gradient terms (as FusedConfidence's `us` scratch, per CTA, `tph × nap` floats), the integers, the weights.
+- Nothing `[B, G, tph, nap]`-sized is stored in global memory at any point.
