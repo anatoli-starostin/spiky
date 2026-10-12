@@ -19,9 +19,11 @@ Launch (from this folder, on a CUDA box with the lutorch_ex extension built):
 
 NOTE (precision): abl47 ran fp32 (its trainer never cast to bf16 / used autocast); the
 config's compute_dtype="bf16" was a dead field. We keep fp32 for faithfulness; the LUT stays an
-fp32 island. NOTE (wandb): minimal inline wandb (project "Spiky", group "lutorch_ex"); the old
-wandb_tracking helper was not vendored because it pulls spiky.util.wandb_integration +
-metric_glossary — swap it in if you want the old tags/glossary.
+fp32 island. NOTE (wandb): ONLINE-or-die — wandb.init runs FIRST (before data/model/GPU) with
+project "Spiky", group "lutorch_ex_fused"; no offline fallback, so a bad launch (no network /
+not logged in — e.g. inside the sbox cage) hard-fails in seconds. Launch as a BARE `python
+train.py` on a networked, wandb-logged-in box. (The old wandb_tracking helper was not vendored —
+it pulls spiky.util.wandb_integration + metric_glossary.)
 """
 import os, sys, json, math, time, csv
 
@@ -57,6 +59,22 @@ TV_LAMBDA = float(cfg["lut_cell_smoothness"])          # 10.0
 DROP = float(cfg["lut_head_dropout_rate"])             # 0.2 (whole-table dropout in the lib)
 NOISE = float(cfg["lut_init_weights_noise"])           # 1e-3
 BASE_SEED = int(cfg["lut_base_seed"])                  # 1000
+
+# ------------------------------------------------- wandb (ONLINE-or-die; init FIRST, before any data/model/GPU work)
+RUN_TAG = os.environ.get("RUN_TAG") or time.strftime("%m%d_%H%M%S")   # fresh unique name per launch (no resume)
+run_name = f"{cfg['exp_name']}_{RUN_TAG}"
+import wandb
+try:
+    wb = wandb.init(project="Spiky", group="lutorch_ex_fused", name=run_name, id=run_name,
+                    config=cfg, tags=["lutorch_ex", "fused", cfg["cartridge"]])
+except Exception as e:                                  # ONLINE or die -- no offline fallback
+    raise RuntimeError(
+        f"wandb.init failed ({type(e).__name__}: {e}). This trainer is ONLINE-or-die: no offline "
+        "fallback, and init runs FIRST so a bad launch dies in seconds (before data/model/GPU). "
+        "Likely causes: (1) no network -- e.g. launched inside the sbox cage; run a BARE "
+        "`python train.py` on a networked box instead. (2) not logged in to wandb (`wandb login`). "
+        "Fix and relaunch."
+    ) from e
 
 # --------------------------------------------------------------------------- data
 tok = RustBPETokenizer.from_directory(os.path.join(get_base_dir(), "tokenizer"))
@@ -248,16 +266,7 @@ if os.path.exists(CKPT):
     print(f"[resume] ckpt.pt at step {st['step']} -> resuming at {start_step} "
           f"(dataloader restarts from token 0; resume is approximate)")
 
-# --------------------------------------------------------------------------- wandb (minimal, inline) + csv
-RUN_TAG = os.environ.get("RUN_TAG") or time.strftime("%m%d_%H%M%S")   # fresh unique name per launch (no resume='allow')
-run_name = f"{cfg['exp_name']}_{RUN_TAG}"
-wb = None
-try:
-    import wandb
-    wb = wandb.init(project="Spiky", group="lutorch_ex_fused", name=run_name, id=run_name,
-                    config=cfg, tags=["lutorch_ex", "fused", cfg["cartridge"]])
-except Exception as e:                                 # never let logging kill training
-    print(f"[wandb] disabled ({type(e).__name__}: {e})")
+# --------------------------------------------------------------------------- csv (wandb initialised earlier, ONLINE-or-die)
 csv_f = open(os.path.join(OUT_DIR, "metrics.csv"), "a", newline="")
 csv_w = csv.writer(csv_f)
 if start_step == 1:
@@ -284,9 +293,8 @@ for step in range(start_step, N_STEPS + 1):
     opt.step()
     torch.cuda.synchronize(); step_ms = (time.perf_counter() - t0) * 1e3
     ema = acc if ema is None else 0.99 * ema + 0.01 * acc
-    if wb is not None:
-        wb.log({"step": step, "train_loss": acc, "train_ema": ema, "lut_tv": float(tv.item()),
-                "lr": LR * s, "step_ms": step_ms}, step=step)
+    wb.log({"step": step, "train_loss": acc, "train_ema": ema, "lut_tv": float(tv.item()),
+           "lr": LR * s, "step_ms": step_ms}, step=step)
     if step % 20 == 0 or step <= 5:
         print(f"step {step:6d} loss={acc:.4f} ema={ema:.4f} tv={tv.item():.3e} lr={LR*s:.2e} ms={step_ms:.0f}")
     if step % EVAL_EVERY == 0 or step == N_STEPS:
@@ -295,8 +303,7 @@ for step in range(start_step, N_STEPS + 1):
         model.train()
         best = min(best, bpb)
         print(f"[VAL] step {step}: bpb={bpb:.4f} (best {best:.4f})")
-        if wb is not None:
-            wb.log({"step": step, "val_bpb": bpb}, step=step)
+        wb.log({"step": step, "val_bpb": bpb}, step=step)
         csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}"]); csv_f.flush()
     if step % CKPT_EVERY == 0 or step == N_STEPS:
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "step": step}, CKPT)
@@ -308,5 +315,4 @@ summary = {"exp_name": cfg["exp_name"], "cartridge": cfg["cartridge"], "best_val
            "hours": round((time.time() - t_run) / 3600, 4), "n_steps": N_STEPS, "run_name": run_name}
 json.dump(summary, open(os.path.join(OUT_DIR, "summary.json"), "w"), indent=2)
 print("=== DONE ===", json.dumps(summary))
-if wb is not None:
-    wb.summary.update(summary); wb.finish()
+wb.summary.update(summary); wb.finish()

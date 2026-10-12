@@ -41,11 +41,16 @@ reproduction; add an explicit bf16 cast if you want it (would diverge from the a
 
 ## wandb (flagged)
 Minimal inline wandb (project "Spiky", group "lutorch_ex_fused", tags [lutorch_ex, fused, <cartridge>]),
-fresh unique run name per launch. The old `wandb_tracking.Tracker` was NOT vendored (it pulls
-spiky.util.wandb_integration + metric_glossary); swap it in if you want the exact old tags/glossary.
+fresh unique run name per launch. **ONLINE-or-die:** `wandb.init` runs FIRST — before any
+data/model/GPU work — and there is NO offline fallback, so a launch with no network (e.g. inside
+the sbox cage) or not logged in to wandb HARD-FAILS in seconds with a clear error. The old
+`wandb_tracking.Tracker` was NOT vendored (it pulls spiky.util.wandb_integration + metric_glossary);
+swap it in if you want the exact old tags/glossary.
 
 ## Launch
-Per folder, on a CUDA box with the lutorch_ex CUDA extension built (fused cartridges require it):
+Per folder, on a CUDA box with the lutorch_ex CUDA extension built (fused cartridges require it).
+**Must be launched as a BARE `python train.py`** on a box with OUTBOUND NETWORK and wandb logged in
+— NOT via `sbox` (the cage has no network), or `wandb.init` hard-fails immediately (online-or-die):
     cd <NN_folder> && setsid nohup python train.py > stdout.log 2>&1 &
 `SMOKE_STEPS=40 python train.py` for a quick sanity. Single-run checkpoint/resume via ckpt.pt (the
 dataloader resume is approximate — restarts from token 0). NOT launched yet.
