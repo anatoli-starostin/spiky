@@ -134,6 +134,17 @@ COMPACT_AT_TOKENS = 150_000
 # PRIME_MSGS replies, trimmed to the newest PRIME_CHARS characters.
 PRIME_MSGS = 40
 PRIME_CHARS = 40_000
+# thread -> the consciousness session_id last seen for it, so a restart RESUMES the same conversation (its full history
+# and its own compactions) instead of starting fresh from the Slack prime above, which is only ~the last 40 messages.
+# Without this every restart (e.g. the 30-min Monitor expiry) gave the thread amnesia. (2026-10-11)
+SESSIONS_FILE = MIND_CWD / "sessions.json"
+
+
+def _load_sessions() -> dict:
+    try:
+        return json.loads(SESSIONS_FILE.read_text())
+    except Exception:
+        return {}
 
 
 def _ctx_tokens(result_msg) -> int:
@@ -349,8 +360,9 @@ class Consciousness:
         self._threads: dict[str, tuple[ClaudeSDKClient, asyncio.Lock]] = {}
         self._thread_ctx: dict[str, tuple] = {}   # thread -> (channel, post_thread), remembered to respawn on crash
         self._ctx: dict[str, int] = {}   # thread -> last-measured context tokens
+        self._sessions: dict[str, str] = _load_sessions()   # thread -> session_id to resume (survives restarts)
 
-    def _options(self, channel, post_thread, thread) -> ClaudeAgentOptions:
+    def _options(self, channel, post_thread, thread, resume: str | None = None) -> ClaudeAgentOptions:
         return ClaudeAgentOptions(
             system_prompt=SYSTEM_PROMPT,
             mcp_servers={"body": build_body_server(channel, post_thread, thread)},
@@ -367,20 +379,20 @@ class Consciousness:
             # and a permission hook in here could stall the channel. (2026-07-13)
             setting_sources=[],
             cwd=str(MIND_CWD),
-            model="claude-opus-4-8",
+            model="claude-opus-5",
+            resume=resume,
         )
 
     def is_new(self, thread: str) -> bool:
-        return thread not in self._threads
+        # The Slack-history prime is only the fallback for a thread with no session to resume.
+        return thread not in self._threads and thread not in self._sessions
 
     async def ask(self, thread: str, text: str, prime: str | None = None, ctx=None) -> str:
         if thread not in self._threads:
             channel, post_thread = ctx if ctx else (None, None)
-            client = ClaudeSDKClient(options=self._options(channel, post_thread, thread))
-            await client.connect()
+            client = await self._connect(channel, post_thread, thread)
             self._threads[thread] = (client, asyncio.Lock())
             self._thread_ctx[thread] = (channel, post_thread)   # remembered so we can respawn on a crash
-            log.info("spawned consciousness for thread %s", thread)
             if prime:
                 text = (
                     "[Context: earlier messages in this Slack thread, so you can "
@@ -407,11 +419,37 @@ class Consciousness:
                 except Exception:
                     pass
                 channel, post_thread = self._thread_ctx.get(thread, (None, None))
-                client = ClaudeSDKClient(options=self._options(channel, post_thread, thread))
-                await client.connect()
+                client = await self._connect(channel, post_thread, thread)
                 self._threads[thread] = (client, lock)   # reuse the lock we already hold
                 log.info("respawned consciousness for thread %s", thread)
                 return await self._run(thread, client, text)
+
+    async def _connect(self, channel, post_thread, thread) -> ClaudeSDKClient:
+        """A connected client for this thread: the remembered session resumed when there is one, else a fresh one.
+        A resume that fails (e.g. its transcript is gone) forgets that session and falls back to a fresh client."""
+        sid = self._sessions.get(thread)
+        if sid:
+            client = ClaudeSDKClient(options=self._options(channel, post_thread, thread, resume=sid))
+            try:
+                await client.connect()
+                log.info("resumed consciousness for thread %s (session %s)", thread, sid)
+                return client
+            except Exception as e:
+                log.warning("resume of session %s for thread %s failed (%s) -> fresh session", sid, thread, e)
+                self._forget_session(thread)
+        client = ClaudeSDKClient(options=self._options(channel, post_thread, thread))
+        await client.connect()
+        log.info("spawned consciousness for thread %s", thread)
+        return client
+
+    def _remember_session(self, thread: str, sid: str) -> None:
+        if sid and self._sessions.get(thread) != sid:
+            self._sessions[thread] = sid
+            SESSIONS_FILE.write_text(json.dumps(self._sessions))
+
+    def _forget_session(self, thread: str) -> None:
+        if self._sessions.pop(thread, None) is not None:
+            SESSIONS_FILE.write_text(json.dumps(self._sessions))
 
     async def _run(self, thread: str, client: ClaudeSDKClient, text: str) -> str:
         """Send one query and collect the reply. SDK errors from a dead subprocess bubble up to ask()."""
@@ -427,6 +465,7 @@ class Consciousness:
                     out = texts
             elif isinstance(msg, ResultMessage):
                 self._ctx[thread] = _ctx_tokens(msg)   # for the compactor
+                self._remember_session(thread, getattr(msg, "session_id", None))   # resumable after a restart
         return "\n".join(out).strip() or "(no reply)"
 
     async def maybe_compact(self, thread: str, threshold: int) -> bool:
