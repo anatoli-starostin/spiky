@@ -213,9 +213,9 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | --- | --- | --- |
 | `read_top_n` | `1` (`2` for `QuantisedConfidenceLUT`) | `1` = scored single cell, `2` = scored two-cell blend |
 | `beta_init`, `gamma_init` | `2.0`, `1.0` | initial `β`, `γ` (must be `> 0`) |
-| `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
+| `read_tau_init` | `0.5` | initial `τ`; only valid with `read_top_n=2` (at `read_top_n=1` it raises `ValueError`: no blend, no `τ`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
-| `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
+| `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer; only valid with `read_top_n=2` (raises at `read_top_n=1`) |
 
 `ConfidenceLUT` has one read, `y = Σ_t s_t · W_t[c_t]` (n=1) or its two-cell blend (n=2), in train and eval, in one
 of two forms of the same maths:

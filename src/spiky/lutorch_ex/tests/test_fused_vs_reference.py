@@ -486,7 +486,10 @@ def test_deployed_kernel_bit_exact_vs_torch_definition(read_top_n, anchor_mode):
     from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
     requires_extension("quantised")
     spec = LUTSpec(**dict(CHAMPION, anchor_mode=anchor_mode))
-    q = QuantisedConfidenceLUT(spec, seed=0, **dict(QUANT_KW, read_top_n=read_top_n)).cuda().eval()
+    kw = dict(QUANT_KW, read_top_n=read_top_n)
+    if read_top_n == 1:
+        del kw["read_tau_init"]                          # τ exists only for the two-cell blend (read_top_n=2)
+    q = QuantisedConfidenceLUT(spec, seed=0, **kw).cuda().eval()
     payload = q.to_deployment()
     d = DeployedQuantisedConfidenceLUT(spec, payload["tensors"], payload["meta"], device="cuda").eval()
     x = torch.randn(8192, 16, 48, device="cuda", generator=torch.Generator(device="cuda").manual_seed(4321))
