@@ -1349,3 +1349,54 @@ All are within noise; no new snapshot of record is needed.
 - **n=2 is unaffected by the templating:** the kernels alone, before vs after, 5 interleaved rounds, come in at bwd 1.973 vs 1.978 ms (8k) and 7.928 vs 7.943 ms (32k); fwd 0.517 vs 0.523 and 2.153 vs 2.169. All within noise.
 
 **The open n=1 REFERENCE question (the Stage 3 regression, ×1.28 eval) is unchanged.** The reference was left alone, but the question matters less now: n=1 training on CUDA has a fused path about 5× faster, so the reference is the oracle and the CPU path. The n=1 work does not hand over a cheap fix for the reference by itself. The route is the same as before: compute S and ls once with the kernel-order left folds and derive both s and k′ from them. That changes the reference's gradient bits, so it remains Anatoly's decision.
+
+## Snapshot of record v3: one session, every cell, the n=1 rows included
+
+**Why v3.**
+- v2 predates the n=1 rows.
+- The QuantisedConfidenceLUT n=1 addendum and the FusedQuantised n=1 measurements each came from later, separate sessions.
+- **v3 is the first single-session set covering every cell**, so it is now the snapshot of record.
+- **v1, v2, presave and addendum files are kept as history. They must not be differenced against v3 cells,** because they come from different sessions.
+
+**Session.** Four trees were measured in ONE session, interleaved cell by cell over HEAD's full matrix (18 cartridges × {fp32, bf16} × {8k, 32k}), with the tree order rotating:
+- #162 (c8e48c36);
+- #160 (a811390e);
+- #164 HEAD (41cc6b97, library 0b3de742);
+- #164 before the per-table-integer saving (9a9f0891).
+
+How each row was run:
+- Rows a tree's CLI knows ran through that CLI, one fresh process per cell.
+- QuantisedConfidenceLUT n=1, which the older trees' CLIs predate, ran through each tree's own `measure()` with `_conf(QuantisedConfidenceLUT, 1)`. `measure()` was re-checked first and is identical in all four trees for a training class.
+- FusedQuantised n=1 (and Deployed n=1 before Stage 3) does not exist in the older trees, so those cells have "no row".
+
+Conditions: SM up to 3.07 GHz, 31–44 C. **No throttle or power-cap flag on any of the 576 samples.**
+
+**Files:**
+- `snapshot_164_v3`, `snapshot_162_remeasured_v3`, `snapshot_160_remeasured_v3`, `snapshot_164_presave_v3` (`.json` / `.md`);
+- figures (all `bench_compare.py --same-session`): `figures_162_remeasured_vs_164_v3/` (primary), `figures_160_vs_164_v3/` (cumulative), `figures_164_presave_vs_164_v3/` (the saving's cost).
+
+**Beyond the noise floor:**
+- **vs #162 (436 values):** time 10 better / 7 worse / 201 within noise; memory 10 better / 0 worse / 208 within noise.
+  - Better: FusedQuantised n=2 (time ×0.20–0.24, peaks ×0.06–0.16) and Deployed eval (×0.107 / ×0.074).
+  - Worse: all 7 are QuantisedConfidenceLUT n=1, the Stage 3 reference regression. **It reproduces:** eval ×1.27 (8k) / ×1.29 (32k), train forward ×1.26 / ×1.28, train backward ×1.08 at 32k, train total ×1.12 / ×1.12.
+- **vs #160 (436 values):** time 20 better / 11 worse / 175 within noise / 12 OOM → fits; memory 26 / 0 / 180 / 12.
+  - The 11 regressions are the 4 ManifestoHard 8k backward cells (#162's surrogate, as before) and the 7 QuantisedConfidenceLUT n=1 cells.
+- **presave → HEAD (440 values):** memory 6 worse (the FusedQuantised n=2 training peaks ×2.33 / ×1.33 / ×1.53: the accepted cost), every other value within noise; time 220 within noise.
+- **Not in any before/after figure:** FusedQuantised n=1 and Deployed n=1 are after-only, because they do not exist in the baselines, and bench_compare draws only comparable cells. Their v3 values are in `snapshot_164_v3.md`.
+
+**FusedQuantised n=1 in v3** (fp32, ms; GiB in brackets):
+
+| | FusedQuantised n=1 | Quantised n=1 (ref) | FusedConfidence n=1 | vs FusedConfidence |
+|---|---|---|---|---|
+| 8k eval | 0.302 (0.023) | 1.647 | 0.267 (0.023) | +13.4% |
+| 8k train fwd / bwd | 0.398 / 1.201 | 1.712 / 5.480 | 0.324 / 1.224 | +23.0% / −1.8% |
+| 8k train total | **1.612** (0.125) | 7.190 (0.556) | 1.537 (0.094) | **+4.9%** |
+| 32k eval | 1.179 (0.094) | 6.189 | 1.046 (0.094) | +12.7% |
+| 32k train fwd / bwd | 1.355 / 4.412 | 6.260 / 21.379 | 1.145 / 4.743 | +18.3% / −7.0% |
+| 32k train total | **5.772** (0.361) | 27.639 (1.953) | 5.889 (0.236) | **−2.0%** |
+
+- Fused n=1 runs at ×0.18–0.23 of the reference everywhere.
+- These match the dedicated n=1 session (+3.5% / −1.8% train total), within noise.
+- FusedQuantised n=2 vs FusedConfidence n=2 in v3: train total +5.4% / +4.4%, eval +9.0% / +3.7%.
+
+**Session drift vs v2:** HEAD's cells moved by no more than their noise floor between v2 and v3 (212 time values). The largest is ×1.10, FusedManifestoHard·softsign 8k fp32 train forward, a 0.34 ms cell with a ±15% floor. The code differs only by the n=1 templating.
