@@ -297,8 +297,10 @@ input and a bf16 table with one contract: addressing runs in fp32, so a lossy ma
 reductions accumulate in fp32; and each result is rounded once (the output and the input gradient to the input dtype,
 a parameter's gradient to its dtype). The reference classes do it by running their fp32 maths on fp32 views; the
 result is bit-identical to the fp32 run rounded once -- measured at test sizes (tests/test_reference_low_precision.py), and on CUDA under torch.use_deterministic_algorithms (otherwise the fp32 run's own atomic scatters are not reproducible). The reference
-classes also run fp64; the fused ones do not (and take no fp16 table). `QuantisedConfidenceLUT` stays fp32 / fp64
-and raises a `TypeError` on bf16/fp16; `FusedQuantisedConfidenceLUT` is fp32 only.
+classes also run fp64; the fused ones do not (and take no fp16 table). The quantised family's fused CUDA cartridges
+-- `FusedQuantisedConfidenceLUT`, and `DeployedQuantisedConfidenceLUT` on CUDA -- take fp32 input and write fp32 output
+only; any other input dtype raises, naming it (the deployed class's CPU path runs the torch definition, which also
+takes fp64). `QuantisedConfidenceLUT` is the pure-PyTorch reference and is not part of that rule.
 
 **Compilation and kernels.**
 

@@ -9,6 +9,8 @@ int8 shift-add read (bit-exact), train == eval value, bf16 raises, both anchor m
 read_top_n. These are the reference class's own checks; FusedQuantisedConfidenceLUT (the p2_scalars op) is checked
 against it in test_fused_vs_reference.py.
 """
+import re
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -183,6 +185,22 @@ def test_rejects_low_precision(read_top_n, dtype):
     m = QuantisedConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n).to(dtype)
     with pytest.raises(TypeError, match="does not support low precision"):
         m(torch.randn(8, 2, 6, dtype=dtype))
+
+
+@pytest.mark.parametrize("read_top_n", [1, 2])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("device", DEVICES)
+def test_deployed_rejects_low_precision_input(read_top_n, dtype, device):
+    """DeployedQuantisedConfidenceLUT is a fused CUDA cartridge, fp32 in / out only: a bf16 / fp16 input raises
+    TypeError on either device, before any read (the CPU torch definition also takes fp64, not low precision)."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
+    q = QuantisedConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n)
+    p = q.to_deployment()
+    d = QuantisedConfidenceLUT.from_deployment(spec, p["tensors"], p["meta"], device=device)
+    msg = (rf"DeployedQuantisedConfidenceLUT: input dtype {re.escape(str(dtype))} is not supported: the fused CUDA "
+           rf"kernel takes fp32 input and writes fp32 output only \(on CPU the torch definition also takes fp64\)")
+    with pytest.raises(TypeError, match=msg):
+        d(torch.randn(8, 2, 6, device=device, dtype=dtype))
 
 
 def test_quant_config_and_wiring():

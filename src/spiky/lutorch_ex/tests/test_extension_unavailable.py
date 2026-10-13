@@ -210,6 +210,27 @@ def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
         _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _pow2_int8.EXT_NAME)
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("where", ["input", "table"])
+def test_fused_quantised_rejects_low_precision(where, dtype):
+    """FusedQuantisedConfidenceLUT is a fused CUDA cartridge, fp32 in / out only: a bf16 / fp16 input, or table, raises
+    RuntimeError naming it -- and does NOT point to the reference class, which does not take low precision either."""
+    import re
+    spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8)
+    m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, read_top_n=2).cuda()
+    x = torch.randn(8, 4, 8, device="cuda")
+    if where == "input":
+        x = x.to(dtype)
+        msg = rf"input dtype {re.escape(str(dtype))} \(the fused CUDA kernel takes fp32 input and writes fp32 output only\)"
+    else:
+        m = m.to(dtype)
+        msg = rf"table dtype {re.escape(str(dtype))} \(the fused CUDA kernel reads an fp32 table only\)"
+    with pytest.raises(RuntimeError, match=msg) as e:
+        m(x)
+    assert "Construct QuantisedConfidenceLUT" not in str(e.value)
+
+
 @pytest.mark.parametrize("case,kw,x", [
     ("the input is on cpu", dict(read_top_n=1), lambda: torch.randn(8, 4, 8)),   # n = 1 is covered; a CPU input is not
     ("anchor_mode='single'", dict(spec=dict(anchor_mode="single")), lambda: torch.randn(8, 4, 8)),

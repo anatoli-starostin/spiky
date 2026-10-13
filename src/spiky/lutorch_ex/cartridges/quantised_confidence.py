@@ -306,6 +306,11 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
         return self._route(self._quant_grp_out(u, c, c_alt, u_abs_star, frozen_coef=frozen_coef), x)
 
 
+#: The quantised family's fused CUDA kernels (quant_fwd / quant_bwd, deploy_fwd) take fp32 input and write fp32 output
+#: only (Anatoly's rule for the fused CUDA cartridges); one phrase for every message that refuses another dtype.
+FUSED_FP32_ONLY = "the fused CUDA kernel takes fp32 input and writes fp32 output only"
+
+
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     """The fused twin of :class:`QuantisedConfidenceLUT`: one fused CUDA forward; see the module docstring.
 
@@ -355,16 +360,19 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         if not x.is_cuda:
             problems.append(f"the input is on {x.device}, the kernel runs on CUDA only")
         if x.dtype != torch.float32:
-            problems.append(f"input dtype {x.dtype} (float32 only)")
+            problems.append(f"input dtype {x.dtype} ({FUSED_FP32_ONLY})")
         if self.weights.dtype != torch.float32:
-            problems.append(f"table dtype {self.weights.dtype} (float32 only)")
+            problems.append(f"table dtype {self.weights.dtype} (the fused CUDA kernel reads an fp32 table only)")
         d_out = self.spec.d_out
         vec = 4 if d_out % 4 == 0 else (2 if d_out % 2 == 0 else 1)
         if -(-(d_out // vec) // 32) * 32 > 1024:
             problems.append(f"d_out={d_out} needs more than 1024 threads per CTA at vec {vec}")
         if problems:
-            raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}. "
-                               f"Construct QuantisedConfidenceLUT (the reference class) for this case.")
+            # The reference class is offered for the cases it runs; not for a bf16 / fp16 input or table, which it does
+            # not take either.
+            lowp = x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
+            raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}."
+                               + ("" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."))
         if not _pow2_int8.ensure_registered():
             _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT_NAME)
 
@@ -445,9 +453,12 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference
         # No fp32 ``weights`` Parameter here (int8 ``packed`` instead), so the reference forward's low-precision guard
         # (which reads ``self.weights.dtype``) cannot run on it -- hence the override, rejecting bf16/fp16 on the input.
+        # On CUDA this is a fused CUDA cartridge: fp32 in / out only (fp64 is refused by _require_kernel); the CPU path
+        # runs the torch definition, which also takes fp64. The message is true on both devices.
         if x.dtype in _LOW_PRECISION:
             raise TypeError(
-                f"{type(self).__name__} is fp32/fp64 inference only; got input dtype {x.dtype}")
+                f"{type(self).__name__}: input dtype {x.dtype} is not supported: {FUSED_FP32_ONLY} (on CPU the torch "
+                f"definition also takes fp64)")
         if x.is_cuda:
             self._check_input(x)
             ext = self._require_kernel(x)
@@ -459,7 +470,7 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         NativeUnavailableError when only the extension is missing."""
         problems = []
         if x.dtype != torch.float32:
-            problems.append(f"input dtype {x.dtype} on CUDA (the kernel reads fp32 only)")
+            problems.append(f"input dtype {x.dtype} on CUDA ({FUSED_FP32_ONLY})")
         if self.spec.nap > 8:
             problems.append(f"nap={self.spec.nap} (max 8)")
         if self.spec.d_in > torch.iinfo(torch.int16).max:

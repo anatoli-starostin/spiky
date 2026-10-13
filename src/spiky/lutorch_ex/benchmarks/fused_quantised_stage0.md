@@ -1285,6 +1285,7 @@ All are within noise; no new snapshot of record is needed.
   - The cost is a second per-table pass in the reference's n=1 forward. The comment above it ("One logsigmoid pass is shared … instead of computing the score twice") no longer describes the k' half.
 - It went unseen because the row was never in the snapshot. That is exactly the exception Anatoly objected to.
 - **Not fixed here** (this task allows no library change). Whether to recover the time is a decision: for example, derive the kernel-order k' from intermediates already computed while keeping the bits identical, or accept the cost of the bit-exact export.
+  - **Decided 2026-10-13: ACCEPTED as is** (Anatoly: "we do not overoptimise reference code"). The reference stays as it is.
 
 ## FusedQuantisedConfidenceLUT at read_top_n = 1: a real fused training path
 
@@ -1348,7 +1349,7 @@ All are within noise; no new snapshot of record is needed.
 - All 5 rounds are tight (max/min within 1–4%), so no row needed a transient re-check.
 - **n=2 is unaffected by the templating:** the kernels alone, before vs after, 5 interleaved rounds, come in at bwd 1.973 vs 1.978 ms (8k) and 7.928 vs 7.943 ms (32k); fwd 0.517 vs 0.523 and 2.153 vs 2.169. All within noise.
 
-**The open n=1 REFERENCE question (the Stage 3 regression, ×1.28 eval) is unchanged.** The reference was left alone, but the question matters less now: n=1 training on CUDA has a fused path about 5× faster, so the reference is the oracle and the CPU path. The n=1 work does not hand over a cheap fix for the reference by itself. The route is the same as before: compute S and ls once with the kernel-order left folds and derive both s and k′ from them. That changes the reference's gradient bits, so it remains Anatoly's decision.
+**The open n=1 REFERENCE question (the Stage 3 regression, ×1.28 eval) is unchanged.** The reference was left alone, but the question matters less now: n=1 training on CUDA has a fused path about 5× faster, so the reference is the oracle and the CPU path. The n=1 work does not hand over a cheap fix for the reference by itself. The route is the same as before: compute S and ls once with the kernel-order left folds and derive both s and k′ from them. That changes the reference's gradient bits, so it remains Anatoly's decision. **Decided 2026-10-13: accepted as is** (Anatoly: "we do not overoptimise reference code").
 
 ## Snapshot of record v3: one session, every cell, the n=1 rows included
 
@@ -1426,3 +1427,22 @@ Conditions: SM up to 3.07 GHz, 31–44 C. **No throttle or power-cap flag on any
   - the committed `figures_164_presave_vs_164_v2/` re-drawn by the new code are identical;
   - on #160 → #162 (24 OOM → fits cells, no after-only rows) the new and the previous bench_compare produce identical PNGs.
 - (The committed `figures_160_vs_162/` themselves predate the noise-floor extension, so neither version reproduces them. That is history, not this change.)
+
+## Dtype rule for the quantised fused family (Anatoly's simplification, 2026-10-13)
+
+**The rule:** fused CUDA cartridges are fp32 in / out. The deployed quantised class is a fused CUDA cartridge. Reference cartridges are pure PyTorch and are not advertised as refusing anything.
+
+**Scope: the quantised family only** -- FusedQuantisedConfidenceLUT and DeployedQuantisedConfidenceLUT. The Manifesto and Confidence fused classes keep their existing bf16 support (their bf16 kernels are their fastest measured path), so their messages and tests are unchanged.
+
+**Messages now** (one phrase, `FUSED_FP32_ONLY` in `cartridges/quantised_confidence.py`: "the fused CUDA kernel takes fp32 input and writes fp32 output only"):
+- **DeployedQuantisedConfidenceLUT**, bf16 / fp16 input, either device: `TypeError`, "...: input dtype <d> is not supported: the fused CUDA kernel takes fp32 input and writes fp32 output only (on CPU the torch definition also takes fp64)". It was "is fp32/fp64 inference only", which was false on CUDA.
+- **DeployedQuantisedConfidenceLUT**, any other non-fp32 input on CUDA (fp64): `RuntimeError`, "input dtype <d> on CUDA (the fused CUDA kernel ...)".
+- **FusedQuantisedConfidenceLUT**: `RuntimeError` with "input dtype <d> (the fused CUDA kernel ...)" / "table dtype <d> (the fused CUDA kernel reads an fp32 table only)".
+  - The advice "Construct QuantisedConfidenceLUT (the reference class) for this case" is no longer given for a bf16 / fp16 input or table. It was false there: the reference does not take low precision either. It is kept for the cases the reference does run (single anchors, nap > 8, a CPU input, fp64).
+- The C++ `TORCH_CHECK`s ("z: contiguous fp32 CUDA ...", "W: contiguous fp32 ...") stay as the internal backstop. They were already consistent.
+- The reference (QuantisedConfidenceLUT) is unchanged.
+
+**Tests added:**
+- `test_quantised_confidence.py::test_deployed_rejects_low_precision_input`: read_top_n 1 / 2 × bf16 / fp16 × every device.
+- `test_extension_unavailable.py::test_fused_quantised_rejects_low_precision`: input / table × bf16 / fp16, CUDA. It also asserts that the reference is NOT offered.
+
