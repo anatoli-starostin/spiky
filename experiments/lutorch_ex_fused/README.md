@@ -37,10 +37,18 @@ and the weight ordering flips with the read — under HARD rational<softsign, un
 `fms_softsign` is the strongest manifesto arm, within ~0.013 of the confidence reference. All on the full
 170-shard corpus; NOT comparable to abl47-family numbers (see aux_runs/README.md).
 
-Deferred (NOT included): the 2 **quantised** fused confidence ablations. `FusedQuantisedConfidenceLUT`
-n=1 hard-raises (`_require`: two-cell read only); n=2 has a fused forward but is the deferred,
-not-yet-equivalence-blessed path. Run those from the reference `QuantisedConfidenceLUT`, or wait for
-the quantised follow-up PR.
+Quantised arms 07/08 (added after the main-merge): `07_qconf_n1` and `08_qconf_n2` run
+`FusedQuantisedConfidenceLUT(quant_mode="p2_int8")` at read_top_n 1 and 2.
+- **STALE-NOTE CORRECTION:** the earlier deferral ("`FusedQuantisedConfidenceLUT` n=1 hard-raises /
+  two-cell-only") is **no longer true** — the merged main library (HEAD 53d34c50) rewrote the pow2_int8
+  path and `FusedQuantisedConfidenceLUT` now covers read_top_n **1 and 2** (smoke-verified: 07 n=1 and 08
+  n=2 both build + train). `quant_mode` defaults to `p2_int8`; the quant is fake-quant STE with no extra
+  learnable params (07 = 68,237,580 params like conf_n1; 08 = 68,237,586 like conf_n2).
+- **Trainer note:** 07/08 use a train.py that is the verified reference (md5 6ebb49ec…) plus ONE additive
+  `build_cartridge` branch (qconf_n1/qconf_n2 → FusedQuantisedConfidenceLUT) and the matching import — so its
+  md5 is `f8ded6fe…`, DIFFERENT from 01-06's `6ebb49ec…`, by explicit authorization. Everything else
+  (geometry, faithful init, optimizer grouping, LR/cosine schedule, grad_accum, TV λ=10, table dropout 0.2,
+  fixed_eval) is byte-identical to the reference.
 
 ## Shared geometry / settings (identical in all 6 config.json)
 LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs"); 6 blocks, n_embd 384,
