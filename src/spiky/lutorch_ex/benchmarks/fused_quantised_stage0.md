@@ -1066,3 +1066,22 @@ All are within noise; no new snapshot of record is needed.
 
 - **Deployed n=2 eval:** 0.310 / 1.254 ms against FusedConfidence bf16 0.320 / 1.254, so level.
 - **Deployed n=1 eval:** 0.220 / 0.892 ms.
+
+## Stopping point: the per-table-integer saving is declined
+
+**Decision (Anatoly):** #164's performance work stops here.
+
+**The remaining candidate is not being done.** It was #1 of the backward diagnosis: save each table's integers (c1, c2, k', q; 4 bytes per table) in the forward, so the backward reads them instead of re-running `p2::table_scalars`.
+- Measured gain: 0.05–0.12 ms at 8k, 0.5–1.1 ms at 32k. Bit-exact.
+- Cost: +134 MB at 32k; training peak 0.236 → ~0.37 GiB, which gives up peak-memory parity with FusedConfidenceLUT.
+
+**Why:** keeping FusedQuantisedConfidenceLUT's training peak equal to FusedConfidenceLUT's (0.236 GiB at 32k) is worth more than the time.
+- The gap that is accepted, measured against #162 re-measured in one session: train **+9.0% at 8k** and **+7.7% at 32k** against FusedConfidence fp32 (eval +8.6% / +4.2%).
+- That is above the ~+6% originally aimed for, and the record says so plainly.
+- This is a deliberate trade, not unfinished work.
+
+**What the residual gap is:** the backward kernel's diffuse quant-specific arithmetic, mostly the phase-A recompute that the declined option would have removed. No single hot spot is left. The table-exponent read already runs at torch's bandwidth.
+
+**Not proposed:**
+- parallelising the grad-x gather (≤ 0.1 ms; it changes grad-x bits);
+- bf16 tables (see the bf16 investigation) remain a possible follow-up only if wanted.
