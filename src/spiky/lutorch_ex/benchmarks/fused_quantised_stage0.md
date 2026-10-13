@@ -973,6 +973,8 @@ All are within noise; no new snapshot of record is needed.
 
 ## Snapshot of record for #164, and the delta against #160
 
+> **Superseded 2026-10-13** by the v2 snapshots ("Snapshot of record v2" below). This section records #164 BEFORE the per-table-integer saving.
+
 **Files:**
 - `benchmarks/snapshot_164.json` / `.md`: #164 HEAD `a251a82f`.
 - `benchmarks/snapshot_160_remeasured.json` / `.md`: #160's library code `a811390e`, the commit `snapshot_160.json` was measured at.
@@ -1022,6 +1024,8 @@ All are within noise; no new snapshot of record is needed.
 
 ## The delta against #162 (the parent), re-measured in one session
 
+> **Superseded 2026-10-13** by the v2 snapshots ("Snapshot of record v2" below). This section records #164 BEFORE the per-table-integer saving.
+
 #162 is #164's actual parent, so this is the primary comparison. The #160 one above is the cumulative picture across #162 and #164.
 
 **Files:**
@@ -1067,7 +1071,9 @@ All are within noise; no new snapshot of record is needed.
 - **Deployed n=2 eval:** 0.310 / 1.254 ms against FusedConfidence bf16 0.320 / 1.254, so level.
 - **Deployed n=1 eval:** 0.220 / 0.892 ms.
 
-## Stopping point: the per-table-integer saving is declined
+## Stopping point (later reversed): the per-table-integer saving was declined
+
+> **Amended 2026-10-13: this decision was reversed on measurement.** The saving was implemented (ae931703), measured and **kept**; peak-memory parity with FusedConfidence is given up. See "The per-table-integer saving, implemented and measured" and "Decision: the per-table-integer saving is kept" below. The text of this section is left as written at the time.
 
 **Decision (Anatoly):** #164's performance work stops here.
 
@@ -1123,3 +1129,95 @@ All are within noise; no new snapshot of record is needed.
 - At 32k the backward now runs level with FusedConfidence's (7.49 vs 7.49 ms).
 - The session's before-gaps (+7.9% / +6.1%) are lower than the recorded +9.0% / +7.7%. That is session-to-session variation; the deltas above are within one session.
 - GPU state: 36–52 °C. The only throttle reason seen was the software power cap (0x4), intermittently, on both trees.
+
+## Decision: the per-table-integer saving is kept
+
+**The sequence, plainly:**
+1. The saving was first **declined**, to keep FusedQuantisedConfidenceLUT's training peak equal to FusedConfidenceLUT's (see "Stopping point" above, written at the time).
+2. Anatoly then asked for it to be implemented and measured, accepting that parity would break (ae931703; previous section).
+3. Once measured, it was **kept** (Anatoly, 2026-10-13). The reason is the measurement: in the dedicated A/B session the 32k train gap against FusedConfidence fp32 fell from +6.1% to +1.1%, with the backward level with FusedConfidence's (7.49 vs 7.49 ms).
+
+**What is kept:**
+- The forward stores each table's integers as one packed int32 (c1 | c2 << 8 | (k' + 8) << 16 | q << 20 | skip << 27; 28 bits over the validated range).
+- The backward reads them instead of re-running `p2::table_scalars`. It is bit-exact; only the gW atomic order varies, as before.
+- The integers are stored only when a backward can follow. Eval / no_grad forwards allocate nothing, so **the memory cost is training-only**.
+
+**Measured gain** (A/B, one session, interleaved; previous section):
+- `quant_bwd` kernel: 8k 2.094 → 1.979 ms, 32k 8.361 → 7.930 ms (−5.5% / −5.2%).
+- The forward's store costs +0.017 ms at 8k and +0.099 ms at 32k.
+- E2E train −3.2% at 8k and −4.7% at 32k; eval unchanged.
+
+**Accepted memory cost (measured):**
+- Training peak 8k 0.0941 → 0.1254 GiB; 32k 0.2358 → 0.3608 GiB (+134.2 MB), matching the projection.
+- **Peak-memory parity with FusedConfidence (0.0941 / 0.2358 GiB) is deliberately given up** in exchange for the time.
+
+**The gaps drift between sessions by a few percent.** Every delta here is within one session; the absolute gap against FusedConfidence fp32 is not a stable number.
+
+| HEAD (after the saving) vs FusedConfidence fp32 | train 8k | train 32k | eval 8k | eval 32k |
+|---|---|---|---|---|
+| A/B session (5 rounds, previous section) | +4.5% | +1.1% | +9.0% | +7.5% |
+| v2 snapshot of record (below) | +5.7% | +4.3% | +8.7% | +5.1% |
+| pre-saving pair session (below) | +6.3% | +3.9% | +9.1% | +3.1% |
+
+- The same code before the saving measured +7.9% / +6.1% (A/B) and +8.4% / +8.5% (pre-saving pair session) on train. The earlier recorded +9.0% / +7.7% came from yet another session.
+- The ~+6% bound is now met at 32k in every session. At 8k it is met in two of three (+6.3% in the third).
+- Eval does not move: its code path did not change.
+- The backward is level with FusedConfidence's only in the A/B session (7.49 vs 7.49 ms). In the two snapshot sessions it is +4.3% / +3.9%.
+
+## Snapshot of record v2 (after the saving), re-measured against #162 and #160
+
+**Why v2:** the earlier snapshot of record (`snapshot_164.json`, `snapshot_164_vs162.json`) predates the saving. Its FusedQuantised train times are 3–5% stale and its training peaks are 33% (8k) / 53% (32k) too low.
+
+**All three trees in ONE session.** #162's code (c8e48c36), #160's code (a811390e) and #164 HEAD (d73edfad) were all re-measured today, 2026-10-13.
+- The earlier re-measured baselines came from an earlier session, so they were NOT reused.
+- The trees were interleaved cell by cell in a rotating order; each tree went first in a third of the cells.
+- Each tree ran under its own `bench_snapshot`: fresh process per cell, Dynamo reset, 10 warm-up + 30 timed, median.
+- One measurement of HEAD serves as the after side of both comparisons.
+- Conditions: SM up to 3.07 GHz, 32–44 C, **no throttle or power-cap flag on any cell**. The intermittent software power cap 0x4 from the A/B run did not recur.
+
+**Files (new; the earlier ones are kept as the record of #164 before the saving):**
+- `snapshot_164_v2.{json,md}`: HEAD, **the snapshot of record**.
+- `snapshot_162_remeasured_v2.{json,md}` and `snapshot_160_remeasured_v2.{json,md}`: the baselines.
+- `figures_162_remeasured_vs_164_v2/` (primary, #162 being the parent) and `figures_160_vs_164_v2/` (cumulative): `bench_compare.py --same-session`.
+- `snapshot_164_presave.{json,md}` (9a9f0891) and `snapshot_164_v2_vs_presave.{json,md}` (HEAD), with `figures_164_presave_vs_164_v2/`: the saving's own delta, a second same-session pair from a later session.
+
+**Which figure directory is which:**
+
+| directory | before → after | status |
+|---|---|---|
+| `figures_162_remeasured_vs_164_v2/` | #162 → #164 HEAD after the saving, one session | **current, primary** |
+| `figures_160_vs_164_v2/` | #160 → #164 HEAD after the saving, one session | **current, cumulative** |
+| `figures_164_presave_vs_164_v2/` | #164 before the saving → after it, one session | **current: shows the saving's cost** |
+| `figures_162_remeasured_vs_164/`, `figures_160_vs_164/` | the baselines → #164 before the saving | historical |
+| `figures_162_vs_164/` | different sessions, first #164 snapshot (41df6f25) | historical |
+
+**Against #162 (420 values):** time 10 better, 0 worse, 200 within noise; memory 10 better, 0 worse, 200 within noise.
+- The beyond-noise cells are FusedQuantised (every time cell ×0.20–0.24, every peak ×0.06–0.16) and Deployed eval (×0.107 / ×0.074 time, ×0.057 peak).
+- The FusedQuantised training peaks are still far below #162's (×0.133 at 8k, ×0.099 at 32k). **So the saving's memory cost does not show as a regression against #162 or #160.** Their baselines were 7–15× larger.
+
+**Against #160 (420 values):** time 20 better, 4 worse, 174 within noise, 12 OOM → fits; memory 26 better, 0 worse, 172 within noise, 12 OOM → fits.
+- The 4 regressions are ManifestoHard / ManifestoHard·softsign 8k train backward ×1.21–1.23, #162's surrogate, as before.
+
+**The saving's own cost, made visible (#164 before → after the saving, 424 values):**
+- **Memory: 6 regressions beyond noise, all FusedQuantised training peaks:**
+  - train forward ×2.33 at 8k and 32k;
+  - train backward and train total ×1.33 at 8k (0.0941 → 0.1254 GiB) and ×1.53 at 32k (0.2358 → 0.3608 GiB).
+  - This is the accepted cost. It is correct and expected, and the figures show it in orange with a black ×ratio.
+- **Every other memory cell is within noise**, eval peaks included: no-grad stores nothing.
+- **Time: all 212 cells are within noise.**
+  - FusedQuantised train total 2.679 → 2.598 ms (×0.970) at 8k and 10.189 → 9.755 ms (×0.957) at 32k. Train backward 2.088 → 2.001 and 8.140 → 7.693 ms.
+  - Real gains, but inside the per-cell floors (±10% at 8k, ±6% at 32k) of a single snapshot. The repeated A/B above is what resolves them.
+- **One transient, re-measured:** FusedManifestoHard·softsign 8k bf16 (code untouched) came out ×1.18 on train forward. The 9a9f0891 cell read 0.247 ms against 0.292 for HEAD.
+  - Three interleaved re-runs gave 0.292–0.293 ms on both trees.
+  - The row was re-measured on both trees and replaced; both `.md` headers record the original values.
+
+**Key cells (fp32, ms / GiB), v2 session:**
+
+| | #162 (re-measured v2) | #164 HEAD v2 | FusedConfidence n=2 fp32 | FusedConfidence n=2 bf16 |
+|---|---|---|---|---|
+| FusedQuantised 8k eval | 2.523 / 0.415 | **0.520 / 0.023** | 0.478 / 0.023 | 0.318 / 0.012 |
+| FusedQuantised 8k train | 12.377 / 0.946 | **2.603 / 0.125** | 2.463 / 0.094 | 2.218 / 0.094 |
+| FusedQuantised 32k eval | 9.682 / 1.658 | **1.973 / 0.094** | 1.877 / 0.094 | 1.256 / 0.047 |
+| FusedQuantised 32k train | 48.433 / 3.641 | **9.749 / 0.361** | 9.350 / 0.236 | 8.412 / 0.236 |
+| Deployed n=2 8k / 32k eval | 2.897 / 16.806 | **0.310 / 1.250** | 0.478 / 1.877 | 0.318 / 1.256 |
+| Deployed n=1 8k / 32k eval | — | **0.221 / 0.891** | | |
