@@ -1239,13 +1239,13 @@ All are within noise; no new snapshot of record is needed.
 | QuantisedConfidenceLUT | n=2 | yes | – |
 | **QuantisedConfidenceLUT** | **n=1** | **no** | **(a) oversight: added in bd4e5dcb** |
 | FusedQuantisedConfidenceLUT | n=2 | yes | – |
-| FusedQuantisedConfidenceLUT | n=1 | no | **(b) impossible, a deliberate absence:** the class covers the two-cell read only and raises `RuntimeError` at the forward for read_top_n=1 (`_require`); its kernels have no n=1 form |
+| FusedQuantisedConfidenceLUT | n=1 | no | not measurable at the time: the fused class raised `RuntimeError` at the forward for read_top_n=1 and its kernels had no n=1 form -- **a limitation of the implementation, not a design decision** (corrected below; implemented in 0b3de742) |
 | DeployedQuantisedConfidenceLUT | n=1, n=2 (eval) | yes | train cells do not exist: inference-only, no Parameters, no backward |
 
 - **bf16** is measured for every row. It is refused, by design, for the quantised reference (`TypeError`: no low precision), for FusedQuantised (fp32 input only) and for Deployed. Those cells show as refused / error rows, not gaps.
 - **No other asymmetry.** The Manifesto family has both weights on both reference and fused classes; Confidence and FusedConfidence have both read widths. The confidence family has no `weight=` option (`_WEIGHTED = False`).
 - **Outside the class × read_top_n × dtype matrix and deliberately unchanged:** fp16 inputs (accepted by some classes, never part of the snapshot's dtype axis, for any class), single-anchor mode and other geometries. These are consistent across classes, not omissions of one class.
-- The cell list stays a constant in the code (no flag, no switch). It now carries a comment on the FusedQuantised n=1 absence.
+- The cell list stays a constant in the code (no flag, no switch). (A comment there briefly called the FusedQuantised n=1 gap deliberate; it was removed with the n=1 implementation, see the next section.)
 
 **Measured as an ADDENDUM, not merged into v2.** The v2 snapshot of record and its two baselines come from one interleaved session. Adding a row measured later would mix sessions inside one snapshot, so the new row was measured on its own: #162 (c8e48c36), #160 (a811390e) and HEAD (bd4e5dcb), one session, interleaved cell by cell in a rotating order, fresh process per cell.
 - Each tree ran its OWN `bench_snapshot.measure()` with its own `_conf(QuantisedConfidenceLUT, 1)`: the per-cell path its CLI runs. The #160 / #162 cell lists predate the row, so their CLI could not name it. `measure()` is the same code in all three trees for a training class; the only differences are in the deployed branch.
@@ -1285,3 +1285,67 @@ All are within noise; no new snapshot of record is needed.
   - The cost is a second per-table pass in the reference's n=1 forward. The comment above it ("One logsigmoid pass is shared … instead of computing the score twice") no longer describes the k' half.
 - It went unseen because the row was never in the snapshot. That is exactly the exception Anatoly objected to.
 - **Not fixed here** (this task allows no library change). Whether to recover the time is a decision: for example, derive the kernel-order k' from intermediates already computed while keeping the bits identical, or accept the cost of the bit-exact export.
+
+## FusedQuantisedConfidenceLUT at read_top_n = 1: a real fused training path
+
+**Correction to the audit above.** It called the missing FusedQuantised n=1 cell "a deliberate absence". It was not. It was a limitation of the fused implementation, and no design decision was ever taken to exclude n=1. That wording has been removed from bench_snapshot and the PR. The gap is now closed instead.
+
+**Kernels.**
+- `quant_fwd_kernel` and `quant_bwd_kernel` are templated on the read width, as `deploy_fwd_kernel` already was: `<VEC>` → `<VEC, N>`, with N = 1 and N = 2 instantiated. The code picks N from `read_top_n`; there is no switch and no fallback.
+- N = 1 uses `p2::single_scalars` (k′, skip; c1 = the bits d > 0) and does no two-cell work (`if constexpr`):
+  - no second cell is loaded or atomically added;
+  - no blend, no τ (`log_tau` is never read, and the host takes it as optional), no argmin term;
+  - shared memory holds no second-cell arrays.
+- **Backward at N = 1** is `QuantisedConfidenceLUT._ste_score_weight`'s straight-through rule: G = r · mask · b / max(s, 1e-30), and g_s = G. Only S and ls reach the margins and β / γ. Atomics remain on grad weights only. No fp64 anywhere.
+- **The deployed n=1 kernel needed nothing.** `deploy_fwd_kernel<VEC, 1>` was already a real N = 1 instantiation of the same template (`if constexpr (N == 2)` / `p2::single_scalars`, and phase B loops `n < N`). Its output is bit-identical before and after (fingerprint). It runs 0.221 / 0.891 ms against n=2's 0.310 / 1.250 (v2 snapshot).
+
+**Packing.**
+- N = 1 stores `c1 | (k′ + 8) << 16 | skip << 27`: the n=2 layout with c2 = q = 0.
+- The bit ranges are checked, not assumed: c1 < 2^nap ≤ 256 (8 bits), and k′ + 8 ∈ [5, 12] (4 bits) given the window [−3, 4].
+- The host now checks the window itself (lo ≥ −3, hi ≤ 4, Q ∈ [0, 3]), as the p2_scalars op does. This covers n=2 too.
+- As at n=2, the integers are saved only when a backward can follow, so eval / no_grad allocates nothing.
+
+**fp32 exactness at n = 1, re-derived rather than inherited.** It is recorded beside the n=1 read in `QuantisedConfidenceLUT._quant_grp_out`.
+- Each term is Ŵ · 2^(e + k′): an integer multiple of 2^(e + lo), of magnitude at most 128 · 2^(hi − lo) = 2^14.
+- A bag holds tph terms, so the read is exact for tph ≤ 1024 at the preset, and in general for tph ≤ 2^(17 − (hi − lo)). This is 8× more room than n=2 (tph ≤ 64).
+- It fails for a wider window, or with table dropout.
+- In the n=2 argument, |Ŵ| ≤ 127 was corrected to 128 (int8 reaches −128). Its bound becomes exactly 2^24, which is still representable, so the conclusion is unchanged.
+
+**Verification.**
+- **Integers:** the n=1 packed integers were compared with `p2::single_scalars`, called directly from a scratch build with `--fmad=false`.
+  - 65,041,455 tables, **0 mismatches**.
+  - Coverage: 12 geometries (tph 1–255, nap 1–8, d_out 1–257) × 5 β/γ settings × 3 input scales. Every k′ in [−3, 4] occurs and skip is exercised; q does not exist at n=1, and the c2 / q fields are always 0.
+  - out(save) == out(no save).
+  - grad x, β and γ are bit-identical run to run; grad weights is not (atomics).
+- **Fingerprint vs 3e8eec29:** FusedQuantised n=2 differs only in grad weights (atomic order). The reference n=1 / n=2 and Deployed n=1 / n=2 are bit-identical.
+- **Tests (+23):**
+  - the Amendment D harness has "Quantised n=1": 12 geometries, and every leaf (value, grad x, grad weights, β, γ; no τ at n=1);
+  - "Quantised n=1 score frozen";
+  - **Layer 1 at n=1:** fused vs the eager reference, bit for bit with zero tolerance (integers, eval value and train value), champion and tph 128, 2 seeds;
+  - **Layer 2 at n=1:** compiled vs eager in fp64;
+  - Layer 1 with table dropout at n=1: the n=2 test's checks and bounds. As at n=2 it is not bit for bit, because 1/(1 − rate) rounds;
+  - a trained fused cartridge exports and round-trips, n=1 and n=2.
+  - One existing case asserted the old limitation ("read_top_n=1" is not covered). It now asserts that n=1 with a CPU input still raises, naming the reference.
+  - These tests close the two n=1 gaps the fact-check found: grad weights at n=1, and the compiled CUDA n=1 backward. Both were previously only smoke-tested.
+- **Suites:** GPU 1634 passed / 0 failed / 0 skipped (1611 + 23). CPU 439 passed / 1047 skipped (1024 + 23, all CUDA-only).
+
+**Measured** in one session: HEAD 0b3de742, its own `bench_snapshot` per cell, fresh process, 5 rounds, the three cartridges interleaved in a rotating order, fp32. Conditions: SM up to 3.06 GHz, 33–39 C, no throttle or power-cap flag. Values are ms, with GiB peak in brackets.
+
+| | FusedQuantised n=1 | Quantised n=1 (reference) | FusedConfidence n=1 | fused / reference | vs FusedConfidence |
+|---|---|---|---|---|---|
+| 8k eval | 0.303 (0.023) | 1.651 (0.165) | 0.267 (0.023) | ×0.18 | +13.5% |
+| 8k train forward | 0.389 (0.055) | 1.710 (0.228) | 0.326 (0.023) | ×0.23 | +19.5% |
+| 8k train backward | 1.203 (0.125) | 5.495 (0.556) | 1.227 (0.094) | ×0.22 | −2.0% |
+| 8k train total | **1.599** (0.125) | 7.207 (0.556) | 1.544 (0.094) | ×0.22 | **+3.5%** |
+| 32k eval | 1.165 (0.094) | 6.175 (0.520) | 1.045 (0.094) | ×0.19 | +11.4% |
+| 32k train forward | 1.360 (0.219) | 6.254 (0.770) | 1.141 (0.094) | ×0.22 | +19.2% |
+| 32k train backward | 4.402 (0.361) | 21.392 (1.953) | 4.722 (0.236) | ×0.21 | −6.8% |
+| 32k train total | **5.761** (0.361) | 27.648 (1.953) | 5.864 (0.236) | ×0.21 | **−1.8%** |
+
+- **Training: the fused quantised n=1 cartridge is a hair from the fused non-quantised one.** It is +3.5% at 8k and −1.8% at 32k, where it is slightly faster. Its backward beats FusedConfidence's at both sizes.
+- **Eval is +11–14%:** the table-exponent launches plus the in-register fake-quant.
+- **Training peak is above FusedConfidence's** (0.125 vs 0.094 GiB at 8k, 0.361 vs 0.236 at 32k). That is the saved per-table integers: the same cost accepted at n=2.
+- All 5 rounds are tight (max/min within 1–4%), so no row needed a transient re-check.
+- **n=2 is unaffected by the templating:** the kernels alone, before vs after, 5 interleaved rounds, come in at bwd 1.973 vs 1.978 ms (8k) and 7.928 vs 7.943 ms (32k); fwd 0.517 vs 0.523 and 2.153 vs 2.169. All within noise.
+
+**The open n=1 REFERENCE question (the Stage 3 regression, ×1.28 eval) is unchanged.** The reference was left alone, but the question matters less now: n=1 training on CUDA has a fused path about 5× faster, so the reference is the oracle and the CPU path. The n=1 work does not hand over a cheap fix for the reference by itself. The route is the same as before: compute S and ls once with the kernel-order left folds and derive both s and k′ from them. That changes the reference's gradient bits, so it remains Anatoly's decision.
