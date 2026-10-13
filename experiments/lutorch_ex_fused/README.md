@@ -20,6 +20,23 @@ One folder per ablation; each has a **self-contained `train.py` with the model d
 | 05_conf_n2      | FusedConfidenceLUT(read_top_n=2)         | conf (ref n=2)   | 1.10606 |
 | 06_conf_n1      | FusedConfidenceLUT(read_top_n=1)         | conf_n1 (ref n=1)| 1.11737 |
 
+### Results on the full 170-shard corpus (48k steps) — THESE are the comparable numbers
+(The "old val_bpb" column above is abl47-family, 4-shard/~7-epoch — NOT comparable to anything below.)
+
+| run | cartridge | val_bpb (170-shard, 48k) | Δ vs 06_conf_n1 | σ vs seed cluster |
+|---|---|---:|---:|---:|
+| 06_conf_n1      | FusedConfidenceLUT(read_top_n=1)   | **1.096980** (seeds 1.096980 / 1.096822 / 1.094599; mean 1.09613, σ 0.001331) | 0 | 0 |
+| 04_fms_softsign | FusedManifestoSoftLUT(softsign)    | 1.109537 | +0.012557 | +10.1σ |
+| 03_fms_rational | FusedManifestoSoftLUT(rational)    | 1.118633 | +0.021653 | +16.9σ |
+| 01_fmh_rational | FusedManifestoHardLUT(rational)    | 1.132425 | +0.035445 | +27.3σ |
+| 02_fmh_softsign | FusedManifestoHardLUT(softsign)    | 1.137804 | +0.040824 | +31.3σ |
+| 05_conf_n2      | FusedConfidenceLUT(read_top_n=2)   | (pending) | — | — |
+
+Reads: confidence (n=1) is best; **soft manifesto beats hard** for both weights (rational +0.0138, softsign +0.0283);
+and the weight ordering flips with the read — under HARD rational<softsign, under SOFT softsign<rational — so
+`fms_softsign` is the strongest manifesto arm, within ~0.013 of the confidence reference. All on the full
+170-shard corpus; NOT comparable to abl47-family numbers (see aux_runs/README.md).
+
 Deferred (NOT included): the 2 **quantised** fused confidence ablations. `FusedQuantisedConfidenceLUT`
 n=1 hard-raises (`_require`: two-cell read only); n=2 has a fused forward but is the deferred,
 not-yet-equivalence-blessed path. Run those from the reference `QuantisedConfidenceLUT`, or wait for
