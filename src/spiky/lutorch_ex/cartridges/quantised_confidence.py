@@ -194,7 +194,7 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     #: Measured at 32,768 vectors, fp32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
     #: reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90 (also at 1000). Train total unchanged.
     #: Version-dependent: a torch upgrade can rename the options or change the heuristic; the snapshot of record
-    #: (bench_snapshot) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
+    #: (benchmarks/bench_snapshot) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
     _COMPILE_OPTIONS = {"realize_reads_threshold": 8, "realize_opcount_threshold": 100}
 
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):

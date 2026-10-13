@@ -1,6 +1,6 @@
 """Compare two performance snapshots of record (bench_snapshot JSON) and draw the comparison figures.
 
-    python -m spiky.lutorch_ex.bench_compare benchmarks/snapshot_159.json benchmarks/snapshot_162.json \
+    python -m spiky.lutorch_ex.benchmarks.bench_compare benchmarks/snapshot_159.json benchmarks/snapshot_162.json \
         --out-dir benchmarks/figures_159_vs_162
 
 reads two snapshot JSONs (nothing else: no PR text, no benchmark run) and writes five PNGs: interleaved before / after

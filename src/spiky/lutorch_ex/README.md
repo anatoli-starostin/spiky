@@ -459,21 +459,21 @@ Scope today:
 ## Benchmarking
 
 The performance snapshot of record (every class, fp32 and bf16, 8k and 32k vectors, RTX 5090) is
-`benchmarks/snapshot_162.md` / `.json`, made by `python -m spiky.lutorch_ex.bench_snapshot`. Earlier snapshots stay as
+`benchmarks/snapshot_162.md` / `.json`, made by `python -m spiky.lutorch_ex.benchmarks.bench_snapshot`. Earlier snapshots stay as
 history: `snapshot_160` and `snapshot_159.json` (#159's, transcribed from its PR comment: 2 decimals, a different
-session). `python -m spiky.lutorch_ex.bench_compare A.json B.json --out-dir DIR` compares any two of them (interleaved
+session). `python -m spiky.lutorch_ex.benchmarks.bench_compare A.json B.json --out-dir DIR` compares any two of them (interleaved
 before / after bars and a ratio strip; matplotlib needed). Two committed figure sets:
 - `benchmarks/figures_159_vs_162/`: the cumulative change across #160 and #162 (#159's snapshot has 2 decimals and a
   different session: not a controlled A/B);
 - `benchmarks/figures_160_vs_162/`: #162's effect alone (the quantised reference's compile options, ManifestoHardLUT's
   surrogate); the other cells that move there are run-to-run noise.
 
-`spiky.lutorch_ex.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
+`spiky.lutorch_ex.benchmarks.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
 grid of batch sizes and devices. It reports the median and minimum milliseconds and the throughput:
 
 ```python
 from spiky.lutorch_ex import LUTSpec, ConfidenceLUT
-from spiky.lutorch_ex.bench import benchmark, format_table
+from spiky.lutorch_ex.benchmarks.bench import benchmark, format_table
 
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
 rows = benchmark(lambda: ConfidenceLUT(spec, seed=1, read_top_n=2), name="ConfidenceLUT n=2",
@@ -490,7 +490,7 @@ How `devices` are interpreted:
   grid.
 - `rows_to_json` and `rows_to_csv` export the rows.
 
-As a script, `python -m spiky.lutorch_ex.bench [--warmup N] [--repeats N] [--measure-cuda] [--json PATH]
+As a script, `python -m spiky.lutorch_ex.benchmarks.bench [--warmup N] [--repeats N] [--measure-cuda] [--json PATH]
 [--csv PATH]` runs a fixed demo: `ManifestoHardLUT` and `ManifestoSoftLUT` at a small geometry. For other
 cartridges, call `benchmark()` as above.
 
@@ -530,10 +530,6 @@ lutorch_ex/
 ├── fp8.py               opt-in fp8 GEMMs for ProjectionMHL's projections (tensorwise e4m3/e5m2, fp32 master)
 ├── deploy.py            export_deployment / load_deployment
 ├── deploy_registry.py   format tag -> rebuilder registry
-├── bench.py             the benchmark harness
-├── bench_snapshot.py    the performance snapshot of record (every class, one fresh process per cell)
-├── bench_compare.py     two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
-├── bench_fused_confidence.py   FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
 ├── cartridges/
 │   ├── manifesto_base.py            ManifestoLUT: tables, anchors, addressing, routing, cell TV, table dropout
 │   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
@@ -552,6 +548,11 @@ lutorch_ex/
 │   ├── _fallback.py                 classified "extension unavailable" errors (NativeUnavailableError)
 │   ├── uncertainty.py               rational_uncertainty
 │   └── csrc/                        CUDA / C++ kernel sources
-├── benchmarks/          snapshots of record (snapshot_<PR>.md / .json) and the comparison figures
+├── benchmarks/
+│   ├── bench.py                     the benchmark harness
+│   ├── bench_snapshot.py            the performance snapshot of record (every class, one fresh process per cell)
+│   ├── bench_compare.py             two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
+│   ├── bench_fused_confidence.py    FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
+│   └── snapshot_<PR>.md / .json, figures_*/, fused_quantised_stage0.md   the records
 └── tests/               pytest suite
 ```

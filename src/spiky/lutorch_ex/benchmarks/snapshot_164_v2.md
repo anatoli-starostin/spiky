@@ -80,3 +80,5 @@ Comparisons: `figures_162_remeasured_vs_164_v2/` (primary, #162 being the parent
 | large | DeployedQuantisedConfidenceLUT | bfloat16 | refused: DeployedQuantisedConfidenceLUT is fp32/fp64 inference only; got input dtype torch.bfloat16 | - | - | - | - | - | - | - | - |
 | large | DeployedQuantisedConfidenceLUT n=1 | float32 | ok | 0.891 | 0.094 | - | - | - | - | - | - |
 | large | DeployedQuantisedConfidenceLUT n=1 | bfloat16 | refused: DeployedQuantisedConfidenceLUT is fp32/fp64 inference only; got input dtype torch.bfloat16 | - | - | - | - | - | - | - | - |
+
+> **Note (2026-10-13):** the benchmark modules have since moved: `spiky.lutorch_ex.bench_snapshot` is now `spiky.lutorch_ex.benchmarks.bench_snapshot` (likewise `bench`, `bench_compare`, `bench_fused_confidence`). The command above is recorded as it was run.

@@ -2,7 +2,7 @@
 and (where the class accepts it) bf16. Four measurements per cell, each as median latency and peak memory:
 eval forward, train forward, train backward, train total (forward + backward).
 
-    python -m spiky.lutorch_ex.bench_snapshot --out snapshot.json --md snapshot.md
+    python -m spiky.lutorch_ex.benchmarks.bench_snapshot --out snapshot.json --md snapshot.md
 
 runs the full matrix (every cartridge and alternative, every geometry, fp32 and bf16), one fresh process per cell.
 
@@ -104,7 +104,7 @@ def environment() -> dict:
     def git(*a):
         try:
             return subprocess.run(["git", *a], capture_output=True, text=True, timeout=10,
-                                  cwd=__file__.rsplit("/", 1)[0]).stdout.strip() or "unknown"
+                                  cwd=__file__.rsplit("/", 2)[0]).stdout.strip() or "unknown"   # lutorch_ex/
         except Exception:
             return "unknown"
     p = torch.cuda.get_device_properties(0)
@@ -259,7 +259,7 @@ def _isolated(g, name, dtype, a) -> dict:
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "cell.json")
-        cmd = [sys.executable, "-m", "spiky.lutorch_ex.bench_snapshot", "--no-isolate", "--geometries", g,
+        cmd = [sys.executable, "-m", "spiky.lutorch_ex.benchmarks.bench_snapshot", "--no-isolate", "--geometries", g,
                "--cartridges", name, "--dtypes", dtype, "--warmup", str(a.warmup), "--repeats", str(a.repeats),
                "--out", out, "--md", os.path.join(tmp, "cell.md")]
         res = subprocess.run(cmd, capture_output=True, text=True)

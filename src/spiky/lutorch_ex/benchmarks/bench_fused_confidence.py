@@ -3,7 +3,7 @@ forward and fwd+bwd, at the d24 LUT-FFN geometry (h 16, d 48, tph 64, nap 8, tab
 bf16 table. Also reports each path's error against an fp64 eager reference (same keep mask), and optionally sweeps
 the CUDA launch knobs (--sweep: fp32 table; --sweep-bf16: bf16 table).
 
-    python -m spiky.lutorch_ex.bench_fused_confidence [--tokens 32768] [--n 1 2] [--sweep] [--sweep-bf16]
+    python -m spiky.lutorch_ex.benchmarks.bench_fused_confidence [--tokens 32768] [--n 1 2] [--sweep] [--sweep-bf16]
 
 The input is fp32 in every row, so the bf16 row differs from the fp32 row only in the table (and the scalar
 parameters) being stored in bf16.

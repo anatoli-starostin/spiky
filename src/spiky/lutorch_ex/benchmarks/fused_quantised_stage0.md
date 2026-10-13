@@ -1221,3 +1221,7 @@ All are within noise; no new snapshot of record is needed.
 | FusedQuantised 32k train | 48.433 / 3.641 | **9.749 / 0.361** | 9.350 / 0.236 | 8.412 / 0.236 |
 | Deployed n=2 8k / 32k eval | 2.897 / 16.806 | **0.310 / 1.250** | 0.478 / 1.877 | 0.318 / 1.256 |
 | Deployed n=1 8k / 32k eval | — | **0.221 / 0.891** | | |
+
+## Note: the benchmark modules moved (2026-10-13)
+
+`bench.py`, `bench_snapshot.py`, `bench_compare.py` and `bench_fused_confidence.py` moved from `lutorch_ex/` into `lutorch_ex/benchmarks/` (`git mv`, no behaviour change); run them as `python -m spiky.lutorch_ex.benchmarks.<name>`. Every mention of them above is left as written: the names still identify the same tools, and the commands recorded were run under the old paths.

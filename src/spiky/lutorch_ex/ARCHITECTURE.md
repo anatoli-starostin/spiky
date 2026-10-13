@@ -187,7 +187,7 @@ p2_scalars extension, with the deprecated alias `SPIKY_P2_CUDA_DISABLE`; plus th
   the #160 snapshot vs 11.76 ms for the reference `QuantisedConfidenceLUT` and 9.67 ms for the fused class; it was
   2.6x its float twin in #159), int8 deploy at n=2, the n=1 variant, and the reference quantised path's training speed
   (its eval left-fold cost is resolved on #162: eval peak 0.90 GiB at 32,768). #162 is the precursor: the left-fold
-  cost, `ManifestoHardLUT`'s 32,768-vector training out-of-memory, and `bench_compare.py`. The rounding-boundary item is RESOLVED on #160 (the
+  cost, `ManifestoHardLUT`'s 32,768-vector training out-of-memory, and `bench_compare.py` (now `benchmarks/bench_compare.py`). The rounding-boundary item is RESOLVED on #160 (the
   bit-exact layer 1 above); the fp64-exponent exploration (`wip/quant-fp64-exponents`, unpushed) is superseded.
 - Re-measure the snapshot of record on the H100 (it is RTX 5090 only).
 - References to the removed `SoftSign*` names in the report `.tex`, experiment scripts, JSON and README outside
