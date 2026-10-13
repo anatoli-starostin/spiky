@@ -1,5 +1,11 @@
 # lutorch_ex_fused — fused-cartridge abl47 reproduction (refactored lutorch_ex)
 
+> **Corpus note:** all runs in this experiment train on the **full 170-shard ClimbMix corpus**
+> (`~/.cache/nanochat/base_data_climbmix`, expanded 2026-10-07). The old abl47 sweep (2026-10-04)
+> trained on only a 4-shard looped subset, so **abl47-family numbers are NOT comparable** to anything
+> here. See [`aux_runs/README.md`](aux_runs/README.md) for the full corpus finding and the seed-replicate
+> / init-ablation runs (`06_conf_n1_s2`, `06_conf_n1_s3`, `06_conf_n1_oldbias`) moved there.
+
 Six fused-cartridge ablations at the abl47 **champion topology** (h8/tph64/nap8/d48, 6-block
 MinimalGPT, ~68M params), reproducing the old abl47 sweep on the current `main` lutorch_ex API.
 One folder per ablation; each has a **self-contained `train.py` with the model defined inline**
