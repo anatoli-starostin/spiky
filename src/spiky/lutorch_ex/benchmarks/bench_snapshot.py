@@ -2,7 +2,7 @@
 and (where the class accepts it) bf16. Four measurements per cell, each as median latency and peak memory:
 eval forward, train forward, train backward, train total (forward + backward).
 
-    python -m spiky.lutorch_ex.bench_snapshot --out snapshot.json --md snapshot.md
+    python -m spiky.lutorch_ex.benchmarks.bench_snapshot --out snapshot.json --md snapshot.md
 
 runs the full matrix (every cartridge and alternative, every geometry, fp32 and bf16), one fresh process per cell.
 
@@ -61,7 +61,8 @@ def _fused(cls, **kw):
 
 
 #: (name, constructor). Every concrete cartridge class (reference and fused) with its defaults.
-#: DeployedQuantisedConfidenceLUT is inference-only (forward only, built from an export).
+#: DeployedQuantisedConfidenceLUT is inference-only (forward only, built from an export of a QuantisedConfidenceLUT with
+#: that read width; the n=2 row keeps its earlier name).
 CARTRIDGES = [
     ("ManifestoHardLUT", lambda s: lx.ManifestoHardLUT(s, seed=1)),
     ("ManifestoSoftLUT", lambda s: lx.ManifestoSoftLUT(s, seed=1)),
@@ -75,9 +76,12 @@ CARTRIDGES = [
     ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2)),
     ("FusedConfidenceLUT n=1", _conf(lx.FusedConfidenceLUT, 1)),
     ("FusedConfidenceLUT n=2", _conf(lx.FusedConfidenceLUT, 2)),
+    ("QuantisedConfidenceLUT n=1", _conf(lx.QuantisedConfidenceLUT, 1)),
     ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2)),
+    ("FusedQuantisedConfidenceLUT n=1", _conf(lx.FusedQuantisedConfidenceLUT, 1)),
     ("FusedQuantisedConfidenceLUT n=2", _conf(lx.FusedQuantisedConfidenceLUT, 2)),
-    ("DeployedQuantisedConfidenceLUT", None),      # built from QuantisedConfidenceLUT.to_deployment()
+    ("DeployedQuantisedConfidenceLUT", lambda s: _deployed(s, 2)),       # from QuantisedConfidenceLUT.to_deployment()
+    ("DeployedQuantisedConfidenceLUT n=1", lambda s: _deployed(s, 1)),
 ]
 
 
@@ -102,7 +106,7 @@ def environment() -> dict:
     def git(*a):
         try:
             return subprocess.run(["git", *a], capture_output=True, text=True, timeout=10,
-                                  cwd=__file__.rsplit("/", 1)[0]).stdout.strip() or "unknown"
+                                  cwd=__file__.rsplit("/", 2)[0]).stdout.strip() or "unknown"   # lutorch_ex/
         except Exception:
             return "unknown"
     p = torch.cuda.get_device_properties(0)
@@ -168,8 +172,8 @@ def _time_train(m, xx, go, warmup: int, repeats: int):
     return _stats(f), _stats(b), _stats(t)
 
 
-def _deployed(spec):
-    q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=2)
+def _deployed(spec, n):
+    q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=n)
     payload = q.to_deployment()
     return lx.DeployedQuantisedConfidenceLUT(spec, payload["tensors"], payload["meta"])
 
@@ -182,7 +186,7 @@ def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
     torch._dynamo.reset()
     torch.cuda.empty_cache()
     try:
-        m = (_deployed(spec) if make is None else make(spec)).cuda()
+        m = make(spec).cuda()
         if dtype != torch.float32:
             m = m.to(dtype)
         torch.manual_seed(0)
@@ -201,7 +205,7 @@ def measure(name, make, spec, B, dtype, warmup, repeats) -> dict:
         fwd()
         torch.cuda.synchronize()
         row["eval_forward"]["peak_gib"] = (torch.cuda.max_memory_allocated() - base) / 2 ** 30
-        if make is None:                                   # inference-only
+        if isinstance(m, lx.DeployedQuantisedConfidenceLUT):   # inference-only
             return row
         m.train()
         xx = x.clone().requires_grad_(True)
@@ -257,7 +261,7 @@ def _isolated(g, name, dtype, a) -> dict:
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "cell.json")
-        cmd = [sys.executable, "-m", "spiky.lutorch_ex.bench_snapshot", "--no-isolate", "--geometries", g,
+        cmd = [sys.executable, "-m", "spiky.lutorch_ex.benchmarks.bench_snapshot", "--no-isolate", "--geometries", g,
                "--cartridges", name, "--dtypes", dtype, "--warmup", str(a.warmup), "--repeats", str(a.repeats),
                "--out", out, "--md", os.path.join(tmp, "cell.md")]
         res = subprocess.run(cmd, capture_output=True, text=True)

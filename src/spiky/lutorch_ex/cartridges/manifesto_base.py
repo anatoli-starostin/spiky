@@ -23,7 +23,7 @@ Everything else lives here and is identical between them:
   ``anchor_a`` (``anchors.canonical_full_coverage_singles``, ``anchor_b is None``).
 - **Addressing**: MSB-first sign-bit packing (``addressing.msb_first_powers``). Each table's
   ``nap`` margins — ``u_j = z[a_j] - z[b_j]`` in pairs mode, ``u_j = z[a_j]`` (single anchor
-  vs zero) in single mode — give sign bits ``[u_j > eps]`` packed (bit 0 = high bit) into
+  vs zero) in single mode — give sign bits ``[u_j > 0]`` packed (bit 0 = high bit) into
   the cell index ``c_t``; the neighbour ``c_t' = c_t`` with the bit of the least-confident
   margin ``j* = argmin_j |u_j|`` flipped. Only the margin changes between modes; the whole
   two-cell structure and routing below are identical, so every cartridge supports both.
@@ -118,7 +118,6 @@ class ManifestoLUT(MultiHeadLUT):
         *,
         seed: int = 0,
         weight_init_std: float = 1e-3,
-        cmp_eps: float = 0.0,
         table_dropout_rate: float = 0.0,
         index_dtype: Optional[torch.dtype] = None,
         weight: str = "rational",
@@ -160,8 +159,6 @@ class ManifestoLUT(MultiHeadLUT):
                 f"Manifesto cartridges need d_in >= {min_d} for anchor_mode={spec.anchor_mode!r}, "
                 f"got {d_in}"
             )
-        self.cmp_eps = float(cmp_eps)
-
         # Fixed anchors per (group, table): canonical full-coverage policy. In "pairs" mode
         # distinct canonical a<b pairs per table (covering the C(d_in,2) pool); in "single"
         # mode distinct single coordinates per table (covering the d_in coordinates). Frozen
@@ -334,7 +331,7 @@ class ManifestoLUT(MultiHeadLUT):
                 B * G * tph * 2 > _INT32_MAX_ENTRIES:            # auto: widen a call too large for int32 positions
             dt = torch.int64
         powers = self.powers.to(dt)
-        c = ((u > self.cmp_eps).to(dt) * powers).sum(dim=-1, dtype=dt)     # MSB-first, stop-grad
+        c = ((u > 0).to(dt) * powers).sum(dim=-1, dtype=dt)                # MSB-first, stop-grad
         u_abs_star, j_star = u.abs().min(dim=-1)                           # |u_{j*}| and j*
         c_alt = c ^ powers[j_star]
         return z, u, c, j_star, u_abs_star, c_alt

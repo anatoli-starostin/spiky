@@ -62,4 +62,28 @@ __host__ __device__ inline TableScalars table_scalars(const float* d, int nap, f
   return r;
 }
 
+// The single-cell (read_top_n = 1) read's exponent, the n = 1 form of k' (no blend, so no c_q):
+//   S, ls as above (left folds);  k' = floor(log2 S + (g + gamma ls) / ln2 + 1/2);  skip = !(k' >= lo);  kc = clamp(k', lo, hi)
+// The torch definition with the same operation order is _pow2.single_exponent.
+struct SingleScalars {
+  int8_t kc;
+  bool skip;
+};
+
+__host__ __device__ inline SingleScalars single_scalars(const float* d, int nap, float g, float beta, float gamma, int lo,
+                                                        int hi) {
+  float S = 0.f, ls = 0.f;
+  for (int p = 0; p < nap; ++p) {
+    const float m = std::fabs(d[p]);
+    S = S + m;
+    const float x = beta * m;
+    ls = ls + (std::fmin(0.f, x) - std::log1p(std::exp(-std::fabs(x))));
+  }
+  const float kr = std::floor(std::log2(S) + (g + gamma * ls) / LN2 + 0.5f);
+  SingleScalars r;
+  r.skip = !(kr >= (float)lo);
+  r.kc = (int8_t)(r.skip ? lo : (kr > (float)hi ? hi : (int)kr));
+  return r;
+}
+
 }  // namespace p2

@@ -2,7 +2,7 @@
 import json
 
 from spiky.lutorch_ex import LUTSpec, ManifestoHardLUT
-from spiky.lutorch_ex.bench import (
+from spiky.lutorch_ex.benchmarks.bench import (
     BenchRow,
     benchmark,
     format_table,

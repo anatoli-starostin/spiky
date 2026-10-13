@@ -3,7 +3,7 @@
 The convention is **MSB-first**: anchor pair ``0`` is the most-significant bit. For ``nap`` pairs the bit weights are
 ``powers[i] = 2 ** (nap - 1 - i)``, and a table's cell index is
 
-    c = sum_i bit_i * powers[i],   bit_i = [margin_i > eps]
+    c = sum_i bit_i * powers[i],   bit_i = [margin_i > 0]
 
 so a single bit flip at pair ``i`` toggles ``c`` by ``powers[i]`` (used for the
 two-alternative backward's neighbour cell). Defining it here keeps the convention in one

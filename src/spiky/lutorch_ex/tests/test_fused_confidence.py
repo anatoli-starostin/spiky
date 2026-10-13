@@ -20,7 +20,7 @@ def _needs_fused_confidence_ext():
 def _pair(n, anchor_mode="pairs", rate=0.0, h_in=4, h_out=4, tph=16, nap=6, d=24, knobs=None):
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=tph, nap=nap, d_in=d, d_out=d, anchor_mode=anchor_mode)
     kw = dict(seed=3, read_top_n=n, table_dropout_rate=rate, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
-              read_tau_init=0.6)
+              **({"read_tau_init": 0.6} if n == 2 else {}))
     ref = ConfidenceLUT(spec, **kw).cuda().train()
     cud = FusedConfidenceLUT(spec, knobs=knobs, **kw).cuda().train()
     cud.load_state_dict(ref.state_dict())
@@ -126,7 +126,7 @@ def _rel(a, b):
 def _model(n, dtype, anchor_mode="pairs", knobs=None, h=4, tph=16, nap=6, d=24, rate=0.0):
     spec = LUTSpec(h_in=h, h_out=h, tph=tph, nap=nap, d_in=d, d_out=d, anchor_mode=anchor_mode)
     m = FusedConfidenceLUT(spec, seed=3, read_top_n=n, table_dropout_rate=rate, weight_init_std=0.5, beta_init=1.7,
-                           gamma_init=0.8, read_tau_init=0.6, knobs=knobs)
+                           gamma_init=0.8, knobs=knobs, **({"read_tau_init": 0.6} if n == 2 else {}))
     return m.to(device="cuda", dtype=dtype).train()
 
 
@@ -241,7 +241,7 @@ def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
     h_in, h_out = pattern
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=16, nap=6, d_in=24, d_out=24, anchor_mode="pairs")
     m = FusedConfidenceLUT(spec, seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
-                           read_tau_init=0.6).to(device="cuda", dtype=table)
+                           **({"read_tau_init": 0.6} if n == 2 else {})).to(device="cuda", dtype=table)
     torch.manual_seed(0)
     xb = torch.randn(70, h_in, 24, device="cuda").to(torch.bfloat16)
     go = torch.randn(70, h_out, 24, device="cuda").to(torch.bfloat16).float()   # same go for both runs
@@ -268,7 +268,8 @@ def test_d_out_not_divisible_by_4_or_wider_than_256_runs_on_cuda(d_out, n, mode)
     the kernels at launch ("d_out must be divisible by vec" / "threads must be >= d_out / vec"). The launch is now
     fitted to d_out exactly as for the Manifesto kernels, so they run and agree with ConfidenceLUT."""
     spec = LUTSpec(h_in=2, h_out=2, tph=8, nap=4, d_in=12, d_out=d_out, anchor_mode="pairs")
-    kw = dict(seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6)
+    kw = dict(seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
+              **({"read_tau_init": 0.6} if n == 2 else {}))
     ref = ConfidenceLUT(spec, **kw).cuda()
     cud = FusedConfidenceLUT(spec, **kw).cuda()
     cud.load_state_dict(ref.state_dict())

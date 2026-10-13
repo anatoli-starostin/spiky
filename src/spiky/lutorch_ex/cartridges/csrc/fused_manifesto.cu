@@ -4,7 +4,7 @@
 //
 // The Manifesto math (manifesto_base.py, manifesto_hard.py, manifesto_soft.py), per (b, g, t), with the table-dropout
 // factor m (the [B, G, tph] mask ManifestoLUT._table_dropout_mask returns, 0 or 1/keep_prob; 1 without dropout):
-//   margins u_j = z[a_j] - z[b_j] (single anchors: z[a_j]); address c = MSB-first [u_j > eps]; j* = first argmin |u_j|;
+//   margins u_j = z[a_j] - z[b_j] (single anchors: z[a_j]); address c = MSB-first [u_j > 0]; j* = first argmin |u_j|;
 //   neighbour c' = c with bit j* flipped; the neighbour weight w of mu = |u_j*|:
 //     rational (temps == nullptr)          w = 0.5 / (1 + mu),                         -dw/dmu = 0.5 / (1 + mu)^2;
 //     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), w = sigmoid(-2 rho / T_sel),
@@ -52,7 +52,6 @@ struct Params {
     const __nv_bfloat16* Wb; // the same, bf16 table (nullptr when the table is fp32)
     const float* mask;       // [B, G, tph] table-dropout factor (ManifestoLUT._table_dropout_mask), nullptr = none
     const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational weight
-    float eps;
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
 };
 
@@ -158,7 +157,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
         if (j < nap) {
             const int i = t * nap + j;
             const float u = zs[sa[i]] - (sb ? zs[sb[i]] : 0.f);
-            c |= int(u > p.eps) << (nap - 1 - j);
+            c |= int(u > 0.f) << (nap - 1 - j);
             const float m = fabsf(u);
             if (m < mstar) { mstar = m; ustar = u; jstar = j; }   // first minimum, as torch.min
         }
@@ -402,7 +401,7 @@ __global__ void __launch_bounds__(1024) manifesto_bwd_kernel_ss(Params p, const 
 
 Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
                    const torch::Tensor& W, const c10::optional<torch::Tensor>& mask,
-                   const c10::optional<torch::Tensor>& temps, int nap, double eps, int rows_per_cta) {
+                   const c10::optional<torch::Tensor>& temps, int nap, int rows_per_cta) {
     TORCH_CHECK(z.is_cuda() && (z.scalar_type() == torch::kFloat32 || z.scalar_type() == torch::kBFloat16) && z.is_contiguous()
                 && z.dim() == 3, "z: contiguous fp32 or bf16 CUDA [B, G, d_in]");
     TORCH_CHECK((W.scalar_type() == torch::kFloat32 || W.scalar_type() == torch::kBFloat16) && W.is_contiguous() && W.dim() == 2,
@@ -430,7 +429,6 @@ Params make_params(const torch::Tensor& z, const torch::Tensor& anc_a, const c10
         TORCH_CHECK(temps->is_cuda() && temps->scalar_type() == torch::kFloat32 && temps->is_contiguous()
                     && temps->numel() == 2, "temps: contiguous fp32 CUDA [T_soft, T_select]");
     p.temps = temps.has_value() ? temps->data_ptr<float>() : nullptr;
-    p.eps = float(eps);
     p.B = z.size(0); p.G = z.size(1); p.d_in = z.size(2);
     p.tph = anc_a.size(1); p.nap = nap; p.d_out = W.size(1);
     p.rows_per_cta = rows_per_cta;
@@ -471,10 +469,10 @@ void dispatch_table(const torch::Tensor& W, Fn&& fn) {
 
 torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<torch::Tensor> anc_b,
                             torch::Tensor W, c10::optional<torch::Tensor> mask, c10::optional<torch::Tensor> temps,
-                            int64_t nap, double eps, int64_t mode,
+                            int64_t nap, int64_t mode,
                             int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16) {
     const c10::cuda::CUDAGuard guard(z.device());
-    Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, eps, rows_per_cta);
+    Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     // fp32 output, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1 onto output heads).
     TORCH_CHECK(!out_bf16 || z.scalar_type() == torch::kBFloat16, "out_bf16 needs a bf16 input");
@@ -507,10 +505,10 @@ torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<
 std::vector<torch::Tensor> manifesto_bwd(torch::Tensor go, torch::Tensor z, torch::Tensor anc_a,
                                          c10::optional<torch::Tensor> anc_b, torch::Tensor W,
                                          c10::optional<torch::Tensor> mask, c10::optional<torch::Tensor> temps,
-                                         int64_t nap, double eps, int64_t mode,
+                                         int64_t nap, int64_t mode,
                                          int64_t threads, int64_t rows_per_cta, int64_t vec, bool vec_atomics) {
     const c10::cuda::CUDAGuard guard(z.device());
-    Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, eps, rows_per_cta);
+    Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");

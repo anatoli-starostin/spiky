@@ -23,7 +23,7 @@ def _soft_reference(cart: ManifestoSoftLUT, x: torch.Tensor) -> torch.Tensor:
             for t in range(spec.tph):
                 us = [float(z[int(cart.anchor_a[g, t, j])] - z[int(cart.anchor_b[g, t, j])])
                       for j in range(nap)]
-                c = sum((1 << (nap - 1 - j)) for j in range(nap) if us[j] > cart.cmp_eps)
+                c = sum((1 << (nap - 1 - j)) for j in range(nap) if us[j] > 0)
                 jstar = min(range(nap), key=lambda j: abs(us[j]))
                 c_alt = c ^ (1 << (nap - 1 - jstar))
                 U = 0.5 / (1.0 + abs(us[jstar]))
@@ -64,7 +64,7 @@ def test_soft_weight_grad_hits_both_cells():
     z = x[0, 0]
     us = [float(z[int(cart.anchor_a[0, 0, j])] - z[int(cart.anchor_b[0, 0, j])])
           for j in range(spec.nap)]
-    c = sum((1 << (spec.nap - 1 - j)) for j in range(spec.nap) if us[j] > cart.cmp_eps)
+    c = sum((1 << (spec.nap - 1 - j)) for j in range(spec.nap) if us[j] > 0)
     jstar = min(range(spec.nap), key=lambda j: abs(us[j]))
     c_alt = c ^ (1 << (spec.nap - 1 - jstar))
     assert c != c_alt

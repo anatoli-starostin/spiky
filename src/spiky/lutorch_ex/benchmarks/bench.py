@@ -14,7 +14,7 @@ present (or whose measurement is disabled) yields a clear ``placeholder`` row in
 crashing, and any per-cell failure (e.g. OOM) is caught and reported as an ``error`` row.
 
 Usable as a library (``benchmark(...)``, the general harness) or as a demo script
-(``python -m spiky.lutorch_ex.bench``, which times only ManifestoHardLUT / ManifestoSoftLUT at one small
+(``python -m spiky.lutorch_ex.benchmarks.bench``, which times only ManifestoHardLUT / ManifestoSoftLUT at one small
 fixed geometry).
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from typing import Callable, Optional, Sequence
 
 import torch
 
-from .lut_base import MultiHeadLUT
+from ..lut_base import MultiHeadLUT
 
 OPERATIONS: tuple[str, ...] = ("forward_eval", "forward_train", "backward")
 DEFAULT_BATCH_SIZES: tuple[int, ...] = (1, 128, 24576)
@@ -236,13 +236,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     """
     import argparse
 
-    from .cartridges import ManifestoHardLUT, ManifestoSoftLUT
-    from .lut_spec import LUTSpec
+    from ..cartridges import ManifestoHardLUT, ManifestoSoftLUT
+    from ..lut_spec import LUTSpec
 
     p = argparse.ArgumentParser(
         description="Demo: time ManifestoHardLUT and ManifestoSoftLUT at one small fixed geometry "
                     "(LUTSpec(h_in=2, h_out=2, tph=8, nap=5, d_in=16, d_out=16)). For any other cartridge "
-                    "or geometry, call spiky.lutorch_ex.bench.benchmark() from Python.")
+                    "or geometry, call spiky.lutorch_ex.benchmarks.bench.benchmark() from Python.")
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--repeats", type=int, default=10)
     p.add_argument("--measure-cuda", action="store_true",
