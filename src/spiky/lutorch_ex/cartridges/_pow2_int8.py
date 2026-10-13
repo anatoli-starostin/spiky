@@ -149,18 +149,19 @@ class FusedQuantRead(torch.autograd.Function):
     ratios b / e (clamped k', also for skipped and dropped cells)."""
 
     @staticmethod
-    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, cfg, grad_mode):
+    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, cfg, n, grad_mode):
+        # n = read_top_n, the kernels' template parameter N (log_tau is None at n = 1: no blend, no tau)
         ext = load()
         W2 = weights.reshape(-1, weights.shape[-1])
         E = ext.table_exponents(W2, weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
         qlo, qhi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
-        args = (W2, E, dmask, log_beta, log_gamma, log_tau, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
+        args = (W2, E, dmask, log_beta, log_gamma, log_tau, n, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
         # the integers are saved exactly when a backward can follow: the caller's grad mode (grad mode is off inside
         # forward) and an input that needs a gradient -- autograd state, not a user switch
         save = grad_mode and any(ctx.needs_input_grad[:5])
         out, tabs = ext.quant_fwd(z, anc_a16, anc_b16, *args, save)
         ctx.save_for_backward(z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, tabs)
-        ctx.cfg = (cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
+        ctx.cfg = (n, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
         return out
 
     @staticmethod
@@ -173,4 +174,4 @@ class FusedQuantRead(torch.autograd.Function):
         need = ctx.needs_input_grad
         return (gz if need[0] else None, gW.view_as(weights) if need[1] else None,
                 gs[0].view_as(log_beta) if need[2] else None, gs[1].view_as(log_gamma) if need[3] else None,
-                gs[2].view_as(log_tau) if need[4] else None, None, None, None, None, None, None, None)
+                gs[2].view_as(log_tau) if need[4] else None, None, None, None, None, None, None, None, None)

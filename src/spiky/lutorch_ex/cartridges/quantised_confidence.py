@@ -28,8 +28,10 @@ Implementations (spec rules 3 and 5: the class is the implementation, there is n
   compiled on CUDA. It loads no extension.
 * :class:`FusedQuantisedConfidenceLUT` -- the fused twin: one fused CUDA forward (``_pow2_int8.FusedQuantRead``:
   addressing, the per-table integers and straight-through weights, the fake-quant gather, in one kernel after the
-  table exponents) and one hand-written CUDA backward that reads the forward's per-table integers back. Cases the kernel does not cover (read_top_n=1, single anchors, nap > 8, a CPU input, a
-  non-fp32 input or table) raise, naming the case, and so does a missing extension.
+  table exponents) and one hand-written CUDA backward that reads the forward's per-table integers back; read_top_n 1
+  and 2 are two instantiations of the same kernels (template parameter N, as in the deployed kernel). Cases the
+  kernel does not cover (single anchors, nap > 8, a CPU input, a non-fp32 input or table) raise, naming the case, and
+  so does a missing extension.
 * :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form, read_top_n 1 or 2 as exported: on CUDA ONE
   kernel (``csrc/pow2_int8_read.cu``, deploy_fwd: addressing, the integers, the int8 shift-add read), fp32 input; on CPU
   the torch definition (``_pow2``), the same integers.
@@ -78,11 +80,12 @@ class QuantisedScaffold:
 
         EXACT IN FP32, so the order of embedding_bag's sum does not matter (and FusedQuantisedConfidenceLUT's
         different, documented order gives the same bits). Per output (group g, channel c) every term is
-        W_hat * 2^e * 2^k' or W_hat * 2^e * 2^(k' - q), with |W_hat| <= 127, k' in [-3, 4] and q <= 3 (Q): an integer
-        multiple of 2^(e - 6) of magnitude at most 127 * 2^10. A bag holds 2 tph = 128 terms at the p2_int8 preset, so
-        every partial sum is an integer multiple of 2^(e - 6) bounded by 128 * 127 * 2^10 = 16,646,144 < 2^24: fp32
-        represents it, and no addition rounds. The argument FAILS (sums can round, and two orders can then differ):
-        * tph > 64: 2 tph * 127 * 2^10 can reach 2^24;
+        W_hat * 2^e * 2^k' or W_hat * 2^e * 2^(k' - q), with |W_hat| <= 128 (int8: [-128, 127]), k' in [-3, 4] and
+        q <= 3 (Q): an integer multiple of 2^(e - 6) of magnitude at most 128 * 2^10. A bag holds 2 tph = 128 terms at the
+        p2_int8 preset, so every partial sum is an integer multiple of 2^(e - 6) bounded by 128 * 128 * 2^10 = 2^24:
+        fp32 represents every integer up to 2^24 exactly, and no addition rounds. The argument FAILS (sums can round, and
+        two orders can then differ):
+        * tph > 64: 2 tph * 128 * 2^10 exceeds 2^24;
         * a read window wider than [-3, 4] (or a larger Q): more bits per term;
         * table dropout: the weights carry 1 / (1 - rate), not a power of two, so the products already round."""
         G, tph, K, d_out = self.weights.shape
@@ -198,9 +201,9 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     _COMPILE_OPTIONS = {"realize_reads_threshold": 8, "realize_opcount_threshold": 100}
 
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
-        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form, and the
-        # only one FusedQuantisedConfidenceLUT covers. read_top_n=1 trains, evaluates and exports too: to_deployment
-        # records meta["read_top_n"] and DeployedQuantisedConfidenceLUT reads one cell (deploy_fwd_kernel<VEC, 1>).
+        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form. read_top_n=1
+        # trains, evaluates and exports too (FusedQuantisedConfidenceLUT covers both widths): to_deployment records
+        # meta["read_top_n"] and DeployedQuantisedConfidenceLUT reads one cell (deploy_fwd_kernel<VEC, 1>).
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._init_quant(quant_mode, quant_overrides)
 
@@ -257,6 +260,13 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
             psw = (s * frozen_coef).reshape(B * G, tph).to(W2.dtype)            # smooth, frozen ratio
         if dmask is not None:
             psw = psw * dmask.reshape(B * G, tph).to(psw.dtype)                 # table dropout
+        # EXACT IN FP32 too, re-derived for the single-cell read (not inherited from _blend_read's n = 2 argument): per
+        # output (group g, channel c) each term is W_hat * 2^e * 2^k' with |W_hat| <= 128 (int8: [-128, 127]) and k' in
+        # the window [lo, hi] = [-3, 4] (a skipped table adds 0; no q at n = 1): an integer multiple of 2^(e + lo) of
+        # magnitude at most 128 * 2^(hi - lo) = 2^14. A bag holds tph terms, so every partial sum is an integer multiple
+        # of 2^(e + lo) bounded by tph * 2^14, at most 2^24 -- exactly representable, no addition rounds -- for
+        # tph <= 1024 (in general tph <= 2^(17 - (hi - lo))), and FusedQuantisedConfidenceLUT's order gives the same
+        # bits. It FAILS for tph > 1024, a wider window, or table dropout (the 1 / (1 - rate) weights round).
         gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
         return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
@@ -299,7 +309,7 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     """The fused twin of :class:`QuantisedConfidenceLUT`: one fused CUDA forward; see the module docstring.
 
-    Covers read_top_n=2, pairs anchors, nap <= 8, a CUDA fp32 input and an fp32 table; anything else raises, naming the
+    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, a CUDA fp32 input and an fp32 table; anything else raises, naming the
     case and the reference class, and a missing extension raises :class:`~spiky.lutorch_ex.cartridges._fallback.
     NativeUnavailableError` with its classified cause. Same parameters, state_dict and deployment export as the
     reference.
@@ -338,8 +348,6 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         """Raise unless the kernel can run this call: a RuntimeError naming the unsupported case, or the classified
         NativeUnavailableError when only the extension is missing."""
         problems = []
-        if self.read_top_n != 2:
-            problems.append(f"read_top_n={self.read_top_n} (the two-cell read; read_top_n=2 only)")
         if self.single:
             problems.append("anchor_mode='single' (pairs only)")
         if self.spec.nap > 8:
@@ -370,8 +378,9 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         dmask = self._table_dropout_mask(x.shape[0], x.device, x.dtype)
         grp_out = _pow2_int8.FusedQuantRead.apply(
             z, self.weights, self.confidence_log_beta.float(), self.confidence_log_gamma.float(),
-            self.log_read_tau.float(), self._anc_a16, self._anc_b16, self._zoff, self._zent,
-            None if dmask is None else dmask.contiguous(), self._quant, torch.is_grad_enabled())
+            self.log_read_tau.float() if self.read_top_n == 2 else None, self._anc_a16, self._anc_b16, self._zoff,
+            self._zent, None if dmask is None else dmask.contiguous(), self._quant, self.read_top_n,
+            torch.is_grad_enabled())
         return self._route(grp_out, x)
 
 

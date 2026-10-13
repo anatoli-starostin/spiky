@@ -211,7 +211,7 @@ def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
 
 
 @pytest.mark.parametrize("case,kw,x", [
-    ("read_top_n=1", dict(read_top_n=1), lambda: torch.randn(8, 4, 8)),
+    ("the input is on cpu", dict(read_top_n=1), lambda: torch.randn(8, 4, 8)),   # n = 1 is covered; a CPU input is not
     ("anchor_mode='single'", dict(spec=dict(anchor_mode="single")), lambda: torch.randn(8, 4, 8)),
     ("the input is on cpu", {}, lambda: torch.randn(8, 4, 8)),
     ("input dtype torch.float64", {}, lambda: torch.randn(8, 4, 8, dtype=torch.float64)),

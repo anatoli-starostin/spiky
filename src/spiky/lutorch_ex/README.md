@@ -233,8 +233,8 @@ of two forms of the same maths:
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
-`read_top_n` defaults to `2`, the only form `FusedQuantisedConfidenceLUT` covers. `read_top_n=1` trains, evaluates
-and exports too: the export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` reads one cell.
+`read_top_n` defaults to `2`. `read_top_n=1` trains (also as `FusedQuantisedConfidenceLUT`), evaluates and exports
+too: the export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` reads one cell.
 
 ### PyTorch's embedding_bag backward size limit
 

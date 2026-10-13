@@ -4,7 +4,7 @@ reference class.
 Per cartridge (FusedManifestoHardLUT / FusedManifestoSoftLUT with both weights, FusedConfidenceLUT with read_top_n 1
 and 2, FusedQuantisedConfidenceLUT), per dtype (fp32; bf16 table + input; fp16 input on an fp32 table; bf16 table with
 an fp32 input; fp16 input on a bf16 table -- every table / input combination the fused classes declare), per anchor mode
-and head pattern, wherever the fused class covers the case (the quantised op: fp32, pairs, read_top_n=2 only): the fused
+and head pattern, wherever the fused class covers the case (the quantised op: fp32, pairs, read_top_n 1 and 2): the fused
 class and its reference class, loaded with the same state_dict, are fed the same input and output gradient, in
 training and in eval, and compared on every leaf: the value, the input gradient, the table gradient and every learned
 scalar's gradient (soft-sign temperatures; confidence beta / gamma / tau).
@@ -98,6 +98,8 @@ CARTRIDGES = [
      dict(read_top_n=1, beta_init=1.7, gamma_init=0.8), "confidence"),
     ("Confidence n=2", FusedConfidenceLUT, ConfidenceLUT,
      dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6), "confidence"),
+    ("Quantised n=1", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
+     dict(read_top_n=1, beta_init=1.7, gamma_init=0.8), "quantised"),
     ("Quantised n=2", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
      dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6), "quantised"),
 ]
@@ -106,7 +108,8 @@ DTYPES = [("fp32", torch.float32, torch.float32), ("bf16", torch.bfloat16, torch
           ("fp16-input", torch.float32, torch.float16), ("bf16-table", torch.bfloat16, torch.float32),
           ("fp16-input-bf16-table", torch.bfloat16, torch.float16)]
 #: What each fused class covers (everything not listed: all dtypes, both anchor modes).
-COVERS = {"Quantised n=2": dict(dtypes={"fp32"}, anchor_modes={"pairs"})}
+COVERS = {"Quantised n=1": dict(dtypes={"fp32"}, anchor_modes={"pairs"}),
+          "Quantised n=2": dict(dtypes={"fp32"}, anchor_modes={"pairs"})}
 #: (id, h_in, h_out, d, tph, nap, batch); d is d_in = d_out, or a (d_in, d_out) pair. The fan-in / fan-out rows at
 #: batch 1 and 24576 and at d_in != d_out are the combinations the superseded test_fused_equivalence.py covered.
 GEOMS = [("small-per-head", 4, 4, 12, 6, 5, 128), ("fan-in", 4, 1, 12, 6, 5, 128), ("fan-out", 1, 4, 12, 6, 5, 128),
@@ -266,6 +269,9 @@ FROZEN = [
     ("Confidence n=2 tau frozen", FusedConfidenceLUT, ConfidenceLUT,
      dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6, read_tau_learnable=False), "confidence",
      ("log_read_tau",)),
+    ("Quantised n=1 score frozen", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
+     dict(read_top_n=1, beta_init=1.7, gamma_init=0.8, learnable_score=False), "quantised",
+     ("confidence_log_beta", "confidence_log_gamma")),
     ("Quantised n=2 score and tau frozen", FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT,
      dict(read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6, learnable_score=False,
           read_tau_learnable=False), "quantised", ("confidence_log_beta", "confidence_log_gamma", "log_read_tau")),
@@ -316,6 +322,8 @@ def test_frozen_scalars_are_buffers_and_the_pair_still_agrees(case):
 
 CHAMPION = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
 QUANT_KW = dict(weight_init_std=0.5, read_top_n=2, beta_init=1.7, gamma_init=0.8, read_tau_init=0.6)
+#: The single-cell read: no blend, so no tau (read_tau_init at n = 1 raises).
+QUANT_KW1 = dict(weight_init_std=0.5, read_top_n=1, beta_init=1.7, gamma_init=0.8)
 #: Layer 2 bounds (fp64; see the comment above the layer-2 test). Measured over 192 runs -- nap 3, 4, 5, 6, 7, 8 on the
 #: champion geometry (8,192 vectors) and on h8 tph32 d64 (16,384 vectors), 8 seeds each, at init and after 200 Adam
 #: steps: no row moved by more than 2.3e-16 (so no exponent flipped in any run); eval and training value at most
@@ -332,12 +340,12 @@ FP64_SCALAR_BOUND = 1e-12       # beta / gamma / tau gradients (worst 6.0e-14, ~
 LAYER1_GEOMS = {"champion": CHAMPION, "tph128": dict(CHAMPION, tph=128)}
 
 
-def _champion_pair(seed, geom=CHAMPION):
+def _champion_pair(seed, geom=CHAMPION, kw=QUANT_KW):
     requires_extension("quantised")
     torch._dynamo.reset()
     spec = LUTSpec(**geom)
-    ref = QuantisedConfidenceLUT(spec, seed=seed, **QUANT_KW).cuda()
-    fused = FusedQuantisedConfidenceLUT(spec, seed=seed, **QUANT_KW).cuda()
+    ref = QuantisedConfidenceLUT(spec, seed=seed, **kw).cuda()
+    fused = FusedQuantisedConfidenceLUT(spec, seed=seed, **kw).cuda()
     fused.load_state_dict(ref.state_dict())
     x = torch.randn(8192, 16, 48, device="cuda", generator=torch.Generator(device="cuda").manual_seed(1234 + seed))
     return ref, fused, x
@@ -474,6 +482,153 @@ def test_quantised_layer1_with_table_dropout(seed):
     with torch.no_grad():
         _injected_mask(fused, torch.ones_like(keep))
         assert not torch.equal(fused(x), a["value"]), "the mask had no effect"
+
+
+def _fused_n1_integers(fused, x):
+    """The fused n = 1 forward's own integers: (k', skip) unpacked from the per-table int32s it saves for the backward
+    (pack_tab1: c1 | (k' + 8) << 16 | skip << 27; c2 = q = 0), and c1."""
+    from spiky.lutorch_ex.cartridges import _pow2_int8
+    ext = _pow2_int8.load()
+    cfg = fused._quant
+    W2 = fused.weights.detach().reshape(-1, fused.spec.d_out)
+    E = ext.table_exponents(W2, fused.weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
+    qlo, qhi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
+    z = (x if fused.spec.h_in == fused.spec.n_groups else x[:, fused.in_head, :]).contiguous()
+    _, tabs = ext.quant_fwd(z, fused._anc_a16, fused._anc_b16, W2, E, None, fused.confidence_log_beta.float(),
+                            fused.confidence_log_gamma.float(), None, 1, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo),
+                            float(qhi), True)
+    v = tabs.long()
+    return ((v >> 16) & 15) - 8, ((v >> 27) & 1) == 1, v & 255, ((v >> 8) & 255) | ((v >> 20) & 127) | (v >> 28)
+
+
+@pytest.mark.parametrize("geom", sorted(LAYER1_GEOMS))
+@pytest.mark.parametrize("seed", [0, 1])
+def test_quantised_layer1_n1_fused_bit_exact_vs_eager_reference(seed, geom):
+    """LAYER 1 at read_top_n = 1 (oracle), as at n = 2: the fused n = 1 kernel's integers (k', skip and the address c1,
+    as it saves them) equal the eager reference definition's (_pow2.single_exponent on the same margins; c1 the bits
+    u > 0) on EVERY table, the unused fields of the packed word are zero, and the eager reference's output equals the
+    fused class's bit for bit, in eval and in the training forward. No tolerance, no gate. (At n = 1 the fp32 exactness
+    argument holds up to tph = 1024 -- QuantisedConfidenceLUT._quant_grp_out -- so tph = 128 is inside it.)"""
+    from spiky.lutorch_ex.cartridges import _pow2
+    ref, fused, x = _champion_pair(seed, LAYER1_GEOMS[geom], QUANT_KW1)
+    with torch.no_grad():
+        z, u, c, j, ustar, calt = ref._addresses(x)
+        beta, gamma = ref._betagamma(u.dtype)
+        g0 = torch.zeros((), device="cuda")
+        kr, skr = _pow2.single_exponent(u.abs(), g0, beta, gamma, ref._quant)
+        ko, sko, c1o, rest = _fused_n1_integers(fused, x)
+        differ = (kr != ko.float()) | (skr != sko) | (c != c1o)
+        assert int(differ.sum()) == 0, f"{int(differ.sum())} integer disagreements with the kernel"
+        assert int(rest.abs().sum()) == 0, "the packed word's c2 / q fields are not zero at n = 1"
+        for train in (False, True):
+            ref.train(train); fused.train(train)
+            assert torch.equal(ref._forward_impl(x), fused(x)), f"train={train}: output differs from the eager reference"
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_quantised_layer2_n1_compiled_reference_matches_eager_in_fp64(seed):
+    """LAYER 2 at read_top_n = 1 (compile trust), as test_quantised_layer2_compiled_reference_matches_eager_in_fp64 at
+    n = 2 (same bounds, same reasoning): the compiled n = 1 reference vs the eager one, both in fp64, eval and every
+    training leaf (value, grad x, grad weights, beta, gamma; no tau at n = 1)."""
+    ref, _, x = _champion_pair(seed, kw=QUANT_KW1)
+    ref = ref.double()
+    x = x.double()
+    with torch.no_grad():
+        ref.eval()
+        ye = ref._forward_impl(x)
+        torch._dynamo.reset()
+        yc = ref(x)                                        # compiled
+    rows = (yc - ye).norm(dim=-1) / ye.norm(dim=-1).clamp_min(1e-300)
+    assert float(rows.max()) <= FP64_ROW_BOUND, f"a row moved by {float(rows.max()):.2e} (an exponent flipped?)"
+    e = _rel(yc, ye)
+    assert e <= FP64_TENSOR_BOUND, f"eval relative norm {e:.2e} > {FP64_TENSOR_BOUND:.0e}"
+    ref.train()
+    go = torch.randn(x.shape[0], 16, 48, device="cuda", dtype=torch.float64,
+                     generator=torch.Generator(device="cuda").manual_seed(99))
+    res = []
+    for f in (ref._forward_impl, ref):                     # eager, then compiled
+        torch._dynamo.reset()
+        xi = x.clone().requires_grad_(True)
+        y = f(xi)
+        y.backward(go)
+        res.append({"value": y.detach(), "grad x": xi.grad} | {n: p.grad.clone() for n, p in ref.named_parameters()})
+        ref.zero_grad(set_to_none=True)
+    assert "log_read_tau" not in res[0], "a tau gradient at read_top_n = 1"
+    for leaf in res[0]:
+        bound = FP64_SCALAR_BOUND if res[0][leaf].numel() == 1 else FP64_TENSOR_BOUND
+        e = _rel(res[1][leaf], res[0][leaf])
+        assert e <= bound, f"train {leaf}: relative norm {e:.2e} > {bound:.0e}"
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_quantised_layer1_n1_with_table_dropout(seed):
+    """test_quantised_layer1_with_table_dropout at read_top_n = 1, with the same checks and bounds: one identical
+    explicit mask, no row moved by more than ROW_SAME, every leaf within the fp32 tolerances (not bit for bit: the
+    1 / (1 - rate) factor rounds, as at n = 2), and eval a no-op."""
+    requires_extension("quantised")
+    torch._dynamo.reset()
+    spec = LUTSpec(**CHAMPION)
+    rate, B = 0.3, 8192
+    ref = QuantisedConfidenceLUT(spec, seed=seed, table_dropout_rate=rate, **QUANT_KW1).cuda()
+    fused = FusedQuantisedConfidenceLUT(spec, seed=seed, table_dropout_rate=rate, **QUANT_KW1).cuda()
+    fused.load_state_dict(ref.state_dict())
+    g = torch.Generator(device="cuda").manual_seed(1234 + seed)
+    x = torch.randn(B, 16, 48, device="cuda", generator=g)
+    go = torch.randn(B, 16, 48, device="cuda", generator=g)
+    keep = (torch.rand(B, spec.n_groups, spec.tph, device="cuda", generator=g) < 1.0 - rate).float() / (1.0 - rate)
+    assert 0.6 < float((keep > 0).float().mean()) < 0.8
+    with torch.no_grad():
+        for cls, m in ((QuantisedConfidenceLUT, ref), (FusedQuantisedConfidenceLUT, fused)):
+            m0 = cls(spec, seed=seed, table_dropout_rate=0.0, **QUANT_KW1).cuda()
+            m0.load_state_dict(m.state_dict())
+            m.eval(); m0.eval()
+            assert torch.equal(m(x), m0(x)), f"{cls.__name__}: dropout changed the eval output"
+    _injected_mask(ref, keep)
+    _injected_mask(fused, keep)
+    ref.train(); fused.train()
+    oracle = _Eager(ref)
+    a, b = _leaves(fused, x, go), _leaves(oracle, x, go)
+    assert a.keys() == b.keys() and "grad log_read_tau" not in b, sorted(b)
+    rows = (a["value"] - b["value"]).norm(dim=-1) / b["value"].norm(dim=-1).clamp_min(1e-30)
+    assert float(rows.max()) <= ROW_SAME, f"a row moved by {float(rows.max()):.2e}: a table dropped on one side only?"
+    n_terms = B * spec.n_groups * spec.tph * spec.d_out
+    for leaf in b:
+        tol = max(FP32_SCALAR_TOL, 4.0 * n_terms ** 0.5 * FP32_U) if leaf not in TENSOR_LEAVES else FP32_TOL
+        e = _rel(a[leaf], b[leaf])
+        assert e < tol, f"{leaf}: rel-norm error {e:.2e} >= {tol:.1e}"
+    with torch.no_grad():
+        _injected_mask(fused, torch.ones_like(keep))
+        assert not torch.equal(fused(x), a["value"]), "the mask had no effect"
+
+
+@pytest.mark.parametrize("read_top_n", [1, 2])
+def test_trained_fused_quantised_exports_and_round_trips(read_top_n):
+    """A FusedQuantisedConfidenceLUT trained a few steps (both read widths) exports (to_deployment) and loads
+    (from_deployment) into DeployedQuantisedConfidenceLUT, whose int8 kernel read times the folded scale equals the
+    trained cartridge's integer read (forward_int) bit for bit, and its eval value to round-off."""
+    requires_extension("quantised")
+    spec = LUTSpec(h_in=8, h_out=8, tph=16, nap=6, d_in=24, d_out=24)
+    kw = QUANT_KW if read_top_n == 2 else QUANT_KW1
+    m = FusedQuantisedConfidenceLUT(spec, seed=5, **kw).cuda().train()
+    opt = torch.optim.Adam(m.parameters(), lr=1e-2)
+    g = torch.Generator(device="cuda").manual_seed(21)
+    for _ in range(20):
+        xb = torch.randn(256, 8, 24, device="cuda", generator=g)
+        loss = (m(xb) - xb.roll(1, dims=1)).pow(2).mean()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    m.eval()
+    payload = m.to_deployment()
+    assert payload["meta"]["read_top_n"] == read_top_n
+    d = QuantisedConfidenceLUT.from_deployment(spec, payload["tensors"], payload["meta"], device="cuda").eval()
+    assert type(d).__name__ == "DeployedQuantisedConfidenceLUT" and d.read_top_n == read_top_n
+    scale = payload["decompress_scale"].cuda().reshape(spec.n_groups, spec.d_out)
+    x = torch.randn(512, 8, 24, device="cuda", generator=g)
+    with torch.no_grad():
+        yi, yd, yq = m.forward_int(x), d(x) * scale, m(x)
+    assert torch.equal(yd, yi), f"deployed read differs from the trained integer read (max {float((yd - yi).abs().max()):.2e})"
+    assert _rel(yq, yi) < 1e-6
 
 
 def _tie_margins(target_q=None, target_k=None, nap=4):

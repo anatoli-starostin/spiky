@@ -59,7 +59,7 @@ ORDER = ["ManifestoHardLUT", "ManifestoHardLUT weight=softsign", "ManifestoSoftL
          "FusedManifestoHardLUT", "FusedManifestoHardLUT weight=softsign", "FusedManifestoSoftLUT",
          "FusedManifestoSoftLUT weight=softsign", "ConfidenceLUT n=1", "ConfidenceLUT n=2", "FusedConfidenceLUT n=1",
          "FusedConfidenceLUT n=2", "QuantisedConfidenceLUT n=1", "QuantisedConfidenceLUT n=2",
-         "FusedQuantisedConfidenceLUT n=2",
+         "FusedQuantisedConfidenceLUT n=1", "FusedQuantisedConfidenceLUT n=2",
          "DeployedQuantisedConfidenceLUT", "DeployedQuantisedConfidenceLUT n=1"]
 BEFORE_C, AFTER_C = "#E69F00", "#009E73"                  # orange / green (Okabe-Ito: CVD-distinct)
 IMPROVE, REGRESS, NOISE_C = "#0072B2", "#D55E00", "#8c959f"
