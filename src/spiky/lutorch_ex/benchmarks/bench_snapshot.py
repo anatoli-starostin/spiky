@@ -62,7 +62,8 @@ def _fused(cls, **kw):
 
 #: (name, constructor). Every concrete cartridge class (reference and fused) with its defaults.
 #: DeployedQuantisedConfidenceLUT is inference-only (forward only, built from an export of a QuantisedConfidenceLUT with
-#: that read width; the n=2 row keeps its earlier name).
+#: that read width; the n=2 row keeps its earlier name). FusedQuantisedConfidenceLUT has no n=1 row on purpose: it
+#: covers the two-cell read only and raises at the forward for read_top_n=1, so there is no cell to measure.
 CARTRIDGES = [
     ("ManifestoHardLUT", lambda s: lx.ManifestoHardLUT(s, seed=1)),
     ("ManifestoSoftLUT", lambda s: lx.ManifestoSoftLUT(s, seed=1)),
@@ -76,6 +77,7 @@ CARTRIDGES = [
     ("ConfidenceLUT n=2", _conf(lx.ConfidenceLUT, 2)),
     ("FusedConfidenceLUT n=1", _conf(lx.FusedConfidenceLUT, 1)),
     ("FusedConfidenceLUT n=2", _conf(lx.FusedConfidenceLUT, 2)),
+    ("QuantisedConfidenceLUT n=1", _conf(lx.QuantisedConfidenceLUT, 1)),
     ("QuantisedConfidenceLUT n=2", _conf(lx.QuantisedConfidenceLUT, 2)),
     ("FusedQuantisedConfidenceLUT n=2", _conf(lx.FusedQuantisedConfidenceLUT, 2)),
     ("DeployedQuantisedConfidenceLUT", lambda s: _deployed(s, 2)),       # from QuantisedConfidenceLUT.to_deployment()
