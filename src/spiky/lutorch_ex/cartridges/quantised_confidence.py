@@ -28,7 +28,7 @@ Implementations (spec rules 3 and 5: the class is the implementation, there is n
   compiled on CUDA. It loads no extension.
 * :class:`FusedQuantisedConfidenceLUT` -- the fused twin: one fused CUDA forward (``_pow2_int8.FusedQuantRead``:
   addressing, the per-table integers and straight-through weights, the fake-quant gather, in one kernel after the
-  table exponents) and one hand-written CUDA backward that recomputes the per-table scalars from z. Cases the kernel does not cover (read_top_n=1, single anchors, nap > 8, a CPU input, a
+  table exponents) and one hand-written CUDA backward that reads the forward's per-table integers back. Cases the kernel does not cover (read_top_n=1, single anchors, nap > 8, a CPU input, a
   non-fp32 input or table) raise, naming the case, and so does a missing extension.
 * :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form, read_top_n 1 or 2 as exported: on CUDA ONE
   kernel (``csrc/pow2_int8_read.cu``, deploy_fwd: addressing, the integers, the int8 shift-add read), fp32 input; on CPU
@@ -306,8 +306,9 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     Forward (``_pow2_int8.FusedQuantRead``): the table exponents, then ONE kernel for the whole read -- addressing, the
     p2 integers and straight-through weights in registers, the fake-quant gather and the fixed-order reduction (the
     order is documented in ``csrc/pow2_int8_read.cu``). The margins never reach global memory. Backward: ONE
-    hand-written kernel that re-stages z and recomputes phase A per CTA, as FusedConfidenceLUT's does; its reduction
-    orders are documented beside it."""
+    hand-written kernel that re-stages z per CTA for the margins, as FusedConfidenceLUT's does, and reads the
+    forward's per-table integers (one packed int32 per table) instead of recomputing them; its reduction orders are
+    documented beside it."""
 
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
         super().__init__(spec, read_top_n=read_top_n, **kw)
@@ -369,7 +370,7 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         grp_out = _pow2_int8.FusedQuantRead.apply(
             z, self.weights, self.confidence_log_beta.float(), self.confidence_log_gamma.float(),
             self.log_read_tau.float(), self._anc_a16, self._anc_b16, self._zoff, self._zent,
-            None if dmask is None else dmask.contiguous(), self._quant)
+            None if dmask is None else dmask.contiguous(), self._quant, torch.is_grad_enabled())
         return self._route(grp_out, x)
 
 

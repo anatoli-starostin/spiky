@@ -142,31 +142,35 @@ class FusedQuantRead(torch.autograd.Function):
     gather); the margins never reach global memory.
 
     Backward: one launch of the hand-written backward (csrc/pow2_int8_read.cu, quant_bwd), plus the sum of its per-CTA
-    scalar partials. Only z, the parameters, the exponents and the dropout factors are saved; the kernel re-stages z
-    and recomputes phase A per CTA. The gradient semantics are the reference's (_pow2.ste_cell_weights, ste_tables):
-    the identity to the fp32 master table and the straight-through ratios b / e (clamped k', also for skipped and
-    dropped cells)."""
+    scalar partials. Saved: z, the parameters, the exponents, the dropout factors and each table's integers (c1, c2,
+    clamped k', q, skip: one packed int32 per table, written by the forward when a gradient is needed); the kernel
+    re-stages z for the margins and reads the integers instead of recomputing them. The gradient semantics are the
+    reference's (_pow2.ste_cell_weights, ste_tables): the identity to the fp32 master table and the straight-through
+    ratios b / e (clamped k', also for skipped and dropped cells)."""
 
     @staticmethod
-    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, cfg):
+    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, cfg, grad_mode):
         ext = load()
         W2 = weights.reshape(-1, weights.shape[-1])
         E = ext.table_exponents(W2, weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
         qlo, qhi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
         args = (W2, E, dmask, log_beta, log_gamma, log_tau, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
-        out = ext.quant_fwd(z, anc_a16, anc_b16, *args)
-        ctx.save_for_backward(z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask)
+        # the integers are saved exactly when a backward can follow: the caller's grad mode (grad mode is off inside
+        # forward) and an input that needs a gradient -- autograd state, not a user switch
+        save = grad_mode and any(ctx.needs_input_grad[:5])
+        out, tabs = ext.quant_fwd(z, anc_a16, anc_b16, *args, save)
+        ctx.save_for_backward(z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, tabs)
         ctx.cfg = (cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
         return out
 
     @staticmethod
     def backward(ctx, go):
-        z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask = ctx.saved_tensors
+        z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, tabs = ctx.saved_tensors
         W2 = weights.reshape(-1, weights.shape[-1])
-        gz, gW, gscal = load().quant_bwd(go.contiguous(), z, anc_a16, anc_b16, zoff, zent, W2, E, dmask,
+        gz, gW, gscal = load().quant_bwd(go.contiguous(), z, anc_a16, anc_b16, zoff, zent, tabs, W2, E, dmask,
                                          log_beta, log_gamma, log_tau, *ctx.cfg)
         gs = gscal.sum(0)                      # over CTAs (a fixed-shape reduction: deterministic)
         need = ctx.needs_input_grad
         return (gz if need[0] else None, gW.view_as(weights) if need[1] else None,
                 gs[0].view_as(log_beta) if need[2] else None, gs[1].view_as(log_gamma) if need[3] else None,
-                gs[2].view_as(log_tau) if need[4] else None, None, None, None, None, None, None)
+                gs[2].view_as(log_tau) if need[4] else None, None, None, None, None, None, None, None)

@@ -112,9 +112,33 @@ struct Params {
   const float* log_beta;
   const float* log_gamma;
   const float* log_tau;
+  int32_t* tabs;            // [B, G, tph] each table's packed integers (pack_tab): written by the forward when the
+                            // backward will run, read by the backward; nullptr in a forward without autograd
   int B, G, tph, nap, d_in, d_out, lo, hi, Q;
   float qlo, qhi;
 };
+
+// One table's integers for the backward, packed into 28 bits of an int32: c1 | c2 << 8 | (k' + 8) << 16 | q << 20 |
+// skip << 27. c1, c2 < 2^nap <= 256 (8 bits each); the clamped k' lies in [lo, hi] within [-3, 4], so k' + 8 is in
+// [5, 12] (4 bits); q is clamped to [0, 64] (7 bits); skip is one bit; drop is q > Q, recomputed. Exactly the integers
+// p2::table_scalars returned in the forward, so the backward reads what it used to recompute.
+__device__ inline int32_t pack_tab(const p2::TableScalars& s) {
+  return (int32_t)s.c1 | ((int32_t)s.c2 << 8) | (((int32_t)s.kc + 8) << 16) | ((int32_t)s.q << 20) |
+         ((int32_t)s.skip << 27);
+}
+
+__device__ inline p2::TableScalars unpack_tab(int32_t v, int Q) {
+  p2::TableScalars s;
+  s.c1 = (uint8_t)(v & 255);
+  s.c2 = (uint8_t)((v >> 8) & 255);
+  s.kc = (int8_t)(((v >> 16) & 15) - 8);
+  s.q = (int8_t)((v >> 20) & 127);
+  s.skip = ((v >> 27) & 1) != 0;
+  s.drop = s.q > Q;
+  s.sh = 0;
+  s.mj = 0;
+  return s;
+}
 
 __host__ __device__ inline size_t align16(size_t n) { return (n + 15) & ~size_t(15); }
 
@@ -239,6 +263,7 @@ __global__ void quant_fwd_kernel(Params p, float* __restrict__ out) {
       for (int j = 0; j < NAP_MAX; ++j)
         if (j < p.nap) d[j] = zs[sa[t * p.nap + j]] - zs[sb[t * p.nap + j]];
       const p2::TableScalars s = p2::table_scalars(d, p.nap, tau, 0.f, beta, gamma, p.lo, p.hi, p.Q);
+      if (p.tabs) p.tabs[row * p.tph + t] = pack_tab(s);
       float a1 = s.skip ? 0.f : ldexpf(1.0f, s.kc);
       float a2 = (s.skip || s.drop) ? 0.f : ldexpf(1.0f, (int)s.kc - (int)s.q);
       if (p.dmask) {
@@ -287,11 +312,13 @@ __global__ void quant_fwd_kernel(Params p, float* __restrict__ out) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// quant_bwd: the backward of quant_fwd, structured as FusedConfidenceLUT's backward. Nothing is saved from the forward but
-// z, the parameters, the exponents E and the dropout factors: per (group, row) the CTA re-stages z and recomputes phase A.
-//   phase A  thread per table: margins (kept in shared memory, tph x nap per CTA), p2::table_scalars, the forward cell
-//            weights w1 / w2 (x dropout) and the straight-through numerators b1 = 2^k', b2 = 2^(k'-q) (clamped k', also
-//            for skipped / dropped cells, as _pow2.ste_blend_weights).
+// quant_bwd: the backward of quant_fwd, structured as FusedConfidenceLUT's backward. Saved from the forward: z, the
+// parameters, the exponents E, the dropout factors and each table's integers (tabs, pack_tab): per (group, row) the CTA
+// re-stages z for the margins and reads the integers back.
+//   phase A  thread per table: margins (kept in shared memory, tph x nap per CTA, for phase C), the forward's integers
+//            read back from tabs (one packed int32 per table, pack_tab; not recomputed), the forward cell weights w1 / w2
+//            (x dropout) and the straight-through numerators b1 = 2^k', b2 = 2^(k'-q) (clamped k', also for skipped /
+//            dropped cells, as _pow2.ste_blend_weights).
 //   phase B  stripe x chunk: gW[c] += w go (fp32 atomics, vector atomics on sm_90+: the ONLY atomics; gW feeds no
 //            exponent) and the partial dot products go . fq(W[c]) of this chunk, each written to its own slot
 //            rp[chunk][t] (no atomics).
@@ -404,14 +431,8 @@ __global__ void quant_bwd_kernel(Params p, const float* __restrict__ go, const i
     for (int i = tid; i < p.d_out; i += bd) gos[i] = go[row * p.d_out + i];
     __syncthreads();
     for (int t = tid; t < p.tph; t += bd) {                 // phase A
-      float d[NAP_MAX];
-#pragma unroll
-      for (int j = 0; j < NAP_MAX; ++j)
-        if (j < nap) {
-          d[j] = zs[sa[t * nap + j]] - zs[sb[t * nap + j]];
-          us[t * nap + j] = d[j];
-        }
-      const p2::TableScalars s = p2::table_scalars(d, nap, tau, 0.f, beta, gamma, p.lo, p.hi, p.Q);
+      for (int j = 0; j < nap; ++j) us[t * nap + j] = zs[sa[t * nap + j]] - zs[sb[t * nap + j]];
+      const p2::TableScalars s = unpack_tab(p.tabs[row * p.tph + t], p.Q);   // the forward's integers
       const float k = p.dmask ? p.dmask[row * p.tph + t] : 1.f;
       w1[t] = (s.skip ? 0.f : ldexpf(1.0f, s.kc)) * k;
       w2[t] = ((s.skip || s.drop) ? 0.f : ldexpf(1.0f, (int)s.kc - (int)s.q)) * k;
@@ -738,14 +759,20 @@ qf::Params read_params(const torch::Tensor& z, const torch::Tensor& anc_a, const
 }
 }  // namespace
 
-torch::Tensor quant_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, const torch::Tensor& anc_b,
-                        const torch::Tensor& W, const torch::Tensor& E, const c10::optional<torch::Tensor>& dmask,
-                        const torch::Tensor& log_beta, const torch::Tensor& log_gamma, const torch::Tensor& log_tau,
-                        int64_t lo, int64_t hi, int64_t Q, double qlo, double qhi) {
+// Returns {out [B, G, d_out], tabs}: tabs is each table's packed integers, int32 [B, G, tph], when save_tables (the
+// backward will run), else an empty tensor.
+std::vector<torch::Tensor> quant_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, const torch::Tensor& anc_b,
+                                     const torch::Tensor& W, const torch::Tensor& E,
+                                     const c10::optional<torch::Tensor>& dmask, const torch::Tensor& log_beta,
+                                     const torch::Tensor& log_gamma, const torch::Tensor& log_tau, int64_t lo, int64_t hi,
+                                     int64_t Q, double qlo, double qhi, bool save_tables) {
   const c10::cuda::CUDAGuard guard(z.device());
-  const qf::Params p = read_params(z, anc_a, anc_b, W, E, dmask, log_beta, log_gamma, log_tau, lo, hi, Q, qlo, qhi);
+  qf::Params p = read_params(z, anc_a, anc_b, W, E, dmask, log_beta, log_gamma, log_tau, lo, hi, Q, qlo, qhi);
   auto out = torch::empty({p.B, p.G, p.d_out}, z.options());
-  if (p.B == 0) return out;
+  auto tabs = save_tables ? torch::empty({p.B, p.G, p.tph}, z.options().dtype(torch::kInt32))
+                          : torch::empty({0}, z.options().dtype(torch::kInt32));
+  p.tabs = save_tables ? tabs.data_ptr<int32_t>() : nullptr;
+  if (p.B == 0) return {out, tabs};
   const int vec = qf::vec_for(p.d_out), threads = qf::threads_for(p.d_out);
   TORCH_CHECK(threads <= 1024, "d_out too wide for one CTA");
   const int nstripe = threads / (p.d_out / vec);
@@ -760,20 +787,24 @@ torch::Tensor quant_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, cons
   else if (vec == 2) launch(qf::quant_fwd_kernel<2>);
   else launch(qf::quant_fwd_kernel<1>);
   C10_CUDA_KERNEL_LAUNCH_CHECK();
-  return out;
+  return {out, tabs};
 }
 
 // The backward of quant_fwd. go [B, G, d_out]; zoff [G, d_in + 1] / zent [G, 2 tph nap] (int32) the per-group map from
 // each input dim to the anchor entries that read it (entry e < tph nap: anc_a[e], else anc_b[e - tph nap]), increasing.
+// tabs [B, G, tph] int32: the forward's packed per-table integers (quant_fwd with save_tables).
 // Returns gz [B, G, d_in], gW [rows, d_out] and the per-CTA scalar partials [grid, 3] (log_beta, log_gamma, log_tau).
 std::vector<torch::Tensor> quant_bwd(const torch::Tensor& go, const torch::Tensor& z, const torch::Tensor& anc_a,
                                      const torch::Tensor& anc_b, const torch::Tensor& zoff, const torch::Tensor& zent,
-                                     const torch::Tensor& W, const torch::Tensor& E,
+                                     const torch::Tensor& tabs, const torch::Tensor& W, const torch::Tensor& E,
                                      const c10::optional<torch::Tensor>& dmask, const torch::Tensor& log_beta,
                                      const torch::Tensor& log_gamma, const torch::Tensor& log_tau, int64_t lo, int64_t hi,
                                      int64_t Q, double qlo, double qhi) {
   const c10::cuda::CUDAGuard guard(z.device());
-  const qf::Params p = read_params(z, anc_a, anc_b, W, E, dmask, log_beta, log_gamma, log_tau, lo, hi, Q, qlo, qhi);
+  qf::Params p = read_params(z, anc_a, anc_b, W, E, dmask, log_beta, log_gamma, log_tau, lo, hi, Q, qlo, qhi);
+  TORCH_CHECK(tabs.is_cuda() && tabs.scalar_type() == torch::kInt32 && tabs.is_contiguous() &&
+              tabs.numel() == (int64_t)p.B * p.G * p.tph, "tabs: contiguous int32 [B, G, tph] from quant_fwd");
+  p.tabs = const_cast<int32_t*>(tabs.data_ptr<int32_t>());
   TORCH_CHECK(go.is_cuda() && go.scalar_type() == torch::kFloat32 && go.is_contiguous() && go.numel() == (int64_t)p.B * p.G * p.d_out,
               "go: contiguous fp32 [B, G, d_out]");
   TORCH_CHECK(zoff.scalar_type() == torch::kInt32 && zoff.is_contiguous() && zoff.numel() == (int64_t)p.G * (p.d_in + 1) &&
@@ -870,6 +901,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("scalars", &p2_scalars, "p2::table_scalars for every table: forward of the lutorch_ex::p2_scalars op");
   m.def("table_exponents", &table_exponents, "per-(group, channel) fake-quant exponents e of the table");
   m.def("quant_fwd", &quant_fwd, "FusedQuantisedConfidenceLUT's fused forward: addressing, p2 integers, fake-quant read");
-  m.def("quant_bwd", &quant_bwd, "FusedQuantisedConfidenceLUT's fused backward (recomputes phase A from z)");
+  m.def("quant_bwd", &quant_bwd, "FusedQuantisedConfidenceLUT's fused backward (the forward's integers, margins from z)");
   m.def("deploy_fwd", &deploy_fwd, "DeployedQuantisedConfidenceLUT's int8 read (read_top_n 1 or 2), the raw accumulator");
 }
