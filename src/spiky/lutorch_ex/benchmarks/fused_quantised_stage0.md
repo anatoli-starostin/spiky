@@ -1225,3 +1225,63 @@ All are within noise; no new snapshot of record is needed.
 ## Note: the benchmark modules moved (2026-10-13)
 
 `bench.py`, `bench_snapshot.py`, `bench_compare.py` and `bench_fused_confidence.py` moved from `lutorch_ex/` into `lutorch_ex/benchmarks/` (`git mv`, no behaviour change); run them as `python -m spiky.lutorch_ex.benchmarks.<name>`. Every mention of them above is left as written: the names still identify the same tools, and the commands recorded were run under the old paths.
+
+## Snapshot coverage audit: the missing quantised n=1 row, and a regression it was hiding
+
+**Audit.** Every concrete cartridge class × read_top_n × dtype that exists in the tree, crossed with what `bench_snapshot` measured before bd4e5dcb (dtypes measured for every row: fp32 and bf16; geometries champion and large):
+
+| class | read_top_n / variant | measured before? | status |
+|---|---|---|---|
+| ManifestoHardLUT, ManifestoSoftLUT | rational, softsign | yes | – |
+| FusedManifestoHardLUT, FusedManifestoSoftLUT | rational, softsign | yes | – |
+| ConfidenceLUT | n=1, n=2 | yes | – |
+| FusedConfidenceLUT | n=1, n=2 | yes | – |
+| QuantisedConfidenceLUT | n=2 | yes | – |
+| **QuantisedConfidenceLUT** | **n=1** | **no** | **(a) oversight: added in bd4e5dcb** |
+| FusedQuantisedConfidenceLUT | n=2 | yes | – |
+| FusedQuantisedConfidenceLUT | n=1 | no | **(b) impossible, a deliberate absence:** the class covers the two-cell read only and raises `RuntimeError` at the forward for read_top_n=1 (`_require`); its kernels have no n=1 form |
+| DeployedQuantisedConfidenceLUT | n=1, n=2 (eval) | yes | train cells do not exist: inference-only, no Parameters, no backward |
+
+- **bf16** is measured for every row. It is refused, by design, for the quantised reference (`TypeError`: no low precision), for FusedQuantised (fp32 input only) and for Deployed. Those cells show as refused / error rows, not gaps.
+- **No other asymmetry.** The Manifesto family has both weights on both reference and fused classes; Confidence and FusedConfidence have both read widths. The confidence family has no `weight=` option (`_WEIGHTED = False`).
+- **Outside the class × read_top_n × dtype matrix and deliberately unchanged:** fp16 inputs (accepted by some classes, never part of the snapshot's dtype axis, for any class), single-anchor mode and other geometries. These are consistent across classes, not omissions of one class.
+- The cell list stays a constant in the code (no flag, no switch). It now carries a comment on the FusedQuantised n=1 absence.
+
+**Measured as an ADDENDUM, not merged into v2.** The v2 snapshot of record and its two baselines come from one interleaved session. Adding a row measured later would mix sessions inside one snapshot, so the new row was measured on its own: #162 (c8e48c36), #160 (a811390e) and HEAD (bd4e5dcb), one session, interleaved cell by cell in a rotating order, fresh process per cell.
+- Each tree ran its OWN `bench_snapshot.measure()` with its own `_conf(QuantisedConfidenceLUT, 1)`: the per-cell path its CLI runs. The #160 / #162 cell lists predate the row, so their CLI could not name it. `measure()` is the same code in all three trees for a training class; the only differences are in the deployed branch.
+- Conditions: SM up to 3.06 GHz, 35–42 C, **no throttle or power-cap flag on any cell**.
+- Files: `snapshot_{162_remeasured,160_remeasured,164}_v2_addendum.{json,md}`; figures `figures_162_remeasured_vs_164_v2_addendum/` and `figures_160_vs_164_v2_addendum/` (`bench_compare.py --same-session`).
+- **These cells are comparable with each other, but must not be differenced against v2 cells.**
+
+**QuantisedConfidenceLUT n=1, fp32 (ms; addendum session; peaks unchanged within noise):**
+
+| | #162 | #160 | #164 HEAD | HEAD / #162 |
+|---|---|---|---|---|
+| 8k eval forward | 1.300 | 1.300 | 1.668 | **×1.28** |
+| 8k train forward | 1.371 | 1.355 | 1.721 | **×1.26** |
+| 8k train total | 6.500 | 6.441 | 7.208 | **×1.11** |
+| 32k eval forward | 4.796 | 4.791 | 6.179 | **×1.29** |
+| 32k train forward | 5.198 | 4.889 | 6.264 | **×1.21** |
+| 32k train total | 26.152 | 24.874 | 27.648 | ×1.06 (inside ±6%; ×1.11 vs #160) |
+
+- Beyond noise vs #162: 5 time cells, all regressions. Vs #160: 7 time cells, all regressions (32k train backward ×1.07 and train total ×1.11 included). Memory: within noise everywhere (+0.02 GiB at 32k).
+- bf16: refused on every tree.
+
+**This is a real regression introduced by #164, not a transient.**
+- Three further interleaved rounds on all three trees reproduced it. At 8k HEAD's eval was 1.651–1.654 ms vs 1.302–1.304 for #162 / #160; at 32k it was 6.19–6.52 vs 4.79–5.13. Train total was 7.20–7.21 vs 6.41–6.45 at 8k and 27.6–29.6 vs 24.7–26.1 at 32k. The row was therefore not replaced.
+- **Bisect** (champion fp32, two interleaved rounds on scratch trees):
+
+  | tree | eval forward | train total |
+  |---|---|---|
+  | #162 c8e48c36 | 1.298–1.303 | 6.44–6.47 |
+  | 7406cd64 (Stages 2+4) | 1.300–1.302 | 6.44–6.46 |
+  | 41df6f25 (Stage 3) | 1.659 | 7.17 |
+  | b39a6a8d | 1.654–1.655 | 7.21–7.51 |
+  | 3277a430 | 1.655–1.657 | 7.20 |
+  | HEAD | 1.653–1.654 | 7.19–7.26 |
+
+- The step is **41df6f25 (Stage 3)**. There the n=1 reference forward stopped deriving k' from the logsigmoid pass it already shares with the score (`round_half_up(log2(msum) + γ·lse/ln2)`). It now calls `_pow2.single_exponent(m, g0, β, γ, cfg)` ("the deployed kernel's integers and order"), which recomputes from the margins.
+  - That was done so the trained n=1 cartridge's integers equal the new n=1 deployed kernel's bit for bit (the export round trip is tested exactly).
+  - The cost is a second per-table pass in the reference's n=1 forward. The comment above it ("One logsigmoid pass is shared … instead of computing the score twice") no longer describes the k' half.
+- It went unseen because the row was never in the snapshot. That is exactly the exception Anatoly objected to.
+- **Not fixed here** (this task allows no library change). Whether to recover the time is a decision: for example, derive the kernel-order k' from intermediates already computed while keeping the bits identical, or accept the cost of the bit-exact export.
