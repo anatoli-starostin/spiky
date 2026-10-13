@@ -169,7 +169,7 @@ def canonical_full_coverage_singles(
     """Canonical full-coverage *single* anchors, one independent draw per group.
 
     The single-anchor counterpart of :func:`canonical_full_coverage_pairs`: each address
-    bit tests one coordinate against zero (``[z[a] > eps]``) rather than a pair, so the
+    bit tests one coordinate against zero (``[z[a] > 0]``) rather than a pair, so the
     pool is the ``d_in`` coordinates themselves instead of the ``C(d_in, 2)`` pairs.
 
     Args:

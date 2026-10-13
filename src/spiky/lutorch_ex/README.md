@@ -69,7 +69,7 @@ Each **table** reads a `d_in`-wide vector `z` and owns `nap` **probes**. A probe
 pair `(a, b)`, giving the margin `u = z[a] - z[b]`, or a single anchor `a`, giving `u = z[a]`. Anchors
 are coordinate indices: drawn once from the seed, stored as buffers and never trained.
 
-1. **Address.** Each probe contributes one bit, `[u > cmp_eps]`, and the `nap` bits form a cell index
+1. **Address.** Each probe contributes one bit, `[u > 0]`, and the `nap` bits form a cell index
    `c = sum_j bit_j * 2**(nap-1-j)` in `[0, 2**nap)`: probe 0 gives the highest bit, the last probe the
    lowest. For example, with `nap = 3` and bits `(1, 0, 1)` from probes 0, 1, 2, `c = 4 + 0 + 1 = 5`.
    Each cell holds a learnable row of width `d_out`.
@@ -173,7 +173,6 @@ arguments are shared by all of them:
 | --- | --- | --- |
 | `seed` | `0` | anchors (group `g` seeded `seed + g`) and the table init |
 | `weight_init_std` | `1e-3` | tables start as `Uniform[-std, +std]`, drawn per head |
-| `cmp_eps` | `0.0` | the threshold `eps` in the bit test `u > eps` |
 | `table_dropout_rate` | `0.0` | whole-table dropout, see [Regularisers](#regularisers) |
 | `device` | `None` | where to build parameters and buffers |
 | `index_dtype` | `None` | dtype of the **stored** cell-index tensors, produced once in the shared addressing. `None` picks `torch.int32` when the table fits it, else `torch.int64`; an explicit `torch.int32` or `torch.int64` is honoured (see below) |
@@ -214,9 +213,9 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 | --- | --- | --- |
 | `read_top_n` | `1` (`2` for `QuantisedConfidenceLUT`) | `1` = scored single cell, `2` = scored two-cell blend |
 | `beta_init`, `gamma_init` | `2.0`, `1.0` | initial `β`, `γ` (must be `> 0`) |
-| `read_tau_init` | `0.5` | initial `τ` (used when `read_top_n=2`) |
+| `read_tau_init` | `0.5` | initial `τ`; only valid with `read_top_n=2` (at `read_top_n=1` it raises `ValueError`: no blend, no `τ`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
-| `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer |
+| `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer; only valid with `read_top_n=2` (raises at `read_top_n=1`) |
 
 `ConfidenceLUT` has one read, `y = Σ_t s_t · W_t[c_t]` (n=1) or its two-cell blend (n=2), in train and eval, in one
 of two forms of the same maths:
@@ -234,8 +233,8 @@ of two forms of the same maths:
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
 (the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
-`read_top_n` defaults to `2`, the only form deployment supports. `read_top_n=1` still trains and evaluates,
-but `export_deployment` refuses it with a clear error.
+`read_top_n` defaults to `2`. `read_top_n=1` trains (also as `FusedQuantisedConfidenceLUT`), evaluates and exports
+too: the export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` reads one cell.
 
 ### PyTorch's embedding_bag backward size limit
 
@@ -298,8 +297,10 @@ input and a bf16 table with one contract: addressing runs in fp32, so a lossy ma
 reductions accumulate in fp32; and each result is rounded once (the output and the input gradient to the input dtype,
 a parameter's gradient to its dtype). The reference classes do it by running their fp32 maths on fp32 views; the
 result is bit-identical to the fp32 run rounded once -- measured at test sizes (tests/test_reference_low_precision.py), and on CUDA under torch.use_deterministic_algorithms (otherwise the fp32 run's own atomic scatters are not reproducible). The reference
-classes also run fp64; the fused ones do not (and take no fp16 table). `QuantisedConfidenceLUT` stays fp32 / fp64
-and raises a `TypeError` on bf16/fp16; `FusedQuantisedConfidenceLUT` is fp32 only.
+classes also run fp64; the fused ones do not (and take no fp16 table). The quantised family's fused CUDA cartridges
+-- `FusedQuantisedConfidenceLUT`, and `DeployedQuantisedConfidenceLUT` on CUDA -- take fp32 input and write fp32 output
+only; any other input dtype raises, naming it (the deployed class's CPU path runs the torch definition, which also
+takes fp64). `QuantisedConfidenceLUT` is the pure-PyTorch reference and is not part of that rule.
 
 **Compilation and kernels.**
 
@@ -460,21 +461,21 @@ Scope today:
 ## Benchmarking
 
 The performance snapshot of record (every class, fp32 and bf16, 8k and 32k vectors, RTX 5090) is
-`benchmarks/snapshot_162.md` / `.json`, made by `python -m spiky.lutorch_ex.bench_snapshot`. Earlier snapshots stay as
+`benchmarks/snapshot_162.md` / `.json`, made by `python -m spiky.lutorch_ex.benchmarks.bench_snapshot`. Earlier snapshots stay as
 history: `snapshot_160` and `snapshot_159.json` (#159's, transcribed from its PR comment: 2 decimals, a different
-session). `python -m spiky.lutorch_ex.bench_compare A.json B.json --out-dir DIR` compares any two of them (interleaved
+session). `python -m spiky.lutorch_ex.benchmarks.bench_compare A.json B.json --out-dir DIR` compares any two of them (interleaved
 before / after bars and a ratio strip; matplotlib needed). Two committed figure sets:
 - `benchmarks/figures_159_vs_162/`: the cumulative change across #160 and #162 (#159's snapshot has 2 decimals and a
   different session: not a controlled A/B);
 - `benchmarks/figures_160_vs_162/`: #162's effect alone (the quantised reference's compile options, ManifestoHardLUT's
   surrogate); the other cells that move there are run-to-run noise.
 
-`spiky.lutorch_ex.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
+`spiky.lutorch_ex.benchmarks.bench` times any cartridge's `forward_eval`, `forward_train` and `backward` over a
 grid of batch sizes and devices. It reports the median and minimum milliseconds and the throughput:
 
 ```python
 from spiky.lutorch_ex import LUTSpec, ConfidenceLUT
-from spiky.lutorch_ex.bench import benchmark, format_table
+from spiky.lutorch_ex.benchmarks.bench import benchmark, format_table
 
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
 rows = benchmark(lambda: ConfidenceLUT(spec, seed=1, read_top_n=2), name="ConfidenceLUT n=2",
@@ -491,7 +492,7 @@ How `devices` are interpreted:
   grid.
 - `rows_to_json` and `rows_to_csv` export the rows.
 
-As a script, `python -m spiky.lutorch_ex.bench [--warmup N] [--repeats N] [--measure-cuda] [--json PATH]
+As a script, `python -m spiky.lutorch_ex.benchmarks.bench [--warmup N] [--repeats N] [--measure-cuda] [--json PATH]
 [--csv PATH]` runs a fixed demo: `ManifestoHardLUT` and `ManifestoSoftLUT` at a small geometry. For other
 cartridges, call `benchmark()` as above.
 
@@ -531,10 +532,6 @@ lutorch_ex/
 ├── fp8.py               opt-in fp8 GEMMs for ProjectionMHL's projections (tensorwise e4m3/e5m2, fp32 master)
 ├── deploy.py            export_deployment / load_deployment
 ├── deploy_registry.py   format tag -> rebuilder registry
-├── bench.py             the benchmark harness
-├── bench_snapshot.py    the performance snapshot of record (every class, one fresh process per cell)
-├── bench_compare.py     two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
-├── bench_fused_confidence.py   FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
 ├── cartridges/
 │   ├── manifesto_base.py            ManifestoLUT: tables, anchors, addressing, routing, cell TV, table dropout
 │   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
@@ -553,6 +550,11 @@ lutorch_ex/
 │   ├── _fallback.py                 classified "extension unavailable" errors (NativeUnavailableError)
 │   ├── uncertainty.py               rational_uncertainty
 │   └── csrc/                        CUDA / C++ kernel sources
-├── benchmarks/          snapshots of record (snapshot_<PR>.md / .json) and the comparison figures
+├── benchmarks/
+│   ├── bench.py                     the benchmark harness
+│   ├── bench_snapshot.py            the performance snapshot of record (every class, one fresh process per cell)
+│   ├── bench_compare.py             two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
+│   ├── bench_fused_confidence.py    FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
+│   └── snapshot_<PR>.md / .json, figures_*/, fused_quantised_stage0.md   the records
 └── tests/               pytest suite
 ```

@@ -1,7 +1,7 @@
 """Single-anchor addressing mode (``anchor_mode="single"``) across every cartridge.
 
-Single mode replaces each table's two-coordinate sign test ``[z[a_j] - z[b_j] > eps]`` with
-a single coordinate vs zero, ``[z[a_j] > eps]``. The two-cell structure, routing, and
+Single mode replaces each table's two-coordinate sign test ``[z[a_j] - z[b_j] > 0]`` with
+a single coordinate vs zero, ``[z[a_j] > 0]``. The two-cell structure, routing, and
 uncertainty backward are untouched, so every cartridge supports it. Composed with a learned
 input projection (a :class:`ProjectionMHL` compress with bias, ``z = W x + b``) each bit
 becomes a learned hyperplane ``[⟨w_j, x⟩ + b_j > 0]``. The final test checks that end to end

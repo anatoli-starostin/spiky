@@ -1,0 +1,120 @@
+{
+ "environment": {
+  "commit": "bd4e5dcb80b90c3f4f2881dff2c96c377028157a",
+  "uncommitted_changes_in_lutorch_ex": false,
+  "torch": "2.9.1+cu130",
+  "cuda_runtime": "13.0",
+  "driver": "595.84",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "vram_gib": 31.4,
+  "sm": "sm_120",
+  "power_limit_w": "600.00 W",
+  "max_sm_clock": "3210 MHz",
+  "clocks_locked": false,
+  "other_processes": "11203, 140 MiB\n7292, 12 MiB\n655436, 28 MiB\n271538, 838 MiB",
+  "time": "2026-10-13 17:12:06 +0300",
+  "note": "ADDENDUM to the v2 snapshots: the QuantisedConfidenceLUT n=1 row only, measured 2026-10-13 in a LATER session than the v2 body, the three trees (#162 c8e48c36, #160 a811390e, #164 HEAD bd4e5dcb) interleaved cell by cell in a rotating order. Comparable with each other; NOT to be differenced against v2 cells."
+ },
+ "observed": {
+  "champion_float32": {
+   "sm_clock": "3007 MHz",
+   "power_draw": "301.82 W",
+   "temp_c": "43",
+   "throttle": "0x0000000000000000"
+  },
+  "champion_bfloat16": {
+   "sm_clock": "2655 MHz",
+   "power_draw": "93.19 W",
+   "temp_c": "38",
+   "throttle": "0x0000000000000000"
+  },
+  "large_float32": {
+   "sm_clock": "3007 MHz",
+   "power_draw": "466.95 W",
+   "temp_c": "45",
+   "throttle": "0x0000000000000000"
+  },
+  "large_bfloat16": {
+   "sm_clock": "2932 MHz",
+   "power_draw": "99.86 W",
+   "temp_c": "39",
+   "throttle": "0x0000000000000000"
+  }
+ },
+ "rows": [
+  {
+   "cartridge": "QuantisedConfidenceLUT n=1",
+   "dtype": "float32",
+   "batch": 8192,
+   "eval_forward": {
+    "median_ms": 1.6680800318717957,
+    "p25_ms": 1.6657520234584808,
+    "p75_ms": 1.6709440350532532,
+    "peak_gib": 0.1650390625
+   },
+   "train_forward": {
+    "median_ms": 1.7207040190696716,
+    "p25_ms": 1.7089920043945312,
+    "p75_ms": 1.817399948835373,
+    "peak_gib": 0.2275390625
+   },
+   "train_backward": {
+    "median_ms": 5.480959892272949,
+    "p25_ms": 5.4773759841918945,
+    "p75_ms": 6.004647970199585,
+    "peak_gib": 0.5554699897766113
+   },
+   "train_total": {
+    "median_ms": 7.2077600955963135,
+    "p25_ms": 7.190488219261169,
+    "p75_ms": 7.628048062324524,
+    "peak_gib": 0.5554699897766113
+   },
+   "geometry": "champion"
+  },
+  {
+   "cartridge": "QuantisedConfidenceLUT n=1",
+   "dtype": "bfloat16",
+   "batch": 8192,
+   "status": "refused: QuantisedConfidenceLUT does not support low precision",
+   "geometry": "champion"
+  },
+  {
+   "cartridge": "QuantisedConfidenceLUT n=1",
+   "dtype": "float32",
+   "batch": 32768,
+   "eval_forward": {
+    "median_ms": 6.1788318157196045,
+    "p25_ms": 6.172039866447449,
+    "p75_ms": 6.203511953353882,
+    "peak_gib": 0.51953125
+   },
+   "train_forward": {
+    "median_ms": 6.263551950454712,
+    "p25_ms": 6.256712079048157,
+    "p75_ms": 6.27459192276001,
+    "peak_gib": 0.76953125
+   },
+   "train_backward": {
+    "median_ms": 21.385183334350586,
+    "p25_ms": 21.375991821289062,
+    "p75_ms": 21.40973663330078,
+    "peak_gib": 1.9531278610229492
+   },
+   "train_total": {
+    "median_ms": 27.648320198059082,
+    "p25_ms": 27.636911392211914,
+    "p75_ms": 27.689200401306152,
+    "peak_gib": 1.9531278610229492
+   },
+   "geometry": "large"
+  },
+  {
+   "cartridge": "QuantisedConfidenceLUT n=1",
+   "dtype": "bfloat16",
+   "batch": 32768,
+   "status": "refused: QuantisedConfidenceLUT does not support low precision",
+   "geometry": "large"
+  }
+ ]
+}

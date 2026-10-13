@@ -85,7 +85,7 @@ def test_bf16_compress_flip_rate_within_measured_bound():
             z_exact = ref.compress(x).reshape(-1, spec.h_in, spec.d_in)
     finally:
         torch.set_float32_matmul_precision(prev)
-    bits = lambda z: cart._addresses(z)[1] > cart.cmp_eps             # noqa: E731
+    bits = lambda z: cart._addresses(z)[1] > 0             # noqa: E731
     d = bits(_cartridge_input(m, x)) != bits(z_exact)
     bit_flip, cell_flip = d.float().mean().item(), d.any(-1).float().mean().item()
     assert bit_flip < 0.002, bit_flip      # measured ~0.0007

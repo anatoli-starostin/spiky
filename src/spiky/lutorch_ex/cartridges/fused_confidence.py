@@ -59,7 +59,7 @@ def fused_confidence_ext():
 
 class _FusedConfidence(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, eps, n, knobs,
+    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, n, knobs,
                 out_bf16):
         # z: fp32 or bf16 (upconverted in-kernel). log_beta / log_gamma / log_tau: fp32. weights: fp32 or bf16 (the
         # kernels read it in place). The output is fp32, or bf16 when out_bf16 (bf16 z only).
@@ -70,26 +70,26 @@ class _FusedConfidence(torch.autograd.Function):
         # divisible by 4, so those launches are unchanged).
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
         out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-                                 nap, eps, n, fwd_threads, knobs.rows_per_cta, vec, out_bf16)
+                                 nap, n, fwd_threads, knobs.rows_per_cta, vec, out_bf16)
         ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep)
-        ctx.cfg = (keep_scale, nap, eps, n, knobs, vec, bwd_threads)
+        ctx.cfg = (keep_scale, nap, n, knobs, vec, bwd_threads)
         return out
 
     @staticmethod
     def backward(ctx, go):
         z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
-        keep_scale, nap, eps, n, knobs, vec, bwd_threads = ctx.cfg
+        keep_scale, nap, n, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
         # The kernel reads go in fp32 (a bf16 go from the bf16-output mode is upcast: exact). gz comes back in z's dtype.
         gW, gz, gscal = fused_confidence_ext().confidence_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-            nap, eps, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
+            nap, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         g = gscal.sum(0)
         g_tau = g[2] if n == 2 else None
         # gW is accumulated in fp32 whatever the table dtype; a bf16 Parameter must receive a bf16 .grad, so it is
         # cast once here (one rounding per element, after the whole accumulation; a no-op for an fp32 table).
         return (gz, gW.view_as(weights).to(weights.dtype), g[0], g[1], g_tau,
-                None, None, None, None, None, None, None, None, None)
+                None, None, None, None, None, None, None, None)
 
 
 class FusedConfidenceLUT(ConfidenceBase):
@@ -161,6 +161,6 @@ class FusedConfidenceLUT(ConfidenceBase):
         log_tau = self.log_read_tau if self.read_top_n == 2 else self.confidence_log_beta
         grp = _FusedConfidence.apply(z, self.weights, self.confidence_log_beta.float(),
                                      self.confidence_log_gamma.float(), log_tau.float(),
-                                     self._anc_a16, self._anc_b16, keep, keep_scale, self.spec.nap, self.cmp_eps,
+                                     self._anc_a16, self._anc_b16, keep, keep_scale, self.spec.nap,
                                      self.read_top_n, self.knobs, out_bf16)
         return self._route(grp, x).to(x.dtype)

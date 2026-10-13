@@ -10,6 +10,7 @@ other's forward (amendment B). The maths is in each of them.
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -23,9 +24,13 @@ class ConfidenceBase(ManifestoLUT):
     Args (beyond the shared :class:`ManifestoLUT` ones):
         read_top_n: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion).
         beta_init / gamma_init: initial β, γ (stored log-parametrised; champion (β,γ)=(2,1)).
-        read_tau_init: initial τ for read_top_n=2 (champion 0.5).
-        read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer.
+        read_tau_init: initial τ (default 0.5, the champion). Only valid at read_top_n=2.
+        read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer. Only valid at
+            read_top_n=2.
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
+
+    τ is the temperature of the two-cell blend σ(−2|u_j*|/τ); the read_top_n=1 read has no blend and no τ. Passing
+    read_tau_init or read_tau_learnable with read_top_n=1 raises ValueError rather than being silently ignored.
     """
 
     _WEIGHTED = False            # scored cells: no neighbour-weight function (weight= / soft-sign temperatures)
@@ -37,14 +42,28 @@ class ConfidenceBase(ManifestoLUT):
         read_top_n: int = 1,
         beta_init: float = 2.0,
         gamma_init: float = 1.0,
-        read_tau_init: float = 0.5,
-        read_tau_learnable: bool = True,
+        read_tau_init: Optional[float] = None,
+        read_tau_learnable: Optional[bool] = None,
         learnable_score: bool = True,
         **kw,
     ):
         super().__init__(spec, **kw)
         if read_top_n not in (1, 2):
             raise ValueError(f"read_top_n must be 1 or 2, got {read_top_n}")
+        # None = not given: the τ arguments exist only for the two-cell blend, so giving either at n=1 is a mistake (it
+        # used to be accepted and dropped without a word).
+        given = {k: v for k, v in (("read_tau_init", read_tau_init), ("read_tau_learnable", read_tau_learnable))
+                 if v is not None}
+        if read_top_n == 1 and given:
+            args = ", ".join(f"{k}={v!r}" for k, v in given.items())
+            raise ValueError(
+                f"{type(self).__name__}: {args} given with read_top_n=1, where it has no effect. τ is the temperature "
+                f"of the two-cell blend σ(-2|u_j*|/τ) between a table's cell and its least-confident neighbour; the "
+                f"read_top_n=1 read takes one cell per table, has no blend and therefore no τ (no log_read_tau is "
+                f"created). Pass read_top_n=2 if you meant the τ-blend read, or drop "
+                f"{'these arguments' if len(given) > 1 else 'the argument'} for the single-cell read.")
+        read_tau_init = 0.5 if read_tau_init is None else read_tau_init
+        read_tau_learnable = True if read_tau_learnable is None else read_tau_learnable
         if not (beta_init > 0 and gamma_init > 0 and read_tau_init > 0):
             raise ValueError(
                 f"beta_init, gamma_init, read_tau_init must be > 0, got "

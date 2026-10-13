@@ -210,8 +210,29 @@ def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
         _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _pow2_int8.EXT_NAME)
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("where", ["input", "table"])
+def test_fused_quantised_rejects_low_precision(where, dtype):
+    """FusedQuantisedConfidenceLUT is a fused CUDA cartridge, fp32 in / out only: a bf16 / fp16 input, or table, raises
+    RuntimeError naming it -- and does NOT point to the reference class, which does not take low precision either."""
+    import re
+    spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8)
+    m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, read_top_n=2).cuda()
+    x = torch.randn(8, 4, 8, device="cuda")
+    if where == "input":
+        x = x.to(dtype)
+        msg = rf"input dtype {re.escape(str(dtype))} \(the fused CUDA kernel takes fp32 input and writes fp32 output only\)"
+    else:
+        m = m.to(dtype)
+        msg = rf"table dtype {re.escape(str(dtype))} \(the fused CUDA kernel reads an fp32 table only\)"
+    with pytest.raises(RuntimeError, match=msg) as e:
+        m(x)
+    assert "Construct QuantisedConfidenceLUT" not in str(e.value)
+
+
 @pytest.mark.parametrize("case,kw,x", [
-    ("read_top_n=1", dict(read_top_n=1), lambda: torch.randn(8, 4, 8)),
+    ("the input is on cpu", dict(read_top_n=1), lambda: torch.randn(8, 4, 8)),   # n = 1 is covered; a CPU input is not
     ("anchor_mode='single'", dict(spec=dict(anchor_mode="single")), lambda: torch.randn(8, 4, 8)),
     ("the input is on cpu", {}, lambda: torch.randn(8, 4, 8)),
     ("input dtype torch.float64", {}, lambda: torch.randn(8, 4, 8, dtype=torch.float64)),
@@ -234,3 +255,25 @@ def test_no_env_var_switch_left():
     for src in root.glob("*.py"):
         text = src.read_text()
         assert "LUTORCH_EX_NO_CUDA_EXT" not in text and "SPIKY_P2_CUDA_DISABLE" not in text, src.name
+
+
+# -- DeployedQuantisedConfidenceLUT on CUDA (the deploy_fwd kernel) ---------------------------------------------------
+
+def _deployed(n=2, device="cuda"):
+    q = lx.QuantisedConfidenceLUT(_spec(), seed=0, read_top_n=n)
+    p = q.to_deployment()
+    return lx.DeployedQuantisedConfidenceLUT(_spec(), p["tensors"], p["meta"], device=device)
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("n", [1, 2])
+def test_deployed_without_extension_raises_with_cause(no_quantised_ext, n):
+    """No fallback on CUDA: without the extension the deployed class raises with the classified cause."""
+    with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
+        _deployed(n)(torch.randn(16, 4, 8, device="cuda"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_deployed_cuda_fp64_input_raises_naming_the_case():
+    with pytest.raises(RuntimeError, match=r"input dtype torch.float64 on CUDA"):
+        _deployed()(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))

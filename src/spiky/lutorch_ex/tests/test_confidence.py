@@ -142,6 +142,54 @@ def test_score_params_and_tau_wiring():
     with pytest.raises(ValueError, match="read_top_n"):
         ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=3)
 
+    # n=2, the τ arguments given explicitly: the same as the defaults (True -> Parameter, False -> buffer, init honoured)
+    m2t = ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=2, read_tau_learnable=True)
+    assert "log_read_tau" in {n for n, _ in m2t.named_parameters()}
+    assert torch.equal(m2t.log_read_tau.detach(), m2.log_read_tau.detach())
+    m2f = ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=2, read_tau_learnable=False)
+    assert "log_read_tau" not in {n for n, _ in m2f.named_parameters()}
+    assert "log_read_tau" in dict(m2f.named_buffers())
+    assert torch.equal(m2f.log_read_tau, m2.log_read_tau.detach())
+    m2i = ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=2, read_tau_init=0.25)
+    assert abs(m2i.log_read_tau.exp().item() - 0.25) < 1e-6
+
+
+#: Every class built on ConfidenceBase. The τ arguments exist only for the two-cell blend (read_top_n=2).
+def _confidence_classes():
+    from spiky.lutorch_ex import FusedConfidenceLUT, FusedQuantisedConfidenceLUT, QuantisedConfidenceLUT
+    return [ConfidenceLUT, FusedConfidenceLUT, QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT]
+
+
+@pytest.mark.parametrize("cls", _confidence_classes(), ids=lambda c: c.__name__)
+@pytest.mark.parametrize("given", [dict(read_tau_learnable=True), dict(read_tau_learnable=False),
+                                   dict(read_tau_init=0.6), dict(read_tau_init=0.6, read_tau_learnable=True)],
+                         ids=["learnable=True", "learnable=False", "init", "both"])
+def test_tau_arguments_at_read_top_n_1_raise(cls, given):
+    """τ is the temperature of the two-cell blend; at read_top_n=1 there is none, so giving read_tau_init or
+    read_tau_learnable is refused (it used to be accepted and silently dropped) with a message naming the argument,
+    why it has no effect and what to do instead."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
+    with pytest.raises(ValueError) as e:
+        cls(spec, seed=0, weight_init_std=1.0, read_top_n=1, **given)
+    msg = str(e.value)
+    for k, v in given.items():
+        assert f"{k}={v!r}" in msg
+    assert "read_top_n=1" in msg and "blend" in msg and "Pass read_top_n=2" in msg
+
+
+@pytest.mark.parametrize("cls", _confidence_classes()[:3], ids=lambda c: c.__name__)
+def test_bare_read_top_n_1_constructs_without_tau(cls):
+    """Neither τ argument given at read_top_n=1: constructs as always, silently, with no τ (also with read_top_n left at
+    its default where that default is 1: ConfidenceLUT and FusedConfidenceLUT; the quantised classes default to 2)."""
+    spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
+    built = [cls(spec, seed=0, weight_init_std=1.0, read_top_n=1)]
+    if cls.__name__ in ("ConfidenceLUT", "FusedConfidenceLUT"):
+        built.append(cls(spec, seed=0, weight_init_std=1.0))
+    for m in built:
+        assert m.read_top_n == 1
+        assert not hasattr(m, "log_read_tau")
+        assert {n for n, _ in m.named_parameters()} == {"weights", "confidence_log_beta", "confidence_log_gamma"}
+
 
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_single_and_pairs_canonical_coverage(anchor_mode):
