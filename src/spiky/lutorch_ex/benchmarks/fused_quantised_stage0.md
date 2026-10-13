@@ -1085,3 +1085,41 @@ All are within noise; no new snapshot of record is needed.
 **Not proposed:**
 - parallelising the grad-x gather (≤ 0.1 ms; it changes grad-x bits);
 - bf16 tables (see the bf16 investigation) remain a possible follow-up only if wanted.
+
+## The per-table-integer saving, implemented and measured
+
+**Decision reversed (Anatoly):** break the peak-memory parity and measure candidate #1. The section above is kept as written for now. This section records what the saving actually gives.
+
+**What changed:**
+- `quant_fwd_kernel` stores each table's integers as one packed int32 (`pack_tab`: c1 | c2 << 8 | (k' + 8) << 16 | q << 20 | skip << 27).
+  - The 32-bit packing holds over the whole validated range: c1 and c2 < 2^nap ≤ 256; k' is clamped to [lo, hi] ⊆ [−3, 4]; q is clamped to [0, 64]. That is 28 bits; drop = q > Q is recomputed.
+  - So the cost is 4 bytes per table, as projected.
+- `quant_bwd_kernel` phase A unpacks the integers instead of calling `p2::table_scalars`. It still stages the margins, because phase C needs them.
+- A straight replacement: no switch. The integers are written exactly when a backward can follow (the caller's grad mode and an input that needs a gradient), so eval / no-grad forwards allocate nothing.
+
+**Bit-exactness, verified:**
+- **Saved integers vs `p2::table_scalars`** (the p2_scalars op), compared exactly: 65.0 M tables, 0 mismatches.
+  - 11 geometries: tph 1–255, G 1–16, d_out 1–257 including odd and tail sizes, nap 2–8.
+  - 5 scalar settings and 3 input scales; every k' in [−3, 4] and every q in [0, 64] occurs.
+- **Fingerprint vs 9a9f0891:**
+  - FusedQuantised eval, train, grad x, β, γ, τ are bit-identical. Only grad weights differs: the known gW atomic order.
+  - Reference and Deployed (n = 1, 2) are bit-identical.
+- **Layer 1** (zero tolerance), the quantised, deploy and csrc thread-index tests pass.
+
+**Measured** on the RTX 5090, in one session: fresh process per cell, before / after / FusedConfidence fp32 interleaved, medians over 7 rounds (kernel) / 5 rounds (e2e).
+
+| | 8k | 32k |
+|---|---|---|
+| `quant_bwd` kernel alone, before → after | 2.094 → 1.979 ms (−5.5%) | 8.361 → 7.930 ms (−5.2%) |
+| `quant_fwd` kernel alone (the store) | 0.507 → 0.524 ms | 2.105 → 2.204 ms |
+| train total, FusedQuantised before → after | 2.628 → 2.543 ms (−3.2%) | 10.063 → 9.591 ms (−4.7%) |
+| train gap vs FusedConfidence fp32, before → after | +7.9% → **+4.5%** | +6.1% → **+1.1%** |
+| eval gap vs FusedConfidence fp32 (unchanged code path) | +9.0% | +7.5% |
+| training peak, before → after (MEASURED) | 0.0941 → 0.1254 GiB (+33.6 MB) | 0.2358 → 0.3608 GiB (+134.2 MB) |
+| FusedConfidence fp32 training peak | 0.0941 GiB | 0.2358 GiB |
+
+**Reading:**
+- The measured peak matches the projection (+34 / +134 MB, 0.236 → ~0.37 GiB). Peak-memory parity with FusedConfidenceLUT is given up.
+- At 32k the backward now runs level with FusedConfidence's (7.49 vs 7.49 ms).
+- The session's before-gaps (+7.9% / +6.1%) are lower than the recorded +9.0% / +7.7%. That is session-to-session variation; the deltas above are within one session.
+- GPU state: 36–52 °C. The only throttle reason seen was the software power cap (0x4), intermittently, on both trees.
