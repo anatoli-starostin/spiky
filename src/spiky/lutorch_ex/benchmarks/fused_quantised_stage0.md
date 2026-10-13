@@ -1400,3 +1400,29 @@ Conditions: SM up to 3.07 GHz, 31–44 C. **No throttle or power-cap flag on any
 - FusedQuantised n=2 vs FusedConfidence n=2 in v3: train total +5.4% / +4.4%, eval +9.0% / +3.7%.
 
 **Session drift vs v2:** HEAD's cells moved by no more than their noise floor between v2 and v3 (212 time values). The largest is ×1.10, FusedManifestoHard·softsign 8k fp32 train forward, a 0.34 ms cell with a ±15% floor. The code differs only by the n=1 templating.
+
+## The within-branch delta of the fused n=1 work (3e8eec29 → HEAD), with the new rows drawn
+
+**What it compares.** #164 immediately before the fused n=1 work (3e8eec29) against #164 HEAD (949d4921, library 0b3de742). They were measured in ONE session, interleaved cell by cell over the full matrix with the tree order alternating, each tree under its own `bench_snapshot` CLI.
+- The v3 HEAD measurement came from a different session, so HEAD was measured fresh here as `snapshot_164_v4`. `snapshot_164_v3` stays the snapshot of record against #162 / #160.
+- Both trees' `measure()` are the same code.
+- Conditions: SM up to 3.07 GHz, 31–43 C, **no throttle or power-cap flag on any of 288 samples**.
+- Files: `snapshot_164_prefusedn1_v3.{json,md}`, `snapshot_164_v4.{json,md}`, `figures_164_prefusedn1_vs_164_v3/`.
+
+**Result: nothing moved beyond its noise floor.** All 440 comparable values are within noise, time 220 / 220 and memory 220 / 220. None is better or worse.
+- **FusedQuantised n=2, which the N-templating was meant to leave untouched:** every cell is within noise, time ×0.989–×1.008, memory ×1.000. The templating did not move n=2.
+- **QuantisedConfidenceLUT n=1 (the reference, untouched by this work):** ×1.000–×1.005, eval 1.650 / 6.188 ms on both sides.
+- **Deployed n=1 / n=2:** ×0.998–×1.003.
+
+**New rows, drawn as after-only bars:**
+- FusedQuantisedConfidenceLUT n=1 fp32 at 8k and 32k. The before side does not exist: at 3e8eec29 the class raised at the forward for read_top_n=1.
+- Values: eval 0.303 / 1.205 ms, train forward 0.388 / 1.367, backward 1.192 / 4.418, total 1.589 / 5.794; training peak 0.125 / 0.361 GiB.
+- In the same session FusedConfidence n=1 measured train total 1.540 / 5.884 (fused-Q n=1 +3.2% / −1.5%) and eval 0.266 / 1.049 (+14.0% / +14.9%).
+- FusedQuantised n=1 bf16 is also after-only, but it is refused (fp32 only), so it has no values and no bar.
+
+**`bench_compare.py` now draws after-only rows.**
+- A row only the after snapshot has is drawn as the after bar alone, labelled "NEW · no before, not ratio'd": no ratio and no noise-floor judgement. The legend explains it, and the ratio strip lists those rows instead of plotting them.
+- Rows on both sides are unchanged, and so is every figure without after-only rows. Verified byte for byte:
+  - the committed `figures_164_presave_vs_164_v2/` re-drawn by the new code are identical;
+  - on #160 → #162 (24 OOM → fits cells, no after-only rows) the new and the previous bench_compare produce identical PNGs.
+- (The committed `figures_160_vs_162/` themselves predate the noise-floor extension, so neither version reproduces them. That is history, not this change.)

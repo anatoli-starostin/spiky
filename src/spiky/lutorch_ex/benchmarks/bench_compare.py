@@ -19,6 +19,9 @@ How cells are joined and marked:
   snapshot's printed resolution (``provenance.decimals``: half a unit in the last place), is "within noise": the
   bars draw the floor as a shaded band around the before value, hatch the after-bar, and label the ratio in grey with
   the floor ("x1.03 . within +-10%"); a change beyond it gets the ratio in black.
+- A row only the AFTER snapshot has (new functionality: nothing to compare it with) is drawn too, as the after bar
+  alone, labelled "NEW" -- no ratio and no noise-floor judgement; it is listed, not plotted, on the ratio strip. A row
+  only the BEFORE snapshot has is reported on stdout. Without after-only rows the figures are unchanged.
 - The footnote states the protocol and the two environments. Two snapshots from different sessions are not a
   controlled A/B, and the figures say so; ``--same-session`` (both measured in one session, interleaved cell by cell)
   says that instead.
@@ -116,6 +119,28 @@ def join(before_path, after_path):
     return cells, sorted(set(before) - set(after)), sorted(set(after) - set(before)), (rb, ra)
 
 
+def new_cells(after_path, after_only):
+    """Cells of the rows only the after snapshot has (new functionality), one per phase the row measured and metric:
+    after value only, no ratio, no noise floor, status "new (after only)"."""
+    _, after, _ = _load(after_path)
+    cells = []
+    for key in sorted(after_only, key=lambda k: (ORDER.index(k[0]) if k[0] in ORDER else 99, k[1], k[2])):
+        _, ac, _ = after[key]
+        for ph, phl in PHASES:
+            a = ac.get(ph)
+            if a is None:
+                continue
+            for m, ml, _ in METRICS:
+                cells.append(dict(cls=key[0], was="", vectors=key[1], dtype=key[2], phase=phl, metric=ml, before=None,
+                                  after=None if a == "OOM" else a[m], ratio=None, noise=None,
+                                  status="new (after only)" if a != "OOM" else "new (after only), OOM"))
+    return cells
+
+
+def _order(c):
+    return (ORDER.index(c["cls"]) if c["cls"] in ORDER else 99, c["vectors"], c["dtype"])
+
+
 def _env(rec, path):
     e = rec["environment"]
     dec = rec.get("provenance", {}).get("decimals")
@@ -159,6 +184,17 @@ def _bars(plt, cells, metric, phases, title, unit, lo, hi, caveat, names, path):
             yc = -i * (2 * h + gap)
             ys.append(yc)
             noise = c["status"] == "within noise"
+            if c["status"].startswith("new (after only)"):  # new functionality: the after bar alone, no judgement
+                if c["after"] is None:
+                    ax.text(lo * 1.15, yc - h / 2, "OOM", va="center", ha="left", fontsize=7, fontweight="bold",
+                            color=AFTER_C)
+                else:
+                    ax.barh(yc - h / 2, c["after"] - lo, left=lo, height=h * 0.94, color=AFTER_C, lw=0, zorder=2)
+                ax.text(lo * 1.15, yc + h / 2, "NEW", va="center", ha="left", fontsize=7, fontweight="bold", color=INK)
+                if c["after"] is not None:
+                    ax.text(c["after"] * 1.12, yc, "NEW · no before, not ratio'd", va="center", fontsize=6.5,
+                            color=INK, fontstyle="italic")
+                continue
             if c["noise"] is not None and c["before"]:      # the cell's noise floor around the before value
                 ax.add_patch(plt.Rectangle((c["before"] * (1 - c["noise"]), yc - h - 0.02), c["before"] * 2 * c["noise"],
                                            2 * h + 0.04, color=BAND, ec=MUTED, lw=0.4, zorder=0))
@@ -193,14 +229,18 @@ def _bars(plt, cells, metric, phases, title, unit, lo, hi, caveat, names, path):
         ax.tick_params(axis="y", length=0)
     fig.suptitle(title + "   ·   LOG axis: bar lengths are not proportional to the values — read the ×ratio labels",
                  x=0.01, ha="left", y=1 - 0.12 / H, fontsize=12, fontweight="bold")
-    fig.legend(handles=[Patch(color=BEFORE_C, label=names[0]), Patch(color=AFTER_C, label=names[1]),
-                        Patch(facecolor=AFTER_C, hatch="////", edgecolor=SURF,
-                              label="after, within the cell's noise floor or the before value's resolution"),
-                        Patch(facecolor=BAND, edgecolor=MUTED, lw=0.4,
-                              label="the cell's noise floor around the before value (±15% < 0.5 ms; ±10% ≤ 8k; ±6%; "
-                                    "memory ±5%)"),
-                        Patch(color="none", label="×r = after / before: black beyond noise, grey within")],
-               loc="upper left", bbox_to_anchor=(0.005, 1 - 0.42 / H), ncol=3, frameon=False, fontsize=8)
+    handles = [Patch(color=BEFORE_C, label=names[0]), Patch(color=AFTER_C, label=names[1]),
+               Patch(facecolor=AFTER_C, hatch="////", edgecolor=SURF,
+                     label="after, within the cell's noise floor or the before value's resolution"),
+               Patch(facecolor=BAND, edgecolor=MUTED, lw=0.4,
+                     label="the cell's noise floor around the before value (±15% < 0.5 ms; ±10% ≤ 8k; ±6%; "
+                           "memory ±5%)"),
+               Patch(color="none", label="×r = after / before: black beyond noise, grey within")]
+    if any(c["status"].startswith("new (after only)") for s in sub for c in s):
+        handles.append(Patch(color="none", label="NEW = a row only the after snapshot has (new functionality): the "
+                                                 "after bar alone, no ratio"))
+    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.005, 1 - 0.42 / H), ncol=3, frameon=False,
+               fontsize=8)
     fig.text(0.01, 0.06 / H, caveat, fontsize=7, color=INK2, va="bottom")
     fig.subplots_adjust(top=1 - 1.2 / H, bottom=1.45 / H, left=0.205, right=0.975)
     fig.savefig(path, dpi=150)
@@ -244,6 +284,10 @@ def _strip(plt, cells, title, caveat, path):
                        Patch(color=BAND, label=f"±{NOISE:.0%} band (each cell is judged by its own floor)")],
               loc="upper left", bbox_to_anchor=(0, 1.1), ncol=4, frameon=False, fontsize=8)
     ax.set_title(title, loc="left", pad=28, fontsize=12, fontweight="bold")
+    new = sorted({_label(c) for c in cells if c["status"].startswith("new (after only)")})
+    if new:
+        ax.text(0.995, 0.02, "NEW, after only (no ratio, not plotted):\n" + "\n".join(new), transform=ax.transAxes,
+                ha="right", va="bottom", fontsize=6.6, color=INK2, linespacing=1.15)
     fig.text(0.01, 0.005, caveat, fontsize=7, color=INK2, va="bottom")
     fig.subplots_adjust(left=0.2, right=0.98, top=0.87, bottom=0.21)
     fig.savefig(path, dpi=170)
@@ -261,6 +305,9 @@ def main(argv=None):
                     help="the two snapshots were measured in one session, interleaved cell by cell (the footnote says so)")
     a = ap.parse_args(argv)
     cells, before_only, after_only, (rb, ra) = join(a.before, a.after)
+    extra = new_cells(a.after, after_only)
+    if extra:                                        # stable merge in the figures' row order; no-op without new rows
+        cells = sorted(cells + extra, key=_order)
     os.makedirs(a.out_dir, exist_ok=True)
     nb, na = (os.path.splitext(os.path.basename(p))[0] for p in (a.before, a.after))
     if a.csv:
@@ -268,7 +315,8 @@ def main(argv=None):
             w = csv.DictWriter(f, fieldnames=list(cells[0]))
             w.writeheader()
             w.writerows(cells)
-    print(f"{len(cells)} comparable values; before only: {len(before_only)}; after only: {len(after_only)}")
+    print(f"{len(cells) - len(extra)} comparable values; before only: {len(before_only)}; after only: {len(after_only)}"
+          + (f" ({len(extra)} new-functionality values drawn as after-only bars)" if extra else ""))
     for k in before_only:
         print("  before only:", *k)
     for k in after_only:
