@@ -6,8 +6,9 @@
 > here. See [`aux_runs/README.md`](aux_runs/README.md) for the full corpus finding and the seed-replicate
 > / init-ablation runs (`06_conf_n1_s2`, `06_conf_n1_s3`, `06_conf_n1_oldbias`) moved there.
 
-Six fused-cartridge ablations at the abl47 **champion topology** (h8/tph64/nap8/d48, 6-block
-MinimalGPT, ~68M params), reproducing the old abl47 sweep on the current `main` lutorch_ex API.
+Eight fused-cartridge ablations (plus a dense `00_vanilla` baseline) at the abl47 **champion topology**
+(h8/tph64/nap8/d48, 6-block MinimalGPT, ~68M params for the LUT arms, 35.8M for vanilla), reproducing the
+old abl47 sweep on the current `main` lutorch_ex API.
 One folder per ablation; each has a **self-contained `train.py` with the model defined inline**
 (RoPE + SDPA attention, prenorm blocks, untied unembedder), a `config.json`, and a `README.md`.
 
@@ -25,32 +26,42 @@ One folder per ablation; each has a **self-contained `train.py` with the model d
 
 | run | cartridge | val_bpb (170-shard, 48k) | Δ vs 06_conf_n1 | σ vs seed cluster |
 |---|---|---:|---:|---:|
-| 06_conf_n1      | FusedConfidenceLUT(read_top_n=1)   | **1.096980** (seeds 1.096980 / 1.096822 / 1.094599; mean 1.09613, σ 0.001331) | 0 | 0 |
-| 04_fms_softsign | FusedManifestoSoftLUT(softsign)    | 1.109537 | +0.012557 | +10.1σ |
-| 03_fms_rational | FusedManifestoSoftLUT(rational)    | 1.118633 | +0.021653 | +16.9σ |
-| 01_fmh_rational | FusedManifestoHardLUT(rational)    | 1.132425 | +0.035445 | +27.3σ |
-| 02_fmh_softsign | FusedManifestoHardLUT(softsign)    | 1.137804 | +0.040824 | +31.3σ |
-| 05_conf_n2      | FusedConfidenceLUT(read_top_n=2)   | (pending) | — | — |
+| 05_conf_n2      | FusedConfidenceLUT(read_top_n=2)          | **1.086532** | −0.010448 | −7.2σ |
+| 00_vanilla      | dense MLP (GELU, 35.79M params)           | 1.089362 | −0.007618 | −5.1σ\* |
+| 08_qconf_n2     | FusedQuantisedConfidenceLUT(p2_int8, n=2) | 1.089864 | −0.007116 | −4.7σ |
+| 06_conf_n1      | FusedConfidenceLUT(read_top_n=1)          | 1.096980 (seeds 1.096980 / 1.096822 / 1.094599; mean 1.09613, σ 0.001331) | 0 | 0 |
+| 07_qconf_n1     | FusedQuantisedConfidenceLUT(p2_int8, n=1) | 1.099281 | +0.002301 | +2.4σ |
+| 04_fms_softsign | FusedManifestoSoftLUT(softsign)           | 1.109537 | +0.012557 | +10.1σ |
+| 03_fms_rational | FusedManifestoSoftLUT(rational)           | 1.118633 | +0.021653 | +16.9σ |
+| 01_fmh_rational | FusedManifestoHardLUT(rational)           | 1.132425 | +0.035445 | +27.3σ |
+| 02_fmh_softsign | FusedManifestoHardLUT(softsign)           | 1.137804 | +0.040824 | +31.3σ |
 
-Reads: confidence (n=1) is best; **soft manifesto beats hard** for both weights (rational +0.0138, softsign +0.0283);
-and the weight ordering flips with the read — under HARD rational<softsign, under SOFT softsign<rational — so
-`fms_softsign` is the strongest manifesto arm, within ~0.013 of the confidence reference. All on the full
-170-shard corpus; NOT comparable to abl47-family numbers (see aux_runs/README.md).
+(\* the σ column is scaled by the 06_conf_n1 3-seed σ (0.001331); for the non-conf-family arms — vanilla, quant, manifesto — it is only a nominal yardstick, not a same-distribution z-score.)
+
+Reads: **confidence top-2 (05_conf_n2, 1.0865) is the best arm of the sweep** — adding the second cell beats
+top-1 (06_conf_n1, 1.0970) by 0.0105, which FLIPS the earlier "n=1 is best" reading. Strikingly, the
+**dense MLP baseline (00_vanilla, 1.0894, ~half the params) is 2nd** and beats everything except conf_n2 — so
+on this corpus/topology only the top-2 confidence LUT clears a parameter-light dense FFN. Fake-quant (pow2-int8)
+costs little: +0.0023 on conf_n1, +0.0033 on conf_n2 (qconf_n2 ends up tied with vanilla). Among the manifesto
+arms, **soft beats hard** for both weights, and the weight ordering flips with the read — under HARD
+rational<softsign, under SOFT softsign<rational — so `fms_softsign` is the strongest manifesto arm (1.1095).
+All on the full 170-shard corpus; NOT comparable to abl47-family numbers (see aux_runs/README.md).
 
 Quantised arms 07/08 (added after the main-merge): `07_qconf_n1` and `08_qconf_n2` run
 `FusedQuantisedConfidenceLUT(quant_mode="p2_int8")` at read_top_n 1 and 2.
 - **STALE-NOTE CORRECTION:** the earlier deferral ("`FusedQuantisedConfidenceLUT` n=1 hard-raises /
   two-cell-only") is **no longer true** — the merged main library (HEAD 53d34c50) rewrote the pow2_int8
   path and `FusedQuantisedConfidenceLUT` now covers read_top_n **1 and 2** (smoke-verified: 07 n=1 and 08
-  n=2 both build + train). `quant_mode` defaults to `p2_int8`; the quant is fake-quant STE with no extra
-  learnable params (07 = 68,237,580 params like conf_n1; 08 = 68,237,586 like conf_n2).
+  n=2 both build + train). **Launched + completed 2026-10-14:** 07_qconf_n1 = 1.099281, 08_qconf_n2 = 1.089864
+  (full 48k, clean; see the table above and each folder's RESULT.md). `quant_mode` defaults to `p2_int8`; the
+  quant is fake-quant STE with no extra learnable params (07 = 68,237,580 params like conf_n1; 08 = 68,237,586 like conf_n2).
 - **Trainer note:** 07/08 use a train.py that is the verified reference (md5 6ebb49ec…) plus ONE additive
   `build_cartridge` branch (qconf_n1/qconf_n2 → FusedQuantisedConfidenceLUT) and the matching import — so its
   md5 is `f8ded6fe…`, DIFFERENT from 01-06's `6ebb49ec…`, by explicit authorization. Everything else
   (geometry, faithful init, optimizer grouping, LR/cosine schedule, grad_accum, TV λ=10, table dropout 0.2,
   fixed_eval) is byte-identical to the reference.
 
-## Shared geometry / settings (identical in all 6 config.json)
+## Shared geometry / settings (identical in all 8 LUT config.json; 00_vanilla shares the backbone/recipe, no LUT keys)
 LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs"); 6 blocks, n_embd 384,
 n_head 6, seq_len 512, vocab 32768, untied unembedder. 48,000 steps, lr 3e-4 cosine with a 0.1*lr
 floor, warmup_frac 0.1, wd 0.1, grad_accum 4, device_batch 12 (24,576 tok/step), seed 1, eval_every 500.
@@ -85,7 +96,9 @@ Per folder, on a CUDA box with the lutorch_ex CUDA extension built (fused cartri
 — NOT via `sbox` (the cage has no network), or `wandb.init` hard-fails immediately (online-or-die):
     cd <NN_folder> && setsid nohup python train.py > stdout.log 2>&1 &
 `SMOKE_STEPS=40 python train.py` for a quick sanity. Single-run checkpoint/resume via ckpt.pt (the
-dataloader resume is approximate — restarts from token 0). NOT launched yet.
+dataloader resume is approximate — restarts from token 0). **All arms launched + completed 2026-10-14**
+(00_vanilla + 05/07/08 this round; 01-04 + 06 earlier) — every run clean to step 48000, results in the
+table above and per-folder RESULT.md.
 
 
 ## Root-cause investigation: conf_n1 fused (~1.096) vs abl47 reference conf_n1 (1.1177)
