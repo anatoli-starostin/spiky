@@ -1,12 +1,12 @@
 """Benchmark FusedConfidenceLUT against the compiled ConfidenceLUT, cartridge only, train
-forward and fwd+bwd, at the d24 LUT-FFN geometry (h 16, d 48, tph 64, nap 8, table dropout 0.2), with an fp32 and a
-bf16 table. Also reports each path's error against an fp64 eager reference (same keep mask), and optionally sweeps
-the CUDA launch knobs (--sweep: fp32 table; --sweep-bf16: bf16 table).
+forward and fwd+bwd, at the d24 LUT-FFN geometry (h 16, d 48, tph 64, nap 8, table dropout 0.2), with a float32 and a
+bfloat16 table. Also reports each path's error against a float64 eager reference (same keep mask), and optionally sweeps
+the CUDA launch knobs (--sweep: float32 table; --sweep-bf16: bfloat16 table).
 
     python -m spiky.lutorch_ex.benchmarks.bench_fused_confidence [--tokens 32768] [--n 1 2] [--sweep] [--sweep-bf16]
 
-The input is fp32 in every row, so the bf16 row differs from the fp32 row only in the table (and the scalar
-parameters) being stored in bf16.
+The input is float32 in every row, so the bfloat16 row differs from the float32 row only in the table (and the scalar
+parameters) being stored in bfloat16.
 """
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def time_step(mod, x, go, iters=20, warmup=5, reps=3, fwd_only=False):
 
 def _fp64_ref(n, x, go, keep, state=None):
     ref = build("compiled", n).double()
-    if state is not None:                                  # the bf16 model's (rounded) parameters, upcast exactly
+    if state is not None:                                  # the bfloat16 model's (rounded) parameters, upcast exactly
         ref.load_state_dict({k: v.double() if v.is_floating_point() else v for k, v in state.items()}, strict=False)
     ref._table_dropout_mask = lambda B_, dev, dt: keep.to(dt) / 0.8
     xr = x.double().requires_grad_(True)
@@ -69,9 +69,9 @@ def _fp64_ref(n, x, go, keep, state=None):
 
 
 def errors_vs_fp64(n, B=4096):
-    """Rel-norm error of the output, grad x and every parameter gradient against fp64 eager, same keep mask. For the
-    bf16 table, against fp64 on the SAME bf16-rounded parameters (the arithmetic error) and against fp64 on the
-    original fp32 parameters (arithmetic + bf16 storage)."""
+    """Rel-norm error of the output, grad x and every parameter gradient against float64 eager, same keep mask. For the
+    bfloat16 table, against float64 on the SAME bfloat16-rounded parameters (the arithmetic error) and against float64
+    on the original float32 parameters (arithmetic + bfloat16 storage)."""
     torch.manual_seed(0)
     x = torch.randn(B, 16, 48, device="cuda")
     go = torch.randn(B, 16, 48, device="cuda")

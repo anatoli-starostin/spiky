@@ -14,16 +14,16 @@ Every launch decision Inductor makes heuristically is an explicit knob here (:cl
 vector atomics. Defaults come from ``LUTORCH_EX_CONF_CUDA_*`` environment variables and can be changed per instance
 through ``cartridge.knobs``.
 
-The kernels are its only implementation. A case they do not cover (a CPU input, an fp64 input, an fp16
-or fp64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case, and so does a
-missing extension, naming the cause; :class:`ConfidenceLUT` runs everywhere else.
+The kernels are its only implementation. A case they do not cover (a CPU input, a float64 input, a float16
+or float64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case, and so
+does a missing extension, naming the cause; :class:`ConfidenceLUT` runs everywhere else.
 
-bf16/fp16 (like the other fused cartridges): addressing runs in fp32 (so the discrete bit decisions don't drift),
-every read and reduction accumulates in fp32, and the output is rounded to the input dtype once. A
-bf16 input is read by the kernels directly (upconverted while each row is staged) and, when groups map 1:1 onto
-output heads, the kernel stores the bf16 output itself (a fan-in keeps the fp32 output, sums the groups, then casts);
-both are bitwise identical to casting outside the kernel. A bf16 table stays bf16 in memory and is upconverted in
-registers; its weight gradient accumulates in an fp32 buffer and is cast to bf16 once, at the end.
+bfloat16/fp16 (like the other fused cartridges): addressing runs in float32 (so the discrete bit decisions don't drift),
+every read and reduction accumulates in float32, and the output is rounded to the input dtype once. A
+bfloat16 input is read by the kernels directly (upconverted while each row is staged) and, when groups map 1:1 onto
+output heads, the kernel stores the bfloat16 output itself (a fan-in keeps the float32 output, sums the groups, then
+casts); both are bitwise identical to casting outside the kernel. A bfloat16 table stays bfloat16 in memory and is
+upconverted in registers; its weight gradient accumulates in a float32 buffer and is cast to bfloat16 once, at the end.
 
 Table dropout draws its keep flags with ``torch.rand`` (one bool per (b, g, t), like Inductor's separate RNG kernel)
 and the kernels apply them; the stream of random numbers differs from the compiled ConfidenceLUT's, the
@@ -59,8 +59,9 @@ class _FusedConfidence(torch.autograd.Function):
     @staticmethod
     def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, n, knobs,
                 out_bf16):
-        # z: fp32 or bf16 (upconverted in-kernel). log_beta / log_gamma / log_tau: fp32. weights: fp32 or bf16 (the
-        # kernels read it in place). The output is fp32, or bf16 when out_bf16 (bf16 z only).
+        # z: float32 or bfloat16 (upconverted in-kernel). log_beta / log_gamma / log_tau: float32. weights: float32 or
+        #bfloat16 (the
+        # kernels read it in place). The output is float32, or bfloat16 when out_bf16 (bfloat16 z only).
         ext = fused_confidence_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         # The knobs made legal for this d_out, as for the Manifesto kernels: the vector width is halved until it divides
@@ -78,15 +79,16 @@ class _FusedConfidence(torch.autograd.Function):
         z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
         keep_scale, nap, n, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
-        # The kernel reads go in fp32 (a bf16 go from the bf16-output mode is upcast: exact).
+        # The kernel reads go in float32 (a bfloat16 go from the bfloat16-output mode is upcast: exact).
         # gz comes back in z's dtype.
         gW, gz, gscal = fused_confidence_ext().confidence_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
             nap, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         g = gscal.sum(0)
         g_tau = g[2] if n == 2 else None
-        # gW is accumulated in fp32 whatever the table dtype; a bf16 Parameter must receive a bf16 .grad, so it is
-        # cast once here (one rounding per element, after the whole accumulation; a no-op for an fp32 table).
+        # gW is accumulated in float32 whatever the table dtype; a bfloat16 Parameter must receive a bfloat16 .grad, so
+        #it is
+        # cast once here (one rounding per element, after the whole accumulation; a no-op for a float32 table).
         return (gz, gW.view_as(weights).to(weights.dtype), g[0], g[1], g_tau,
                 None, None, None, None, None, None, None, None)
 
@@ -112,8 +114,8 @@ class FusedConfidenceLUT(ConfidenceBase):
 
     def _require_cuda(self, x: torch.Tensor) -> None:
         """Raise unless the kernels can run this input: a RuntimeError naming the unsupported case (a CPU input, an
-        input other than fp32 / bf16 / fp16, a table other than fp32 / bf16, nap > 16, a d_out one CTA cannot cover),
-        or the classified NativeUnavailableError when only the extension is missing."""
+        input other than float32 / bfloat16 / float16, a table other than float32 / bfloat16, nap > 16, a d_out one CTA
+        cannot cover), or the classified NativeUnavailableError when only the extension is missing."""
         vec, need = _row_launch(self.knobs, self.spec.d_out, self.weights.dtype)
         problems = []
         if not x.is_cuda:
@@ -146,15 +148,17 @@ class FusedConfidenceLUT(ConfidenceBase):
         self._check_input(x)
         self._require_cuda(x)
         # [B, G, d_in]; when every group reads its own head (h_in == n_groups) the in_head gather is the identity and
-        # is skipped (no copy of the input). Addressing runs in fp32: a bf16 input goes to the kernels as is and is
-        # upconverted while each row is staged (exact); fp16 is cast here. grad x comes back in the input dtype.
-        # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to fp32
-        # BEFORE it, so those groups' input gradients sum in fp32 and are rounded to the input dtype once.
+        # is skipped (no copy of the input). Addressing runs in float32: a bfloat16 input goes to the kernels as is and
+        #is
+        # upconverted while each row is staged (exact); float16 is cast here. grad x comes back in the input dtype.
+        # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to float32
+        # BEFORE it, so those groups' input gradients sum in float32 and are rounded to the input dtype once.
         zin = x if self.spec.h_in == self.spec.n_groups else \
             (x if x.dtype == torch.float32 else x.float())[:, self.in_head, :]
         z = (zin if zin.dtype == torch.bfloat16 else zin.float()).contiguous()
-        # bf16 output straight from the kernel (one rounding, as the cast it replaces) when groups map 1:1 onto output
-        # heads; a fan-in sums the groups in _route first, so it keeps the fp32 output and casts once after the sum.
+        # bfloat16 output straight from the kernel (one rounding, as the cast it replaces) when groups map 1:1 onto
+        #output
+        # heads; a fan-in sums the groups in _route first, so it keeps the float32 output and casts once after the sum.
         out_bf16 = z.dtype == torch.bfloat16 and self.spec.h_out == self.spec.n_groups
         keep = self._keep_flags(x.shape[0], x.device)
         keep_scale = 1.0 / (1.0 - self.table_dropout_rate)

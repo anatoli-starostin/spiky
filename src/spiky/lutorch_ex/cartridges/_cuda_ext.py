@@ -56,8 +56,9 @@ _KNOB_DEFAULTS = (("fwd_threads", "FWD_THREADS", 64), ("bwd_threads", "BWD_THREA
 class KernelKnobs:
     """Launch configuration of a hand-written kernel family (all explicit). A field left at None takes its default from
     ``LUTORCH_EX_<ENV>_CUDA_<FIELD>`` (``ENV`` set by the subclass), else the built-in default: 64 / 64 threads per CTA
-    (forward / backward), 4 rows per CTA, vector width 4 (fp32 table) and 4 (bf16 table: 8 is slower on the RTX 5090,
-    mostly in the backward), vector atomics on (sm_90+). Defaults = the sweep winners on the RTX 5090 and the H100."""
+    (forward / backward), 4 rows per CTA, vector width 4 (float32 table) and 4 (bfloat16 table: 8 is slower on the RTX
+    5090, mostly in the backward), vector atomics on (sm_90+). Defaults = the sweep winners on the RTX 5090 and the
+    H100."""
     ENV: ClassVar[str] = ""
     fwd_threads: Optional[int] = None
     bwd_threads: Optional[int] = None

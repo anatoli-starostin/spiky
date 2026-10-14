@@ -24,8 +24,8 @@ Gradients flow to the weight tables, ``β``, ``γ`` and (``n = 2``) ``τ``.
 
 Scope (locked): **scored-only** (no hard-forward mode / STE stitch / score rescale), **constant
 cells** only (``w_c ∈ R^{d_out}``), both anchor modes (inherited from the base). Precision:
-fp32 / fp64; bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward). (QuantisedConfidenceLUT keeps
-rejecting bf16 / fp16.)
+float32 / float64; bfloat16 / float16 run as float32 maths with one rounding per leaf (ReferenceForward).
+(QuantisedConfidenceLUT keeps rejecting bfloat16 / float16.)
 
 One read, for train and eval and both n: ``y = Σ_k w_k · W[r_k]`` over the flat table rows ``r`` and weights
 ``w`` from :meth:`_cells_and_weights` (``w = s`` at n = 1; ``s(1-v)`` and ``s v`` over ``c`` and ``c'`` at n = 2).
@@ -38,7 +38,7 @@ It runs in one of two forms of the same maths, chosen by whether the forward is 
   fused read materialises its gathered rows (CPU n = 1 train step 97.6 → 350.7 ms at 1,024 vectors), so eager keeps
   the one-kernel embedding_bag.
 
-The two agree to fp32 re-association (≤ 7e-7), not bitwise. Backward is autograd through either form: ``s_t`` / ``v``
+The two agree to float32 re-association (≤ 7e-7), not bitwise. Backward is autograd through either form: ``s_t`` / ``v``
 (and their temperatures) are fully differentiable. FusedConfidenceLUT's ``cuda`` path never reads through here.
 """
 from __future__ import annotations

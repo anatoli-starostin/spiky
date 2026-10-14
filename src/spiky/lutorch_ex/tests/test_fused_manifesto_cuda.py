@@ -2,9 +2,9 @@
 
 Correctness gate: the kernels must reproduce the reference classes ManifestoHardLUT / ManifestoSoftLUT (value, input gradient, table gradient,
 with weight="softsign" the two temperatures' gradients, and, inside ProjectionMHL, the projection gradients) for both
-cartridges and both weight functions, both anchor modes, with and without table dropout, fp32 and bf16, at small
+cartridges and both weight functions, both anchor modes, with and without table dropout, float32 and bfloat16, at small
 geometries and at the canonical h16 d48 tph64 nap8. The weight-gradient scatter uses
-fp32 atomics, so run-to-run results differ in summation order; that is measured here, not assumed.
+float32 atomics, so run-to-run results differ in summation order; that is measured here, not assumed.
 """
 import pytest
 import torch
@@ -86,7 +86,7 @@ def _inputs(spec, B, dtype=torch.float32, seed=0):
     return x, go
 
 
-# --- fp32 equivalence against the reference classes ----------------------------------------------------------------
+# --- float32 equivalence against the reference classes ----------------------------------------------------------------
 
 @pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
@@ -98,7 +98,7 @@ def test_fused_matches_the_reference_class_fp32(cls, geom, anchor_mode, rate, we
     x, go = _inputs(spec, 512 if geom == "canonical" else 192)
     got = _run(_make(cls, spec, rate, weight=weight), x, go)
     want = _run(_make(REF[cls], spec, rate, weight=weight), x, go)
-    # fp32 both sides, same cells; only the summation order differs.
+    # float32 both sides, same cells; only the summation order differs.
     _check(got, want, 2e-5, f"{cls.__name__}({weight}) vs {REF[cls].__name__}")
 
 
@@ -126,7 +126,7 @@ def test_cuda_fp32_matches_the_pure_cartridge_in_fp64(pure_cls, cls, anchor_mode
 
 
 def test_soft_oracle_gradient_is_the_true_derivative_gradcheck():
-    """Soft's input / table gradient is the exact derivative of its blend. The kernels are fp32-only, so gradcheck
+    """Soft's input / table gradient is the exact derivative of its blend. The kernels are float32-only, so gradcheck
     (which needs float64) runs on the float64 reference oracle the fused class is checked against above; inputs are
     kept away from the sign / argmin decision boundaries, where the function is not differentiable."""
     spec = _spec("small")
@@ -161,27 +161,28 @@ def test_projection_gradients_match(cls, weight):
             f"{k}: rel {_rel(res['fused'][k], res['reference'][k]):.2e}"
 
 
-# --- bf16 -------------------------------------------------------------------------------------------------------------
+# --- bfloat16
+#-------------------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("weight", WEIGHTS)
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
-@pytest.mark.parametrize("geom", ["mid", "fan_in", "canonical"])   # fan_in: the fp32-output path (groups summed)
+@pytest.mark.parametrize("geom", ["mid", "fan_in", "canonical"])   # fan_in: the float32-output path (groups summed)
 def test_cuda_bf16_matches_fp32_math_on_the_bf16_values(cls, geom, anchor_mode, weight):
-    """A bf16 table + input: identical to the fp32 fused run on the same (bf16-representable) values, up to
-    the bf16 rounding of the outputs (the kernels upconvert and accumulate in fp32)."""
+    """A bfloat16 table + input: identical to the float32 fused run on the same (bfloat16-representable) values, up to
+    the bfloat16 rounding of the outputs (the kernels upconvert and accumulate in float32)."""
     spec = _spec(geom, anchor_mode)
     x, go = _inputs(spec, 256, dtype=torch.bfloat16)
     lo = _make(cls, spec, rate=0.2, dtype=torch.bfloat16, weight=weight)
     hi = _make(cls, spec, rate=0.2, weight=weight)
-    hi.load_state_dict({k: v.float() for k, v in lo.state_dict().items()})   # the same bf16-representable values
-    _check(_run(lo, x, go), _run(hi, x.float(), go), 1e-2)                   # bf16 output / grad rounding: 2**-8
+    hi.load_state_dict({k: v.float() for k, v in lo.state_dict().items()})   # the same bfloat16-representable values
+    _check(_run(lo, x, go), _run(hi, x.float(), go), 1e-2)                   # bfloat16 output / grad rounding: 2**-8
 
 
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 def test_bf16_table_grad_accumulates_in_fp32_under_heavy_row_collision(cls):
-    """Every sample addresses the same cells: thousands of tiny contributions into one row. A bf16 accumulator would
-    stall; the fp32 buffer (cast once) must match the fp32 run to bf16 resolution."""
+    """Every sample addresses the same cells: thousands of tiny contributions into one row. A bfloat16 accumulator would
+    stall; the float32 buffer (cast once) must match the float32 run to bfloat16 resolution."""
     spec = _spec("small")
     B = 1 << 14
     x = torch.ones(B, spec.h_in, spec.d_in, device="cuda") * torch.arange(spec.d_in, device="cuda")
@@ -200,8 +201,8 @@ def test_bf16_table_grad_accumulates_in_fp32_under_heavy_row_collision(cls):
 @pytest.mark.parametrize("cls", [HARD, SOFT], ids=["hard", "soft"])
 def test_forward_is_deterministic_backward_differs_only_in_summation_order(cls, weight):
     """The forward has no atomics (fixed-order stripe reduction): bit-identical across runs. The backward scatters
-    with fp32 atomics (table grad, global) and shared-memory atomics (grad z): NOT bit-deterministic; the run-to-run
-    difference must stay at fp32 summation-order level."""
+    with float32 atomics (table grad, global) and shared-memory atomics (grad z): NOT bit-deterministic; the run-to-run
+    difference must stay at float32 summation-order level."""
     spec = _spec("canonical")
     x, go = _inputs(spec, 2048)
     m = _make(cls, spec, rate=0.2, weight=weight)
@@ -236,7 +237,7 @@ def test_bf16_vector_widths_agree(vec):
 
 
 def test_non_cuda_cases_raise_naming_the_reference_class():
-    """No fallback: an fp16 table has no kernel and a CPU input is not a CUDA case; both raise, in
+    """No fallback: a float16 table has no kernel and a CPU input is not a CUDA case; both raise, in
     training and in eval, naming the reference classes."""
     spec = _spec("mid")
     for cls in (HARD, SOFT):
@@ -271,7 +272,7 @@ def test_wide_d_out_is_not_a_cuda_case(cls, d_out, vec):
 def test_cuda_matches_the_fp64_oracle_at_the_d_out_boundary(pure_cls, cls, d_out, weight):
     """Eligible widths at the edge of a launch class: d_out 4096 (vec 4, exactly 1024 threads per CTA, the largest
     eligible width at the default knobs) and d_out 1026 (vec 2, the 2-wide load path). Value, grad x and grad W of the
-    fused class in fp32 against the reference class in float64."""
+    fused class in float32 against the reference class in float64."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=d_out, anchor_mode="pairs")
     x, go = _inputs(spec, 96)
     got = _run(_make(cls, spec, weight=weight), x, go)

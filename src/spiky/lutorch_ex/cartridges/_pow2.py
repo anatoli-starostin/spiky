@@ -94,9 +94,9 @@ def blend_exponents(m: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, g: tor
     clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read).
 
     Written in the CUDA kernel's operation order (csrc/pow2_scalars.cuh), one elementwise op at a time: the nap terms
-    of S and of the logsigmoid sum left-folded, and every division a true fp32 tensor division (a Python-scalar divisor
-    would make torch multiply by its reciprocal instead, and 2.0 / t is reciprocal(t) * 2). Each integer is a floor of
-    these fp32 values, so the same operations in the same order give the kernel's integers, at every nap.
+    of S and of the logsigmoid sum left-folded, and every division a true float32 tensor division (a Python-scalar
+    divisor would make torch multiply by its reciprocal instead, and 2.0 / t is reciprocal(t) * 2). Each integer is a
+    floor of these float32 values, so the same operations in the same order give the kernel's integers, at every nap.
     Trade-off, accepted on purpose: (1) the reference now partly encodes the kernel's operation order, so agreement
     between the two is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate
     than torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7 (measured at
@@ -122,7 +122,7 @@ def single_exponent(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma:
     """The read_top_n = 1 integers: k' = round(log2 s) = floor(log2 S + (g + gamma ls)/ln2 + 1/2) (no blend, so no c_q),
     clamped into [lo, hi]; skip = k' below the window. m [..., NAP] -> float k, bool skip [...]. Written in the kernel's
     operation order (csrc/pow2_scalars.cuh, p2::single_scalars), as blend_exponents is for n = 2: the nap terms of S and
-    of the logsigmoid sum left-folded, the division by ln2 a true fp32 tensor division."""
+    of the logsigmoid sum left-folded, the division by ln2 a true float32 tensor division."""
     ln2 = torch.full((), LN2, dtype=m.dtype, device=m.device)
     S = _left_fold(m)
     ls = _left_fold(F.logsigmoid(beta * m))

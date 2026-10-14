@@ -1,10 +1,11 @@
-"""Current performance metrics snapshot of every lutorch_ex cartridge on one CUDA device, at four geometries, in fp32
-and (where the class accepts it) bf16. Four measurements per cell, each as median latency and peak memory:
+"""Current performance metrics snapshot of every lutorch_ex cartridge on one CUDA device, at four geometries, in float32
+and (where the class accepts it) bfloat16. Four measurements per cell, each as median latency and peak memory:
 eval forward, train forward, train backward, train total (forward + backward).
 
     python -m spiky.lutorch_ex.benchmarks.bench_snapshot --out snapshot.json --md snapshot.md
 
-runs the full matrix (every cartridge and alternative, every geometry, fp32 and bf16), one fresh process per cell.
+runs the full matrix (every cartridge and alternative, every geometry, float32 and bfloat16), one fresh process per
+cell.
 
 Methodology:
 - Every cell is built with a fixed seed (``seed=1`` tables, ``torch.manual_seed(0)`` inputs). Eval forward runs in
@@ -22,7 +23,7 @@ Methodology:
   gradients excluded), measured on one extra iteration: eval forward; train forward (including what it saves for
   the backward); train backward (the peak while the backward runs, which still holds those saved tensors); train
   total = the larger of the two.
-- A cell that runs out of memory, or that the class refuses (QuantisedConfidenceLUT rejects bf16), is recorded as
+- A cell that runs out of memory, or that the class refuses (QuantisedConfidenceLUT rejects bfloat16), is recorded as
   such, never dropped.
 - ``torch._dynamo.reset()`` before every cell: all cartridges of a class compile the same ``_forward_impl``, so without
   it the cells after the first eight compiles hit Dynamo's recompile limit and silently measure eager execution.

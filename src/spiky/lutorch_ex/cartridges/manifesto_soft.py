@@ -25,7 +25,7 @@ Only the discrete indices ``c_t, c_t', j*`` are non-differentiable. The value is
 
 Read path: training uses one ``F.embedding_bag`` with ``per_sample_weights = [1-w, w]`` (read, scale and tph sum in one
 kernel); eval uses the plain two-cell read and blend, compiled on CUDA (ReferenceForward). Backward is plain autograd.
-bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward).
+bfloat16 / float16 run as float32 maths with one rounding per leaf (ReferenceForward).
 """
 from __future__ import annotations
 

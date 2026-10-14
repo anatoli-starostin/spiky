@@ -112,7 +112,7 @@ def test_fused_close_within_baseline_noise(name, kw):
 def test_eval_int32_vs_int64(device, name, kw):
     # The eval forward is torch.compiled on CUDA, and the int64 and int32 models are two separate compilations. With
     # pointwise autotuning on, Inductor BENCHMARKS candidate kernel configs (block size, warps) for each and keeps the
-    # fastest, so timing noise can give the two sides different configs -> a different fp32 summation order -> a
+    # fastest, so timing noise can give the two sides different configs -> a different float32 summation order -> a
     # sub-ulp difference that has nothing to do with the index dtype, and differs from run to run. Autotuning off
     # makes the config choice deterministic and identical for both sides, so the comparison isolates the index dtype.
     import torch._inductor.config as inductor_config

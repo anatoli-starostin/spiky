@@ -93,8 +93,10 @@ std::vector<torch::Tensor> p2_scalars(const torch::Tensor& Dm, const torch::Tens
 //             2^k' -- times the table-dropout factor, all in registers. The margins never reach global memory.
 //    phase B  stripe x chunk: nstripe = QF threads / (d_out / VEC) stripes; stripe s accumulates tables t = s, s +
 //             nstripe, ... (increasing), each table adding w1 * fq(W[c1]) then (N = 2) w2 * fq(W[c2]), where fq is the fake-quant
-//             value clamp(floor(W / 2^e + 1/2), qlo, qhi) * 2^e computed in registers from the fp32 master row (__ldg,
-//             VEC floats per load). Every add is a separate fp32 add (built with --fmad=false: no contraction), and with
+//             value clamp(floor(W / 2^e + 1/2), qlo, qhi) * 2^e computed in registers from the float32 master row
+// (__ldg,
+//             VEC floats per load). Every add is a separate float32 add (built with --fmad=false: no contraction), and
+// with
 //             no dropout each product is exact (a power of two times a power-of-two-scaled integer).
 //    phase C  y = ((0 + p_0) + p_1) + ... + p_{nstripe-1} over the stripe partials, in that order, stored once.
 //    THE REDUCTION ORDER IS FIXED: QF_THREADS and the vector width (4, else 2, else 1: the widest dividing d_out) are
@@ -108,7 +110,7 @@ struct Params {
   const float* z;           // [B, G, d_in]
   const int16_t* anc_a;     // [G, tph, nap]
   const int16_t* anc_b;     // [G, tph, nap]
-  const float* W;           // [G * tph * K, d_out] fp32 master table
+  const float* W;           // [G * tph * K, d_out] float32 master table
   const float* E;           // [G, d_out] the exponents e (integers, as float)
   const float* dmask;       // [B, G, tph] table-dropout factors, nullptr = none
   const float* log_beta;
@@ -345,7 +347,7 @@ __global__ void quant_fwd_kernel(Params p, float* __restrict__ out) {
 //            read back from tabs (one packed int32 per table, pack_tab; not recomputed), the forward cell weights w1 / w2
 //            (x dropout) and the straight-through numerators b1 = 2^k', b2 = 2^(k'-q) (clamped k', also for skipped /
 //            dropped cells, as _pow2.ste_blend_weights).
-//   phase B  stripe x chunk: gW[c] += w go (fp32 atomics, vector atomics on sm_90+: the ONLY atomics; gW feeds no
+//   phase B  stripe x chunk: gW[c] += w go (float32 atomics, vector atomics on sm_90+: the ONLY atomics; gW feeds no
 //            exponent) and the partial dot products go . fq(W[c]) of this chunk, each written to its own slot
 //            rp[chunk][t] (no atomics).
 //   phase C  thread per table: r = sum over chunks 0..nchunk-1 of rp[chunk][t] (in that order); then the gradient of the
@@ -595,7 +597,8 @@ int threads_for(int d_out) {
 //            at the champion, which leaves too few chunks per row and too many stripes), widened to int32 in
 //            registers and shifted; a cell that is not read is not loaded. int32 accumulation: exact, so the value does not
 //            depend on the order (bounded by 2 tph 127 2^10 < 2^31).
-//   phase C  the stripe partials in order, then ONE conversion int32 -> fp32 (round to nearest, as torch's .to(float32)):
+//   phase C  the stripe partials in order, then ONE conversion int32 -> float32 (round to nearest, as torch's
+// .to(float32)):
 //            the RAW accumulator in units of 2^-6 (the scale 2^(e - 6) is folded into the decompress weight at export).
 //   No backward (inference only). The margins never reach global memory.
 namespace dq {
@@ -891,8 +894,9 @@ std::vector<torch::Tensor> quant_bwd(const torch::Tensor& go, const torch::Tenso
   return {gz, gW, gscal};
 }
 
-// DeployedQuantisedConfidenceLUT's forward. z fp32 [B, G, d_in]; anchors int16 [G, tph, nap] (anc_b None: single
-// anchors); P int8 [G * tph * 2^nap, d_out]; n = 1 or 2 (the export's read_top_n). Returns the raw accumulator, fp32.
+// DeployedQuantisedConfidenceLUT's forward. z float32 [B, G, d_in]; anchors int16 [G, tph, nap] (anc_b None: single
+// anchors); P int8 [G * tph * 2^nap, d_out]; n = 1 or 2 (the export's read_top_n). Returns the raw accumulator,
+// float32.
 torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
                          const torch::Tensor& P, const torch::Tensor& log_beta, const torch::Tensor& log_gamma,
                          const c10::optional<torch::Tensor>& log_tau, int64_t n, int64_t lo, int64_t hi,

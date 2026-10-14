@@ -20,7 +20,7 @@ shift-add read (``forward_int``, units 2^-6) is provided for inference / cross-c
 the fake-quant value to round-off.
 
 Scope: constant cells only, both anchor modes (inherited), read_top_n ∈ {1,2}, no hard forward, no
-trainable anchors. fp32/fp64 only (bf16 raises via the base). p2_int8 is the only preset; n=1 quant
+trainable anchors. float32/fp64 only (bfloat16 raises via the base). p2_int8 is the only preset; n=1 quant
 is a lutorch_ex extension of the reference (which was n=2-only).
 
 Implementations (the class is the implementation, there is no selector):
@@ -33,8 +33,8 @@ Implementations (the class is the implementation, there is no selector):
   kernel does not cover (single anchors, nap > 8, a CPU input, a non-fp32 input or table) raise, naming the case, and
   so does a missing extension.
 * :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form, read_top_n 1 or 2 as exported: on CUDA ONE
-  kernel (``csrc/pow2_int8_read.cu``, deploy_fwd: addressing, the integers, the int8 shift-add read), fp32 input; on CPU
-  the torch definition (``_pow2``), the same integers.
+  kernel (``csrc/pow2_int8_read.cu``, deploy_fwd: addressing, the integers, the int8 shift-add read), float32 input; on
+  CPU the torch definition (``_pow2``), the same integers.
 
 Both trainable classes share the quant scaffolding (:class:`QuantisedScaffold`: config, fake-quant tables, the integer
 read, deployment export) and the state_dict; neither inherits the other's forward.
@@ -84,7 +84,7 @@ class QuantisedScaffold:
         W_hat * 2^e * 2^k' or W_hat * 2^e * 2^(k' - q), with |W_hat| <= 128 (int8: [-128, 127]), k' in [-3, 4] and
         q <= 3 (Q): an integer multiple of 2^(e - 6) of magnitude at most 128 * 2^10. A bag holds 2 tph = 128 terms at
         the p2_int8 preset, so every partial sum is an integer multiple of 2^(e - 6) bounded by 128 * 128 * 2^10 = 2^24:
-        fp32 represents every integer up to 2^24 exactly, and no addition rounds. The argument FAILS (sums can round,
+        float32 represents every integer up to 2^24 exactly, and no addition rounds. The argument FAILS (sums can round,
         and two orders can then differ):
         * tph > 64: 2 tph * 128 * 2^10 exceeds 2^24;
         * a read window wider than [-3, 4] (or a larger Q): more bits per term;
@@ -134,9 +134,9 @@ class QuantisedScaffold:
     def to_deployment(self) -> dict:
         """Compact int8 payload for deployment export (the `SupportsDeploymentExport` axis).
 
-        Emits the int8 `packed` table (fp32 master + raw exponent buffer are NOT included) plus a
+        Emits the int8 `packed` table (float32 master + raw exponent buffer are NOT included) plus a
         per-out-feature output scale ``2^(e - FIXED_POINT_SHIFT)`` that ``export_deployment`` folds
-        EXACTLY (power-of-two -> only the fp32 exponent field changes) into a copy of the ProjectionMHL
+        EXACTLY (power-of-two -> only the float32 exponent field changes) into a copy of the ProjectionMHL
         decompress weight. The deployed cartridge then returns the RAW int32 accumulator (units 2^-6).
         read_top_n 1 or 2 (the export records it; the deployed class runs that read), h_out==n_groups only
         (the per-(group,channel) scale maps 1:1 to decompress out_features; fan-in would need a pre-route scale). NOTE:
@@ -197,7 +197,7 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     #: folded producer then exceeds realize_opcount_threshold (default 30), so Inductor writes that ~1 GiB producer (at
     #: 32,768 vectors) to global memory and re-reads it in a separate kernel. With both raised it keeps the margins in
     #: registers and still emits the same in-order add chain (the eager maths, which layer 1 pins, is untouched).
-    #: Measured at 32,768 vectors, fp32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
+    #: Measured at 32,768 vectors, float32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
     #: reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90 (also at 1000). Train total unchanged.
     #: Version-dependent: a torch upgrade can rename the options or change the heuristic; a bench_snapshot run
     #: (benchmarks/) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
@@ -225,7 +225,7 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
         ``frozen_coef`` (test/analysis only) injects the STE's stop-grad per-cell ratio
         ``b / (s·σ)_base`` captured at a base point, and replaces the straight-through weight by the
         SMOOTH ``(s·σ)·ratio``. With the ratio frozen the forward is smooth and its gradient equals
-        the real STE backward exactly — so it is the function fp64 gradcheck validates (the
+        the real STE backward exactly — so it is the function float64 gradcheck validates (the
         staircase STE value itself is piecewise-constant and not directly gradcheckable)."""
         G, tph, K, d_out = self.weights.shape
         B = c.shape[0]
@@ -304,7 +304,7 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
 
     def _forward_surrogate(self, x: torch.Tensor, frozen_coef) -> torch.Tensor:
         """Smooth-surrogate forward with a frozen ratio (test/analysis): same gradient as the STE
-        forward at the base point, smooth value. Used for fp64 gradcheck of the quant backward."""
+        forward at the base point, smooth value. Used for float64 gradcheck of the quant backward."""
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
         return self._route(self._quant_grp_out(u, c, c_alt, u_abs_star, frozen_coef=frozen_coef), x)
 
@@ -318,7 +318,7 @@ _FUSED_OUTPUT = "the output is torch.float32"
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     """The fused twin of :class:`QuantisedConfidenceLUT`: one fused CUDA forward; see the module docstring.
 
-    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, a CUDA fp32 input and an fp32 table; anything else raises,
+    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, a CUDA float32 input and a float32 table; anything else raises,
     naming the case and the reference class, and a missing extension raises
     :class:`~spiky.lutorch_ex.cartridges._fallback.NativeUnavailableError` with its classified cause. Same parameters,
     state_dict and deployment export as the reference.
@@ -372,7 +372,8 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         if -(-(d_out // vec) // 32) * 32 > 1024:
             problems.append(f"d_out={d_out} needs more than 1024 threads per CTA at vec {vec}")
         if problems:
-            # The reference class is offered for the cases it runs; not for a bf16 / fp16 input or table, which it does
+            # The reference class is offered for the cases it runs; not for a bfloat16 / float16 input or table, which
+            #it does
             # not take either.
             lowp = x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
             remedy = "" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."
@@ -397,17 +398,17 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
 
 
 class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
-    """Inference-only p2_int8 cartridge: holds the int8 ``packed`` table (NO fp32 master Parameter),
+    """Inference-only p2_int8 cartridge: holds the int8 ``packed`` table (NO float32 master Parameter),
     the anchors and the β/γ/τ scalars as buffers, and returns the RAW int32 accumulator (units 2^-6) as a
     float tensor; the per-(group,channel) output scale lives, pre-folded, in the ProjectionMHL decompress
     weight. The read width is the export's: ``meta["read_top_n"]`` (1 or 2), never a user choice.
 
     On CUDA the whole read is ONE kernel (``_pow2_int8`` / ``csrc/pow2_int8_read.cu``, deploy_fwd, the
     FusedQuantisedConfidenceLUT forward template specialised for the stored int8 rows and for the read width):
-    the margins and integers in registers, int8 rows gathered and shifted, an exact int32 sum. It needs an fp32
+    the margins and integers in registers, int8 rows gathered and shifted, an exact int32 sum. It needs a float32
     input, nap <= 8 and d_in <= 32767; anything else raises, naming the case, and a missing extension raises
     the classified NativeUnavailableError (no fallback). On CPU the same integers are computed by the torch
-    definition (``_pow2``: blend_exponents / single_exponent, the int8 shift-add read), fp32 or fp64.
+    definition (``_pow2``: blend_exponents / single_exponent, the int8 shift-add read), float32 or float64.
 
     Lives next to :class:`QuantisedConfidenceLUT` so the general deployment module (``deploy.py``)
     holds no cartridge-specific knowledge; it is reached only via the format-tag registry (see
@@ -415,7 +416,7 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
 
     def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None,
                  index_dtype: Optional[torch.dtype] = None):
-        nn.Module.__init__(self)   # skip the fp32-weight-allocating ManifestoLUT.__init__
+        nn.Module.__init__(self)   # skip the float32-weight-allocating ManifestoLUT.__init__
         self.spec = spec
         self.index_dtype = resolve_index_dtype(index_dtype, spec)   # what ManifestoLUT.__init__ would set
         self._index_dtype_auto = index_dtype is None
@@ -456,10 +457,13 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         return None   # the pow2 output scale is already folded (statically) into the stored decompress weight
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference
-        # No fp32 ``weights`` Parameter here (int8 ``packed`` instead), so the reference forward's low-precision guard
-        # (which reads ``self.weights.dtype``) cannot run on it -- hence the override, rejecting bf16/fp16 on the input.
-        # On CUDA this is a fused CUDA cartridge: fp32 in / out only (fp64 is refused by _require_kernel); the CPU path
-        # runs the torch definition, which also takes fp64. The message is true on both devices.
+        # No float32 ``weights`` Parameter here (int8 ``packed`` instead), so the reference forward's low-precision
+        #guard
+        # (which reads ``self.weights.dtype``) cannot run on it -- hence the override, rejecting bfloat16/fp16 on the
+        #input.
+        # On CUDA this is a fused CUDA cartridge: float32 in / out only (float64 is refused by _require_kernel); the CPU
+        #path
+        # runs the torch definition, which also takes float64. The message is true on both devices.
         if x.dtype in _LOW_PRECISION:
             raise TypeError(f"{type(self).__name__}: " + unsupported_dtype(
                 "input", x.dtype, _FUSED_DTYPES, f"{_FUSED_OUTPUT}; on the CPU the torch definition also takes "

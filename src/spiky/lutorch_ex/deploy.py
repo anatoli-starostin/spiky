@@ -4,7 +4,7 @@ Two independent axes (no cartridge-specific branches in projection or export):
 
 * **Decompress-bake** (cartridge <-> ProjectionMHL): the existing ``SupportsDecompressBake`` protocol.
   For the quantised LUT the per-(group, channel) power-of-two output scale ``2^(e - 6)`` is folded,
-  EXACTLY (powers of two only change the fp32 exponent field), into a copy of the decompress weight at
+  EXACTLY (powers of two only change the float32 exponent field), into a copy of the decompress weight at
   export time. NOTE: the *trained* :class:`QuantisedConfidenceLUT` deliberately does NOT implement
   ``decompress_scale`` -- its live forward returns the fake-quant value (already ``* 2^e``) and
   ProjectionMHL folds on every forward, so implementing it there would double-scale. The fold is a
@@ -18,8 +18,8 @@ Two independent axes (no cartridge-specific branches in projection or export):
 
 API::
 
-    export_deployment(model, "deploy.lxq")                      # bake int8 + fold scale + drop fp32/exponent
-    m = load_deployment("deploy.lxq", make_skeleton, device="cuda").eval()   # fp32 LUT table NEVER allocated
+    export_deployment(model, "deploy.lxq")                      # bake int8 + fold scale + drop float32/exponent
+    m = load_deployment("deploy.lxq", make_skeleton, device="cuda").eval()   # float32 LUT table NEVER allocated
     y = m(x)
 
 ``make_skeleton`` builds the architecture on the ``meta`` device (no real allocation); load swaps each
@@ -102,7 +102,7 @@ def _load_payload(path: str):
 def export_deployment(model: nn.Module, path: str) -> dict:
     """Walk ``model``; bake every ProjectionMHL whose cartridge compactifies (``to_deployment`` with a
     non-"dense" format) to int8 + a decompress weight with the pow2 output scale folded in (exact);
-    serialise those plus the remaining (backbone) params. Drops the fp32 LUT table and the raw
+    serialise those plus the remaining (backbone) params. Drops the float32 LUT table and the raw
     exponent buffer. Returns the meta dict. Training is untouched (export reads, never mutates)."""
     meta = {"format_version": _FORMAT_VERSION, "ffns": {}}
     tensors: dict = {}
@@ -174,7 +174,7 @@ def _set_submodule(root: nn.Module, dotted: str, new: nn.Module) -> None:
 
 
 def load_deployment(path: str, make_skeleton: Callable[[], nn.Module], device=None) -> nn.Module:
-    """Rebuild an inference-only model from a compact checkpoint WITHOUT allocating any fp32 LUT table.
+    """Rebuild an inference-only model from a compact checkpoint WITHOUT allocating any float32 LUT table.
 
     ``make_skeleton()`` must build the architecture on the ``meta`` device (no real memory). Each
     ProjectionMHL FFN that was compacted is replaced by a real inference cartridge, rebuilt via the

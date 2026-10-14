@@ -11,15 +11,16 @@
 // memory, and the backward recomputes them from z instead of saving them.
 //
 // Launch knobs (host side, see fused_confidence.py): threads per CTA (forward and backward separately), rows per
-// CTA, vector width VEC (1, 2, 4; 8 for bf16) and whether the weight-gradient scatter uses vector atomics (sm_90+).
+// CTA, vector width VEC (1, 2, 4; 8 for bfloat16) and whether the weight-gradient scatter uses vector atomics (sm_90+).
 //
-// Table dtype T: fp32 or bf16. A bf16 table is loaded and upconverted to fp32 in registers; every reduction and the
-// weight-gradient buffer stay fp32 (a bf16 atomic scatter would lose small contributions to rounding, and the loss
-// grows with the number of tokens hitting a row).
+// Table dtype T: float32 or bfloat16. A bfloat16 table is loaded and upconverted to float32 in registers; every
+// reduction and the weight-gradient buffer stay float32 (a bfloat16 atomic scatter would lose small contributions to
+// rounding, and the loss grows with the number of tokens hitting a row).
 //
-// Input z: fp32 or bf16. A bf16 z is upconverted while its row is staged into fp32 shared memory (no fp32 copy of the
-// input in global memory). The forward output is fp32, or bf16 when the caller asks (out_bf16: one RNE rounding at
-// the store, after the fp32 reduction); grad z is stored in z's dtype (one rounding, in-kernel).
+// Input z: float32 or bfloat16. A bfloat16 z is upconverted while its row is staged into float32 shared memory (no
+// float32 copy of the input in global memory). The forward output is float32, or bfloat16 when the caller asks
+// (out_bf16: one RNE rounding at the store, after the float32 reduction); grad z is stored in z's dtype (one rounding,
+// in-kernel).
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -34,12 +35,12 @@ namespace {
 constexpr int MAX_NAP = 16;
 
 struct Params {
-    const float* z;          // [B, G, d_in], fp32 input (nullptr when bf16)
-    const __nv_bfloat16* zb; // the same, bf16 input, upconverted when staged (nullptr when fp32)
+    const float* z;          // [B, G, d_in], float32 input (nullptr when bfloat16)
+    const __nv_bfloat16* zb; // the same, bfloat16 input, upconverted when staged (nullptr when float32)
     const int16_t* anc_a;    // [G, tph, nap]
     const int16_t* anc_b;    // [G, tph, nap], nullptr in single-anchor mode
-    const float* W;          // [G * tph * K, d_out], fp32 table (nullptr when the table is bf16)
-    const __nv_bfloat16* Wb; // the same, bf16 table (nullptr when the table is fp32)
+    const float* W;          // [G * tph * K, d_out], float32 table (nullptr when the table is bfloat16)
+    const __nv_bfloat16* Wb; // the same, bfloat16 table (nullptr when the table is float32)
     const uint8_t* keep;     // [B, G, tph] table-dropout keep flags, nullptr = no dropout
     const float* log_beta;   // 0-dim device scalars (read in-kernel: no host sync)
     const float* log_gamma;
@@ -85,7 +86,7 @@ __device__ inline void load_vec(const float* p, float (&v)[VEC]) {
     for (int k = 0; k < VEC; ++k) v[k] = f[k];
 }
 
-// bf16 table: one 2/4/8/16-byte read-only load of VEC elements, upconverted to fp32 in registers.
+// bfloat16 table: one 2/4/8/16-byte read-only load of VEC elements, upconverted to float32 in registers.
 template <int VEC>
 __device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
     static_assert(VEC == 1 || VEC == 2 || VEC == 4 || VEC == 8, "bf16 vec must be 1, 2, 4 or 8");
@@ -104,8 +105,8 @@ __device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
     }
 }
 
-// The input row is staged once per row into fp32 shared memory; a bf16 input is upconverted there (exact). The branch
-// is uniform across the CTA.
+// The input row is staged once per row into float32 shared memory; a bfloat16 input is upconverted there (exact). The
+// branch is uniform across the CTA.
 __device__ inline float load_z(const Params& p, size_t i) {
     return p.zb ? __bfloat162float(p.zb[i]) : p.z[i];
 }
@@ -228,7 +229,7 @@ __global__ void confidence_fwd_kernel(Params p, float* __restrict__ out, __nv_bf
         for (int i = tid; i < p.d_out; i += bd) {
             float y = 0.f;
             for (int s = 0; s < nstripe; ++s) y += part[s * p.d_out + i];
-            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bf16-output mode: one RNE rounding at the store
+            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bfloat16-output mode: one RNE rounding
             else out[row * p.d_out + i] = y;
         }
         __syncthreads();                                  // part / zs reused by the next row
@@ -441,7 +442,7 @@ void check_launch(int threads, int vec, int d_out, bool bf16) {
         else TORCH_CHECK(false, "read_top_n must be 1 or 2");                             \
     }()
 
-// Runs fn(T{}) with T = float for an fp32 table, __nv_bfloat16 for a bf16 one.
+// Runs fn(T{}) with T = float for a float32 table, __nv_bfloat16 for a bfloat16 one.
 template <typename Fn>
 void dispatch_table(const torch::Tensor& W, Fn&& fn) {
     if (W.scalar_type() == torch::kBFloat16) fn(__nv_bfloat16{});
@@ -458,8 +459,8 @@ torch::Tensor confidence_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, keep, keep_scale, log_beta, log_gamma, log_tau, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
-    // fp32 output for either table dtype, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1
-    // onto output heads; a fan-in sums the groups first and keeps fp32 so it rounds once).
+    // float32 output for either table dtype, or bfloat16 when the caller asks (only for a bfloat16 input whose groups
+    // map 1:1 onto output heads; a fan-in sums the groups first and keeps float32 so it rounds once).
     TORCH_CHECK(!out_bf16 || z.scalar_type() == torch::kBFloat16, "out_bf16 needs a bf16 input");
     auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(out_bf16 ? torch::kBFloat16 : torch::kFloat32));
     if (p.B == 0) return out;
@@ -496,7 +497,7 @@ std::vector<torch::Tensor> confidence_bwd(torch::Tensor go, torch::Tensor z, tor
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     TORCH_CHECK(go.is_contiguous() && go.scalar_type() == torch::kFloat32 && go.size(0) == p.B && go.size(1) == p.G
                 && go.size(2) == p.d_out, "go: contiguous fp32 [B, G, d_out]");
-    // The weight-gradient accumulator is fp32 for either table dtype (the caller casts it to the table dtype once).
+    // The weight-gradient accumulator is float32 for either table dtype (the caller casts it to the table dtype once).
     auto gW = torch::zeros(W.sizes(), W.options().dtype(torch::kFloat32));
     const bool zbf16 = z.scalar_type() == torch::kBFloat16;   // grad z in the input dtype (one rounding in-kernel)
     auto gz = torch::empty(z.sizes(), z.options().dtype(zbf16 ? torch::kBFloat16 : torch::kFloat32));

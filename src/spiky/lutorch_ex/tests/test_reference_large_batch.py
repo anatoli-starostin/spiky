@@ -14,8 +14,8 @@ pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a C
 
 LARGE = dict(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48)
 B = 32768
-#: Measured train peaks at this size (RTX 5090), both classes, both weights: 5.09 GiB fp32, 5.23 GiB bf16. 8 GiB leaves
-#: headroom for allocator variation and is far below the ~27 GiB the gather form needed.
+#: Measured train peaks at this size (RTX 5090), both classes, both weights: 5.09 GiB float32, 5.23 GiB bfloat16. 8 GiB
+#: leaves headroom for allocator variation and is far below the ~27 GiB the gather form needed.
 PEAK_BOUND_GIB = 8.0
 
 

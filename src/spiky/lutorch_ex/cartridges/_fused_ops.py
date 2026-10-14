@@ -10,14 +10,14 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-# Low-precision reductions accumulate in fp32 and the result is cast back to the caller's dtype
-# (the cartridge does that in _route). For bf16/fp16 weights the embedding_bag reduce runs on an
-# fp32 view of the table (torch's embedding_bag has no accumulate-dtype knob), so summing a
-# group's tph rows does not lose precision. fp32 and fp64 keep their own dtype (so the fp64
-# equivalence tests stay bit-exact — upcasting fp32 to fp64 or downcasting fp64 to fp32 would
+# Low-precision reductions accumulate in float32 and the result is cast back to the caller's dtype
+# (the cartridge does that in _route). For bfloat16/fp16 weights the embedding_bag reduce runs on an
+# float32 view of the table (torch's embedding_bag has no accumulate-dtype knob), so summing a
+# group's tph rows does not lose precision. float32 and float64 keep their own dtype (so the float64
+# equivalence tests stay bit-exact — upcasting float32 to float64 or downcasting float64 to float32 would
 # both be wrong).
 def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
-    """fp32 for bf16/fp16, else the dtype itself (fp32->fp32, fp64->fp64)."""
+    """fp32 for bfloat16/fp16, else the dtype itself (float32->float32, float64->float64)."""
     return torch.float32 if dtype in (torch.bfloat16, torch.float16) else dtype
 
 
@@ -31,7 +31,7 @@ def _global_cells(c: torch.Tensor, G: int, tph: int, K: int) -> torch.Tensor:
 
 
 def fused_hard_read(weights: torch.Tensor, c: torch.Tensor, drop_mask=None) -> torch.Tensor:
-    """y[b,g] = sum_t W[g,t,c[b,g,t]]  via one embedding_bag. weights [G,tph,K,d_out] -> [B,G,d_out] fp32.
+    """y[b,g] = sum_t W[g,t,c[b,g,t]]  via one embedding_bag. weights [G,tph,K,d_out] -> [B,G,d_out] float32.
     ``drop_mask`` [B,G,tph] (optional): per-table keep weights folded in as per_sample_weights, so
     dropped tables contribute 0 — table dropout honoured inside the fused read (no new kernel)."""
     G, tph, K, d_out = weights.shape
@@ -46,10 +46,10 @@ def fused_hard_read(weights: torch.Tensor, c: torch.Tensor, drop_mask=None) -> t
 def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor,
                      U: torch.Tensor, drop_mask=None) -> torch.Tensor:
     """Soft blend y[b,g] = sum_t (1-U)W[g,t,c] + U W[g,t,c_alt] via one embedding_bag with
-    per_sample_weights (fp32 accumulation). Fully differentiable — matches pure ManifestoSoftLUT.
+    per_sample_weights (float32 accumulation). Fully differentiable — matches pure ManifestoSoftLUT.
     ``drop_mask`` [B,G,tph] (optional): per-table keep weights multiplied into BOTH cells' weights
     (one Bernoulli per table), so dropped tables contribute 0 — table dropout, fused in.
-    -> [B,G,d_out] fp32 (the cartridge casts to the caller dtype in _route)."""
+    -> [B,G,d_out] float32 (the cartridge casts to the caller dtype in _route)."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
     acc = _acc_dtype(weights.dtype)

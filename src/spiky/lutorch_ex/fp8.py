@@ -3,11 +3,11 @@
 A self-contained copy of the tensorwise recipe nanochat trains its backbone with (nanochat/fp8.py), so lutorch_ex does
 not depend on nanochat:
 
-* the fp32 master weight is kept; every call casts BOTH GEMM operands just-in-time to ``float8_e4m3fn`` with one
+* the float32 master weight is kept; every call casts BOTH GEMM operands just-in-time to ``float8_e4m3fn`` with one
   amax-derived scale per tensor ("tensorwise"), and the matmul runs as ``torch._scaled_mm`` (cuBLAS fp8 kernel);
-* the forward accumulates in fp32 (``use_fast_accum=False``) and returns ``out_dtype`` (fp32 or bf16);
+* the forward accumulates in float32 (``use_fast_accum=False``) and returns ``out_dtype`` (float32 or bfloat16);
 * the backward casts the incoming gradient to ``float8_e5m2`` (wider range) and runs the two gradient GEMMs in fp8 too;
-  ``grad_weight`` is produced in fp32 for the fp32 master, ``grad_input`` in the input's dtype.
+  ``grad_weight`` is produced in float32 for the float32 master, ``grad_input`` in the input's dtype.
 
 Only the GEMM operands are ever fp8; nothing fp8 is stored as a parameter. fp8 needs a CUDA device whose torch build
 runs ``torch._scaled_mm`` (Ada / Hopper / Blackwell); :func:`fp8_available` probes that functionally (never by name).
@@ -66,7 +66,7 @@ def _pad_rows(x: torch.Tensor, mult: int = 16) -> torch.Tensor:
 
 @torch._dynamo.allow_in_graph
 class _Fp8LinearFn(torch.autograd.Function):
-    """y = x @ W.T with both operands fp8 (e4m3) and an fp32 accumulator; fp8 (e5m2-gradient) backward."""
+    """y = x @ W.T with both operands fp8 (e4m3) and a float32 accumulator; fp8 (e5m2-gradient) backward."""
 
     @staticmethod
     def forward(ctx, x2: torch.Tensor, weight: torch.Tensor, out_dtype: torch.dtype):
@@ -84,7 +84,7 @@ class _Fp8LinearFn(torch.autograd.Function):
         # grad_input = grad_out @ W            [M, N] @ [N, K] -> [M, K]
         grad_x = torch._scaled_mm(g_fp8, _col_major(w_fp8), scale_a=g_inv, scale_b=w_inv, out_dtype=ctx.x_dtype,
                                   use_fast_accum=False)
-        # grad_weight = grad_out.T @ x         [N, M] @ [M, K] -> [N, K], fp32 for the fp32 master
+        # grad_weight = grad_out.T @ x         [N, M] @ [M, K] -> [N, K], float32 for the float32 master
         g_t = _pad_rows(g_fp8.view(torch.uint8)).view(torch.float8_e5m2).t().contiguous()
         x_p = _col_major(_pad_rows(x_fp8.view(torch.uint8)).view(torch.float8_e4m3fn))
         grad_w = torch._scaled_mm(g_t, x_p, scale_a=g_inv, scale_b=x_inv, out_dtype=torch.float32,

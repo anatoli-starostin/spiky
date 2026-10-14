@@ -6,7 +6,7 @@ model-level mean aggregator. table dropout: has real effect in train, is a no-op
 unbiased in expectation (inverted rescale), gates the backward (dropped table -> zero grad), and --
 crucially -- the FUSED kernels produce the SAME dropout-aware value AND gradient as the reference
 class (so the mask scaled into the kernels' value and grads is not silently dropped or mis-scaled).
-Reference classes: CPU fp64 + CUDA fp32; fused classes: CUDA fp32 only (they run only on their kernels)."""
+Reference classes: CPU float64 + CUDA float32; fused classes: CUDA float32 only (they run only on their kernels)."""
 import math
 
 import pytest
@@ -92,8 +92,8 @@ def _ext(Cls):
 
 
 def _devs_dtypes(Cls=None):
-    """The (device, dtype) cases for ``Cls``: the reference classes CPU fp64 (+ CUDA fp32); a fused class CUDA fp32
-    only, after the extension gate (skip without a CUDA device, fail without the extension)."""
+    """The (device, dtype) cases for ``Cls``: the reference classes CPU float64 (+ CUDA float32); a fused class CUDA
+    float32 only, after the extension gate (skip without a CUDA device, fail without the extension)."""
     if Cls is not None and _is_fused(Cls):
         requires_extension(_ext(Cls))
         return [("cuda", torch.float32)]

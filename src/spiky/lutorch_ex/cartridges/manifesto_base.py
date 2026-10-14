@@ -209,7 +209,7 @@ class ManifestoLUT(MultiHeadLUT):
         intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
 
         Operates in the weight dtype as-is — this pure path carries no mixed-precision handling
-        (bf16/fp16 support lives in the fused cartridges). See the class docstring.
+        (bfloat16/fp16 support lives in the fused cartridges). See the class docstring.
         """
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
         W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
@@ -226,7 +226,7 @@ class ManifestoLUT(MultiHeadLUT):
 
         ``rational``: ``U = 0.5 / (1 + |u*|)``. ``softsign``: ``rho = |u*| / (T_s + |u*|)``,
         ``w = sigmoid(-2 rho / T_sel)``; the temperatures are taken in the margin's dtype (the addressing
-        precision: fp32 for a bf16 fused cartridge), so the blend runs there."""
+        precision: float32 for a bfloat16 fused cartridge), so the blend runs there."""
         if self.weight == "rational":
             return rational_uncertainty(u_abs_star)
         t_s = self.log_soft_score_temp.to(u_abs_star.dtype).exp()
@@ -270,7 +270,7 @@ class ManifestoLUT(MultiHeadLUT):
         if _COMPILE_ENABLED and w.is_cuda:
             if self._compiled_tv is None:
                 # Static shapes, unlike the reference forward's dynamic=True: on symbolic shapes Inductor's per-axis
-                # reductions are ~4x slower (0.86 vs 0.21 ms of GPU time at h16 tph64 nap8 d48, fp32). A table never
+                # reductions are ~4x slower (0.86 vs 0.21 ms of GPU time at h16 tph64 nap8 d48, float32). A table never
                 # changes shape, so this costs one compile per (table shape, nap, dtype), shared by every instance.
                 self._compiled_tv = torch.compile(_cell_tv_eager, dynamic=False)
             return self._compiled_tv(w, nap)

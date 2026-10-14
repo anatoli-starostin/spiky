@@ -1,7 +1,7 @@
 """Deployment export/load (PR 1): exact pow2 decompress-fold, export->load->forward parity, and the
-guarantee that NO fp32 LUT table Parameter is allocated in the loaded inference model.
+guarantee that NO float32 LUT table Parameter is allocated in the loaded inference model.
 
-CPU + fp32: the int8 read (_pow2.int_blend_read) and the quant eval fake-quant path are both pure
+CPU + float32: the int8 read (_pow2.int_blend_read) and the quant eval fake-quant path are both pure
 torch, so this needs no CUDA / no JIT kernel."""
 import json
 
@@ -91,13 +91,13 @@ def test_no_fp32_lut_table_after_load(tmp_path):
     dep = load_deployment(path, _make_skeleton, device="cpu")
     for name, mod in dep.named_modules():
         if isinstance(mod, DeployedQuantisedConfidenceLUT):
-            # no fp32 `weights` Parameter anywhere in the deployed cartridge
+            # no float32 `weights` Parameter anywhere in the deployed cartridge
             assert "weights" not in dict(mod.named_parameters()), f"{name}: fp32 weights Parameter present"
             assert not any(p.is_floating_point() and p.numel() > mod.spec.d_out * 4 for p in mod.parameters()), \
                 f"{name}: unexpected large fp32 Parameter"
             assert mod.packed.dtype == torch.int8, f"{name}: packed table not int8"
             assert not torch.is_floating_point(mod.packed)
-    # the big tensor resident in each deployed FFN cartridge is the int8 packed table, not an fp32 table
+    # the big tensor resident in each deployed FFN cartridge is the int8 packed table, not a float32 table
     deployed = [mod for _, mod in dep.named_modules() if isinstance(mod, DeployedQuantisedConfidenceLUT)]
     assert len(deployed) == 2
 

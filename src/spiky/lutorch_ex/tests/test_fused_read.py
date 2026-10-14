@@ -1,6 +1,6 @@
 """The ConfidenceLUT read: compiled, the fused gather × weight → sum (cartridges/_fused_read.py); eager, one
-F.embedding_bag. The two forms of the same maths agree to fp32 re-association, not bit for bit: the fused table
-gradient is an index_add_ with atomic fp32 adds in a nondeterministic order (measured 1.1e-7 rel-norm against
+F.embedding_bag. The two forms of the same maths agree to float32 re-association, not bit for bit: the fused table
+gradient is an index_add_ with atomic float32 adds in a nondeterministic order (measured 1.1e-7 rel-norm against
 embedding_bag's sorted reduction, 2026-10-09).
 """
 import re
@@ -26,7 +26,7 @@ def _rel(a, b):
 @pytest.mark.parametrize("device", DEVICES)
 def test_the_two_forms_agree(device, dtype, tol):
     """fused_scored_read and F.embedding_bag: same value, weight gradient and table gradient. The tolerance is far
-    above re-association (fp32 measured 1.1e-7) and far below any wrong row, index or weight (O(1) relative)."""
+    above re-association (float32 measured 1.1e-7) and far below any wrong row, index or weight (O(1) relative)."""
     torch.manual_seed(0)
     rows = torch.randint(0, 300, (64, 24), device=device)
     table0 = torch.randn(300, 12, device=device, dtype=dtype)

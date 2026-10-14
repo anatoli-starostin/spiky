@@ -148,7 +148,7 @@ class FusedQuantRead(torch.autograd.Function):
     scalar partials. Saved: z, the parameters, the exponents, the dropout factors and each table's integers (c1, c2,
     clamped k', q, skip: one packed int32 per table, written by the forward when a gradient is needed); the kernel
     re-stages z for the margins and reads the integers instead of recomputing them. The gradient semantics are the
-    reference's (_pow2.ste_cell_weights, ste_tables): the identity to the fp32 master table and the straight-through
+    reference's (_pow2.ste_cell_weights, ste_tables): the identity to the float32 master table and the straight-through
     ratios b / e (clamped k', also for skipped and dropped cells)."""
 
     @staticmethod

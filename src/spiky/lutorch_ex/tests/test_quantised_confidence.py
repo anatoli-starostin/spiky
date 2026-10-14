@@ -2,10 +2,10 @@
 
 The STE forward value is a staircase (round/clamp power-of-two), so it is not directly
 gradcheckable; the correct target is the SMOOTH SURROGATE that carries the STE's gradient
-(`_forward_surrogate`). We therefore (a) fp64-gradcheck the surrogate wrt input, β, γ (and τ for
+(`_forward_surrogate`). We therefore (a) float64-gradcheck the surrogate wrt input, β, γ (and τ for
 n=2), and (b) assert the real STE forward's gradient equals the surrogate's — so the gradcheck'd
 surrogate is exactly the quant-aware backward. Plus: quant-aware run matrix, fake-quant eval ==
-int8 shift-add read (bit-exact), train == eval value, bf16 raises, both anchor modes, both
+int8 shift-add read (bit-exact), train == eval value, bfloat16 raises, both anchor modes, both
 read_top_n. These are the reference class's own checks; FusedQuantisedConfidenceLUT (the p2_scalars op) is checked
 against it in test_fused_vs_reference.py.
 """
@@ -191,8 +191,9 @@ def test_rejects_low_precision(read_top_n, dtype):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("device", DEVICES)
 def test_deployed_rejects_low_precision_input(read_top_n, dtype, device):
-    """DeployedQuantisedConfidenceLUT is a fused CUDA cartridge, fp32 in / out only: a bf16 / fp16 input raises
-    TypeError on either device, before any read (the CPU torch definition also takes fp64, not low precision)."""
+    """DeployedQuantisedConfidenceLUT is a fused CUDA cartridge, float32 in / out only: a bfloat16 / float16 input
+    raises TypeError on either device, before any read (the CPU torch definition also takes float64, not low
+    precision)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     q = QuantisedConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n)
     p = q.to_deployment()

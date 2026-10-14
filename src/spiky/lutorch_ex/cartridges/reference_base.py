@@ -8,9 +8,9 @@ On CUDA the eval forward is always compiled; the train forward only for a class 
 confidence family, whose score read-out is a chain of small kernels Inductor fuses). Everything else, CPU included,
 runs eager. ``LUTORCH_EX_NO_COMPILE=1`` turns compilation off. Each instance builds its compiled forwards lazily.
 
-Low precision: a bf16 / fp16 input or table runs the same maths in fp32, on fp32 views of the
+Low precision: a bfloat16 / float16 input or table runs the same maths in float32, on float32 views of the
 low-precision parameters and of the input, the same contract as the fused classes. Every read and reduction
-accumulates in fp32; each result is rounded exactly once: the output to the input dtype, and, through the backward of
+accumulates in float32; each result is rounded exactly once: the output to the input dtype, and, through the backward of
 the views, the input gradient to the input dtype and each parameter's gradient to that parameter's dtype.
 """
 from __future__ import annotations
@@ -31,8 +31,9 @@ class ReferenceForward:
     #: ``dynamic=`` for the TRAIN compile: True traces one shape-agnostic graph; None (torch.compile's auto) specialises
     #: on the first shape, which fuses the quantised monolith's backward better.
     _COMPILE_TRAIN_DYNAMIC = True
-    #: Whether bf16 / fp16 run (as fp32 maths, see the module docstring). False only for QuantisedConfidenceLUT,
-    #: outside this spec's families: its precision contract belongs to the quantised-cartridges work.
+    #: Whether bfloat16 / float16 run (as float32 maths, see the module docstring). False only for
+    #: QuantisedConfidenceLUT, outside this spec's families: its precision contract belongs to the quantised-cartridges
+    #: work.
     _ACCEPTS_LOW_PRECISION: bool = True
     #: Inductor options for both compiles (``torch.compile(..., options=...)``): a fixed property of the class, empty
     #: (Inductor's defaults) except where a class documents why it needs a scheduling hint. Never maths.
@@ -46,7 +47,7 @@ class ReferenceForward:
             raise TypeError(
                 f"{type(self).__name__} does not support low precision: got input dtype {x.dtype} and weight dtype "
                 f"{self.weights.dtype}; keep it (and ProjectionMHL wrapping it) in torch.float32 / torch.float64.")
-        # fp32 views: autograd rounds each leaf's fp32-accumulated gradient once, back to the leaf's own dtype.
+        # float32 views: autograd rounds each leaf's float32-accumulated gradient once, back to the leaf's own dtype.
         with _reparametrize_module(self, {n: t.float() for n, t in lowp.items()}):
             y = self._dispatch(x.float() if x.dtype in _LOW_PRECISION else x)
         return y.to(x.dtype)

@@ -3,9 +3,10 @@ with LUTORCH_EX_NO_COMPILE=1 through the plain eager formula (_cell_tv_eager). T
 formula's value AND gradient -- the gradient ACCUMULATED into an existing .grad, as the trainers call it, once per
 optimiser step after the micro-batch backwards.
 
-fp32 / fp64: compiled vs eager on the same tables, to round-off. bf16 / fp16: compiled vs an fp64 evaluation of the same
-tables, within a few units of the dtype's rounding (the compiled kernels accumulate in fp32; eager accumulates in the
-table dtype, so the two need not agree with each other more closely than each agrees with fp64).
+float32 / float64: compiled vs eager on the same tables, to round-off. bfloat16 / float16: compiled vs a float64
+evaluation of the same tables, within a few units of the dtype's rounding (the compiled kernels accumulate in float32;
+eager accumulates in the table dtype, so the two need not agree with each other more closely than each agrees with
+float64).
 
 Every compiled test resets Dynamo first and checks that a graph was captured: _cell_tv_eager's compile entries are
 shared by every instance and keyed by (table shape, nap, dtype), so past Dynamo's recompile limit a call silently runs
@@ -29,7 +30,7 @@ from spiky.lutorch_ex.cartridges.manifesto_base import _cell_tv_eager
 CUDA = torch.cuda.is_available()
 needs_cuda = pytest.mark.skipif(not CUDA, reason="needs CUDA")
 
-#: max |a - b| / max |b| allowed against fp64, per dtype (low precision: 4 units of the dtype's rounding).
+#: max |a - b| / max |b| allowed against float64, per dtype (low precision: 4 units of the dtype's rounding).
 LOWP_TOL = {torch.bfloat16: 4 * 2.0 ** -8, torch.float16: 4 * 2.0 ** -11}
 DTYPES = [torch.float32, torch.float64, torch.bfloat16, torch.float16]
 
@@ -63,7 +64,7 @@ def fresh_dynamo():
 @pytest.mark.parametrize("nap,d", [(1, 3), (4, 5), (8, 48)])
 def test_compiled_cell_tv_matches_eager_value_and_accumulated_grad(nap, d, dtype, fresh_dynamo):
     m = _cartridge(nap, d, dtype, "cuda")
-    # An existing gradient the TV backward must add to (fp32 / fp64; in a low-precision .grad, adding to and then
+    # An existing gradient the TV backward must add to (float32 / float64; in a low-precision .grad, adding to and then
     # subtracting a larger g0 would itself round away the TV gradient's low bits, so there it starts empty).
     g0 = torch.randn_like(m.weights) * 1e-5 if dtype not in LOWP_TOL else torch.zeros_like(m.weights)
     m.weights.grad = g0.clone() if dtype not in LOWP_TOL else None

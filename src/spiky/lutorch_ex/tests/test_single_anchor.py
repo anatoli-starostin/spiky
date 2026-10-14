@@ -101,7 +101,7 @@ def test_every_cartridge_single_forward_eval_grad(Cls, h_in, h_out):
 @pytest.mark.parametrize("PureCls,FusedCls", PURE_FUSED)
 @pytest.mark.parametrize("h_in,h_out", PATTERNS)
 def test_single_fused_equals_reference_f32(PureCls, FusedCls, h_in, h_out, needs_manifesto_ext):
-    """Fused single-mode cartridges (CUDA fp32) match the reference class to fp32 summation-order differences."""
+    """Fused single-mode cartridges (CUDA float32) match the reference class to float32 summation-order differences."""
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=4, nap=4, d_in=9, d_out=6, anchor_mode="single")
     pure = PureCls(spec, seed=0, weight_init_std=1.0).cuda()
     fused = FusedCls(spec, seed=0, weight_init_std=1.0).cuda()

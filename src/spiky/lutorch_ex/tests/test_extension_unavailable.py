@@ -214,8 +214,9 @@ def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("where", ["input", "table"])
 def test_fused_quantised_rejects_low_precision(where, dtype):
-    """FusedQuantisedConfidenceLUT is a fused CUDA cartridge, fp32 in / out only: a bf16 / fp16 input, or table, raises
-    RuntimeError naming it -- and does NOT point to the reference class, which does not take low precision either."""
+    """FusedQuantisedConfidenceLUT is a fused CUDA cartridge, float32 in / out only: a bfloat16 / float16 input, or
+    table, raises RuntimeError naming it -- and does NOT point to the reference class, which does not take low precision
+    either."""
     import re
     spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8)
     m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, read_top_n=2).cuda()

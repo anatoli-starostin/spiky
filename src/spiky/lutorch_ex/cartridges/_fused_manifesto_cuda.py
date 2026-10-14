@@ -5,8 +5,8 @@ not cover, or a missing extension, raises; the reference classes (ManifestoHardL
 One forward and one backward kernel per step run the whole cartridge: addressing (margins, MSB-first address,
 least-confident bit, neighbour), the neighbour weight w (``weight="rational"``: 0.5 / (1 + |u*|); ``"softsign"``: the
 learned-temperature sigmoid, the two temperatures passed in as a device tensor), the (weighted) read summed over the
-group's tables, and on the backward the weight-gradient scatter (vector fp32 atomics), the j*-pair margin gradient into
-z and, for ``softsign``, the two temperatures' gradients (summed per CTA, then one atomic add each).
+group's tables, and on the backward the weight-gradient scatter (vector float32 atomics), the j*-pair margin gradient
+into z and, for ``softsign``, the two temperatures' gradients (summed per CTA, then one atomic add each).
 Nothing per table goes through global memory (no ``[B, G*tph, d_out]`` expanded gradient, no materialised addressing
 tensors); the backward recomputes the addressing from z.
 
@@ -76,8 +76,8 @@ def _ineligible(module, x: torch.Tensor):
 def ineligible_reason(module, x: torch.Tensor):
     """Why this input / configuration is NOT a case the kernels cover (None when it is), as a user-facing message:
     what the kernel cannot handle, the remedy (the same sentence for every reason), then the internals in a trailing
-    parenthetical. The cases: no CUDA device or a CPU input, an fp64 input, an fp16 / fp64 table, nap > 16, d_in beyond
-    int16 anchors, or a d_out one CTA cannot cover."""
+    parenthetical. The cases: no CUDA device or a CPU input, a float64 input, a float16 / float64 table, nap > 16, d_in
+    beyond int16 anchors, or a d_out one CTA cannot cover."""
     r = _ineligible(module, x)
     if r is None:
         return None
@@ -97,9 +97,11 @@ def require_cuda(module, x: torch.Tensor) -> None:
 class _FusedManifesto(torch.autograd.Function):
     @staticmethod
     def forward(ctx, z, weights, temps, anc_a, anc_b, mask, nap, mode, knobs, out_bf16=False):
-        # z: fp32 or bf16 [B, G, d_in]. weights: fp32 or bf16 [G, tph, K, d_out] (read in place). temps: fp32 [2]
-        # (T_soft, T_select) for weight="softsign", None for "rational". mask: fp32 [B, G, tph] or None. out_bf16: the
-        # kernel stores its (fp32-accumulated) output as bf16; only for a bf16 z.
+        # z: float32 or bfloat16 [B, G, d_in]. weights: float32 or bfloat16 [G, tph, K, d_out] (read in place). temps:
+        #float32 [2]
+        # (T_soft, T_select) for weight="softsign", None for "rational". mask: float32 [B, G, tph] or None. out_bf16:
+        #the
+        # kernel stores its (float32-accumulated) output as bfloat16; only for a bfloat16 z.
         ext = fused_manifesto_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
@@ -107,7 +109,7 @@ class _FusedManifesto(torch.autograd.Function):
                                 vec, out_bf16)
         ctx.save_for_backward(z, weights, temps, anc_a, anc_b, mask)
         ctx.cfg = (nap, mode, knobs, vec, bwd_threads)
-        return out                                                   # fp32 [B, G, d_out]
+        return out                                                   # float32 [B, G, d_out]
 
     @staticmethod
     def backward(ctx, go):
@@ -117,8 +119,8 @@ class _FusedManifesto(torch.autograd.Function):
         gW, gz, gtemps = fused_manifesto_ext().manifesto_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, mask, temps, nap, mode,
             bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
-        # gW accumulates in fp32 whatever the table dtype; cast once to the parameter's dtype.
-        # gz comes back in z's dtype (a bf16 z: rounded once, in the kernel's store); the .to is then a no-op.
+        # gW accumulates in float32 whatever the table dtype; cast once to the parameter's dtype.
+        # gz comes back in z's dtype (a bfloat16 z: rounded once, in the kernel's store); the .to is then a no-op.
         gt = gtemps if temps is not None and ctx.needs_input_grad[2] else None
         return (gz.to(z.dtype), gW.view_as(weights).to(weights.dtype), gt,
                 None, None, None, None, None, None, None)
@@ -143,21 +145,23 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     require_cuda(module, x)
     # Group g reads input head g % h_in. When h_in == n_groups that map is the identity, so x already IS the per-group
     # input: skip the gather (eager it is a full extra pass + intermediate, which the compiled path used to fuse away).
-    # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to fp32
-    # BEFORE it, so those groups' input gradients sum in fp32 and are rounded to the input dtype once.
+    # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to float32
+    # BEFORE it, so those groups' input gradients sum in float32 and are rounded to the input dtype once.
     zin = x if module.spec.h_in == module.spec.n_groups else \
         (x if x.dtype == torch.float32 else x.float())[:, module.in_head, :]
-    # A bf16 input goes to the kernels as is: they upconvert it while staging each row (fp32 addressing, no fp32 copy of
-    # the input in global memory). fp16 / fp64 are cast to fp32 here as before.
+    # A bfloat16 input goes to the kernels as is: they upconvert it while staging each row (float32 addressing, no
+    #float32 copy of
+    # the input in global memory). float16 / float64 are cast to float32 here as before.
     z = (zin if zin.dtype in (torch.float32, torch.bfloat16) else zin.float()).contiguous()
     # Table dropout: the cartridge's own mask (one source of truth with the reference classes: same draw,
-    # and an overridden _table_dropout_mask is honoured), fp32, applied per table to the value and every gradient.
+    # and an overridden _table_dropout_mask is honoured), float32, applied per table to the value and every gradient.
     mask = module._table_dropout_mask(x.shape[0], x.device, torch.float32)
     mask = None if mask is None else mask.contiguous()
-    # Routing gate: the kernel may store bf16 directly only when _route is the identity (h_out == n_groups: per-head and
-    # fan-out). Fan-in sums groups in _route, which must happen on the fp32 output before the single cast below.
+    # Routing gate: the kernel may store bfloat16 directly only when _route is the identity (h_out == n_groups: per-head
+    #and
+    # fan-out). Fan-in sums groups in _route, which must happen on the float32 output before the single cast below.
     out_bf16 = z.dtype == torch.bfloat16 and module.spec.h_out == module.spec.n_groups
-    # weight="softsign": the two temperatures, fp32, on the device (no host sync); autograd carries their gradient
+    # weight="softsign": the two temperatures, float32, on the device (no host sync); autograd carries their gradient
     # back to the log-parametrised leaves.
     temps = torch.stack(module._softsign_temps(torch.float32)).contiguous() if module.weight == "softsign" else None
     grp = _FusedManifesto.apply(z, module.weights, temps, module._anc_a16, module._anc_b16, mask,

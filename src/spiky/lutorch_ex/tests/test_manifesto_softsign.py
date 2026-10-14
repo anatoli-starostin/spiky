@@ -1,9 +1,9 @@
 """The Manifesto reference cartridges with ``weight="softsign"`` (Gen-2): ManifestoHardLUT and ManifestoSoftLUT.
 
-Both read with ``F.embedding_bag`` on the train path, plain-autograd backward. Covered here: fp64 gradcheck of the 2-alternative soft
-backward (incl. the two learned temperatures) against reference finite differences; the hard
-cartridge's value == the hard read and its output-Jacobian == the smooth cartridge's; the bf16
-path vs an fp32 reference; every head pattern / anchor mode runs with finite grads; temperatures
+Both read with ``F.embedding_bag`` on the train path, plain-autograd backward. Covered here: float64 gradcheck of the
+2-alternative soft backward (incl. the two learned temperatures) against reference finite differences; the hard
+cartridge's value == the hard read and its output-Jacobian == the smooth cartridge's; the bfloat16
+path vs a float32 reference; every head pattern / anchor mode runs with finite grads; temperatures
 are learnable (and freezable).
 """
 import pytest
@@ -23,7 +23,7 @@ def _normrel(a, b):
 
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_smooth_backward_gradcheck_fp64(anchor_mode):
-    """The smooth cartridge is value == gradient; fp64 gradcheck wrt input, weights, and both
+    """The smooth cartridge is value == gradient; float64 gradcheck wrt input, weights, and both
     learned temperatures verifies the 2-alternative backward analytically (reference math)."""
     torch.set_default_dtype(torch.float64)
     try:
@@ -103,7 +103,7 @@ def test_forward_backward_runs(Cls, anchor_mode, h_in, h_out, device):
 @pytest.mark.parametrize("Cls", CARTRIDGES)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_accepts_low_precision(Cls, dtype):
-    """Low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
+    """Low-precision params OR inputs run (float32 maths, one rounding; exactness is checked in
     test_reference_low_precision.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(dtype)

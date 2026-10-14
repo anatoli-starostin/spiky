@@ -1,8 +1,8 @@
-"""ProjectionMHL fp8_projections: opt-in fp8 GEMMs for compress / decompress (fp32 masters, fp32 accumulate).
+"""ProjectionMHL fp8_projections: opt-in fp8 GEMMs for compress / decompress (float32 masters, float32 accumulate).
 
 The flip-rate bound is measured, not assumed: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default
 init, e4m3 compress operands flip ~1.2% of sign bits / ~9.1% of cells vs an exact-fp32 compress (measured
-2026-10-09) - the flips come from the operand quantisation, so the output dtype (fp32 vs bf16) does not matter.
+2026-10-09) - the flips come from the operand quantisation, so the output dtype (float32 vs bfloat16) does not matter.
 """
 import pytest
 import torch
@@ -87,7 +87,7 @@ def test_decompress_only_leaves_addressing_bit_identical():
 def test_compress_fp8_sign_bit_flips_within_measured_bound(out_dtype):
     ref = _proj()
     m = _twin(ref, ("compress", "decompress"), out_dtype)
-    x = torch.randn(4096, 1536, device="cuda").bfloat16().float()          # the island's input: a bf16 stream cast up
+    x = torch.randn(4096, 1536, device="cuda").bfloat16().float()          # the island's input: bfloat16, cast up
     cart, spec = ref.cartridge, ref.cartridge.spec
     prev = torch.get_float32_matmul_precision()
     torch.set_float32_matmul_precision("highest")

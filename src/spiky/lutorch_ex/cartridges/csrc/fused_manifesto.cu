@@ -26,8 +26,8 @@
 //                                the two temperature gradients, summed in shared memory and added once per CTA.
 // The backward recomputes the addressing from z instead of saving anything per table.
 //
-// Table dtype T: fp32 or bf16 (upconverted in registers). Every reduction, the output and the weight-gradient buffer
-// are fp32 (the caller casts the gradient to the table dtype once).
+// Table dtype T: float32 or bfloat16 (upconverted in registers). Every reduction, the output and the weight-gradient
+// buffer are float32 (the caller casts the gradient to the table dtype once).
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -44,12 +44,12 @@ constexpr int HARD = 0;
 constexpr int SOFT = 1;
 
 struct Params {
-    const float* z;          // [B, G, d_in], fp32 input (nullptr when the input is bf16)
-    const __nv_bfloat16* zb; // the same, bf16 input, upconverted when staged (nullptr when fp32)
+    const float* z;          // [B, G, d_in], float32 input (nullptr when the input is bfloat16)
+    const __nv_bfloat16* zb; // the same, bfloat16 input, upconverted when staged (nullptr when float32)
     const int16_t* anc_a;    // [G, tph, nap]
     const int16_t* anc_b;    // [G, tph, nap], nullptr in single-anchor mode
-    const float* W;          // [G * tph * K, d_out], fp32 table (nullptr when the table is bf16)
-    const __nv_bfloat16* Wb; // the same, bf16 table (nullptr when the table is fp32)
+    const float* W;          // [G * tph * K, d_out], float32 table (nullptr when the table is bfloat16)
+    const __nv_bfloat16* Wb; // the same, bfloat16 table (nullptr when the table is float32)
     const float* mask;       // [B, G, tph] table-dropout factor (ManifestoLUT._table_dropout_mask), nullptr = none
     const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational weight
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
@@ -115,8 +115,8 @@ __device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
     }
 }
 
-// The input row is staged once per row into fp32 shared memory; a bf16 input is upconverted there (no fp32 copy of
-// the input in global memory). The branch is uniform across the CTA.
+// The input row is staged once per row into float32 shared memory; a bfloat16 input is upconverted there (no float32
+// copy of the input in global memory). The branch is uniform across the CTA.
 __device__ inline float load_z(const Params& p, size_t i) {
     return p.zb ? __bfloat162float(p.zb[i]) : p.z[i];
 }
@@ -261,7 +261,7 @@ __device__ __forceinline__ void manifesto_fwd_body(const Params& p, float* __res
         for (int i = tid; i < p.d_out; i += bd) {
             float y = 0.f;
             for (int s = 0; s < nstripe; ++s) y += part[s * p.d_out + i];
-            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bf16-output mode: one RNE rounding at the store
+            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bfloat16-output mode: one RNE rounding
             else out[row * p.d_out + i] = y;
         }
         __syncthreads();                                  // part / zs reused by the next row
@@ -363,7 +363,7 @@ __device__ __forceinline__ void manifesto_bwd_body(const Params& p, const float*
             }
         }
         __syncthreads();
-        for (int i = tid; i < p.d_in; i += bd) {           // bf16 input: grad z stored in bf16, one RNE rounding
+        for (int i = tid; i < p.d_in; i += bd) {           // bfloat16 input: grad z stored as bfloat16 (one RNE)
             if (gzb) gzb[row * p.d_in + i] = __float2bfloat16(gzs[i]);
             else gz[row * p.d_in + i] = gzs[i];
         }
@@ -474,7 +474,8 @@ torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
-    // fp32 output, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1 onto output heads).
+    // float32 output, or bfloat16 when the caller asks (only for a bfloat16 input whose groups map 1:1 onto output
+    // heads).
     TORCH_CHECK(!out_bf16 || z.scalar_type() == torch::kBFloat16, "out_bf16 needs a bf16 input");
     auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(out_bf16 ? torch::kBFloat16 : torch::kFloat32));
     if (p.B == 0) return out;
