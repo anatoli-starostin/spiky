@@ -24,6 +24,8 @@ Backward: RECOMPUTE with the torch expression. The op's backward re-evaluates th
 (_pow2.ste_cell_weights) with the op's integers held fixed and returns autograd's gradient of it: the same code as the
 reference, so the same gradient semantics, including the ratio gradient of skipped tables and dropped second cells.
 """
+from __future__ import annotations
+
 import os
 from typing import Tuple
 

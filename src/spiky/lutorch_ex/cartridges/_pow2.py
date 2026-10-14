@@ -13,6 +13,8 @@ frozen-g rows); q = clamp(floor(2 u*/(tau ln2) + 1/2), 0, J); c_q = log2(1+2^-q)
 round(xi) = floor(xi + 1/2) (half up). Integer read keeps the head sum in units of 2^-6 in int32,
 each table adding (W_hat[c1] << (k'+6)) + (W_hat[c2] << (k'+6-q)); int8 only.
 """
+from __future__ import annotations
+
 import math
 from typing import Dict, Optional
 
