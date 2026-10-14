@@ -481,7 +481,7 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         if self.spec.d_in > torch.iinfo(torch.int16).max:
             problems.append(f"d_in={self.spec.d_in} (max 32767)")
         d_out = self.spec.d_out
-        vec = next(v for v in (16, 8, 4, 2, 1) if d_out % v == 0)
+        vec = next(v for v in (8, 4, 2, 1) if d_out % v == 0)       # the kernel's width: dq::vec_for
         if -(-(d_out // vec) // 32) * 32 > 1024:
             problems.append(f"d_out={d_out} needs more than 1024 threads per CTA")
         if problems:

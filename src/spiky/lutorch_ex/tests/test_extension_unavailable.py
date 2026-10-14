@@ -281,6 +281,17 @@ def test_deployed_cuda_fp64_input_raises_naming_the_case():
         _deployed()(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_deployed_too_wide_d_out_raises_naming_the_case():
+    """The host check uses the kernel's own vector width (8 at most): d_out 16384 needs 2048 threads at 8 bytes per load,
+    more than one CTA has, and must be refused by the class with its message, not by the kernel's internal check."""
+    spec = LUTSpec(h_in=1, h_out=1, tph=1, nap=1, d_in=2, d_out=16384)
+    p = lx.QuantisedConfidenceLUT(spec, seed=0, read_top_n=2).to_deployment()
+    d = lx.DeployedQuantisedConfidenceLUT(spec, p["tensors"], p["meta"], device="cuda")
+    with pytest.raises(RuntimeError, match=r"not a case the CUDA kernel covers: d_out=16384 needs more than 1024 threads"):
+        d(torch.randn(4, 1, 2, device="cuda"))
+
+
 # -- one phrasing for a refused dtype, in every fused family -----------------------------------------------------------
 
 #: (class, kwargs, the input dtypes its kernels take) for every fused family.

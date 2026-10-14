@@ -617,7 +617,6 @@ template <> struct Bytes<1> { using T = int8_t; };
 template <> struct Bytes<2> { using T = int16_t; };
 template <> struct Bytes<4> { using T = int32_t; };
 template <> struct Bytes<8> { using T = int2; };
-template <> struct Bytes<16> { using T = int4; };
 
 template <int VEC>
 __device__ inline void load_bytes(const int8_t* p, int (&v)[VEC]) {
@@ -943,8 +942,7 @@ torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, con
   };
   auto by_vec = [&](auto n_const) {
     constexpr int NN = decltype(n_const)::value;
-    switch (vec) {
-      case 16: launch(dq::deploy_fwd_kernel<16, NN>); break;
+    switch (vec) {   // dq::vec_for: 8, 4, 2 or 1
       case 8: launch(dq::deploy_fwd_kernel<8, NN>); break;
       case 4: launch(dq::deploy_fwd_kernel<4, NN>); break;
       case 2: launch(dq::deploy_fwd_kernel<2, NN>); break;
