@@ -33,7 +33,7 @@ Source = "https://github.com/anatoli-starostin/spiky/tree/main/src/spiky/lutorch
 
 [tool.setuptools]
 package-dir = { "spiky.lutorch_ex" = "." }
-packages = ["spiky.lutorch_ex", "spiky.lutorch_ex.cartridges", "spiky.lutorch_ex.tests"]
+packages = ["spiky.lutorch_ex", "spiky.lutorch_ex.cartridges", "spiky.lutorch_ex.benchmarks", "spiky.lutorch_ex.tests"]
 
 [tool.setuptools.package-data]
 "spiky.lutorch_ex.cartridges" = ["csrc/*.cu", "csrc/*.cuh", "csrc/*.cpp", "csrc/*.h"]
