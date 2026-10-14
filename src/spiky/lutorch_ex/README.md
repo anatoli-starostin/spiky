@@ -555,7 +555,6 @@ lutorch_ex/
 ├── benchmarks/
 │   ├── bench.py                     the benchmark harness
 │   ├── bench_snapshot.py            a performance snapshot of every class (one fresh process per cell)
-│   ├── bench_compare.py             two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
-│   └── bench_fused_confidence.py    FusedConfidenceLUT vs compiled ConfidenceLUT timings and launch-knob sweeps
+│   └── bench_compare.py             two snapshot JSONs -> the comparison figures (before / after bars, ratio strip)
 └── tests/               pytest suite
 ```
