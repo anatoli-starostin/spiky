@@ -1,0 +1,695 @@
+{
+ "shards": {
+  "shard_00000.parquet": {
+   "sha256": "054ddbd98abf30d773c54de578fc9d579bafeb6c14e04e97bd36aa90e825bf9b",
+   "bytes": 92291918
+  },
+  "shard_00001.parquet": {
+   "sha256": "d4cfe1de19f4fd976022a9047458655968bc5583582ec5fa714801ec2be2c93c",
+   "bytes": 92124317
+  },
+  "shard_00002.parquet": {
+   "sha256": "5e80d7596d53be648d841ea5811082747281c39f6851e10dd90375a84bc509a7",
+   "bytes": 91803619
+  },
+  "shard_00003.parquet": {
+   "sha256": "b349c85d4b993d98e2328833ecfd3734692e0395a592d89858bae34a4ba73c59",
+   "bytes": 91793972
+  },
+  "shard_00004.parquet": {
+   "sha256": "87dae96fe1a6116c54c7873aadb81832178a36755991befd1b3b641c76244474",
+   "bytes": 91428652
+  },
+  "shard_00005.parquet": {
+   "sha256": "3d9aebf138ef69cff2585a686d7f21585b7ffc0de4655f8e7723590418583bd6",
+   "bytes": 91845922
+  },
+  "shard_00006.parquet": {
+   "sha256": "6a3f2afde8f1a39f9283ea9d9e9ee6431634d6881b63798176bf64efc3f33576",
+   "bytes": 91455616
+  },
+  "shard_00007.parquet": {
+   "sha256": "731eea337d941e5b18a9a4e2bbe73a517dac45d91bb93ae2e69346c68c5f37f6",
+   "bytes": 91202032
+  },
+  "shard_00008.parquet": {
+   "sha256": "e78379132451838afabed9034b5483a2f3bc5a422bed8b55b99f2bbb9a128755",
+   "bytes": 91155507
+  },
+  "shard_00009.parquet": {
+   "sha256": "f22410fe8f13b6976a2860a8a82ee71e838f4ee9b605d61584aaa963f966e120",
+   "bytes": 92072356
+  },
+  "shard_00010.parquet": {
+   "sha256": "15a7cec1c2ebad771f67a4cb7f7b43c85ae7e3614c35fb09307f4cdafb891a37",
+   "bytes": 92181541
+  },
+  "shard_00011.parquet": {
+   "sha256": "abbb0147368515250a5b86716d975cdb6d9c9d88f3b660e48f9b4cc474066279",
+   "bytes": 91758078
+  },
+  "shard_00012.parquet": {
+   "sha256": "4402a0dd2d19cc254cfd079603db39842a54f4e80287448c29344e78b7e98244",
+   "bytes": 91531067
+  },
+  "shard_00013.parquet": {
+   "sha256": "9f1bd5a03e9c1f85c672c52499dd5fdc74c10e06fef989f47820bf61b85aef84",
+   "bytes": 91842434
+  },
+  "shard_00014.parquet": {
+   "sha256": "71ccc90a4a1fc7e5aaa38e632aec3a6e0751f18a1b486838b967d8f2924bf013",
+   "bytes": 91794786
+  },
+  "shard_00015.parquet": {
+   "sha256": "10e7f70b6052df3176de2ac13bfc121b528c498c953b379ee2b481baa1c6c15a",
+   "bytes": 91642426
+  },
+  "shard_00016.parquet": {
+   "sha256": "fb9adbb058aaa25cac780c64cdd13d1bc8ce5dd68d564791e844635d9def5f72",
+   "bytes": 91875697
+  },
+  "shard_00017.parquet": {
+   "sha256": "a7512903c9acbf66bf451e2dc2a559094f7d3bea3af3118c30e42a43750f84dd",
+   "bytes": 92252148
+  },
+  "shard_00018.parquet": {
+   "sha256": "dc4c29bfbf24ef74cbbb48f5a7b20ac882db77c3ded30374da99cbdc20006006",
+   "bytes": 92097325
+  },
+  "shard_00019.parquet": {
+   "sha256": "55b737ae1e26c5405e2bb5f0d89d964712e920f87422db1032f49aa95072ec15",
+   "bytes": 91468190
+  },
+  "shard_00020.parquet": {
+   "sha256": "28b271a67105a0de85e84e5c495ec5b9e1cafffe446552d1ecd5d10542cae58e",
+   "bytes": 92023878
+  },
+  "shard_00021.parquet": {
+   "sha256": "42a873174c0049e0313f31cd461e7af1548772cc6ec52bdb5f6e0d1221cf72aa",
+   "bytes": 92007015
+  },
+  "shard_00022.parquet": {
+   "sha256": "ac5acbd6e3d08d04f5096b4bcba2231a27bc60206ba36880b4d74c5d3e6c47cd",
+   "bytes": 91895569
+  },
+  "shard_00023.parquet": {
+   "sha256": "ae421415f8341f0e76b8a671a8187d5002c7011f16b6d63b1c594394e77bd339",
+   "bytes": 91788901
+  },
+  "shard_00024.parquet": {
+   "sha256": "675cc569dd960716ecd340edeb07b0df4a562ccb11fac7d5a9bb96a12fdd5d5a",
+   "bytes": 91816001
+  },
+  "shard_00025.parquet": {
+   "sha256": "0ae18d0ea11c22a73a1eb1d4237a18d0d5c9c5b9d3533281b194d41cbd2ba05b",
+   "bytes": 92082140
+  },
+  "shard_00026.parquet": {
+   "sha256": "e766ad6a65fad89c8336327644abb71c0e667e7b6c8eed57e322f9fa5db74ce5",
+   "bytes": 91646155
+  },
+  "shard_00027.parquet": {
+   "sha256": "7fcc70349de0ec9b909b21b7fb9ef7862414b3ea45f273f4ec2ffe365606b1b9",
+   "bytes": 91534737
+  },
+  "shard_00028.parquet": {
+   "sha256": "9bb1108dcee875e8f0bfd65c0e73e7bc157fb6f2181b81f16655b42a912e7292",
+   "bytes": 92205715
+  },
+  "shard_00029.parquet": {
+   "sha256": "cc999f1fe55eff44c95b21ff5cc8cf683ba3db928701e60ced8b1f17fb2a7467",
+   "bytes": 91416996
+  },
+  "shard_00030.parquet": {
+   "sha256": "7d4bfac6bbfeb7b3f6d822233f9271c3e43512de1996909c374880b0e30ace75",
+   "bytes": 91557375
+  },
+  "shard_00031.parquet": {
+   "sha256": "9894e020e5d39723d41b9c7b6d647bab27506e86c1cc548882d97451030cb03a",
+   "bytes": 91761076
+  },
+  "shard_00032.parquet": {
+   "sha256": "8b49a49d5cd8eeac669da70b3812018665c394443f3ec92038ca1e4aa1732ef4",
+   "bytes": 91797604
+  },
+  "shard_00033.parquet": {
+   "sha256": "e669dcdb72e9c81e30aef22e7735eb5585356ca8df9801ab1a30adc675823e9c",
+   "bytes": 91448157
+  },
+  "shard_00034.parquet": {
+   "sha256": "0889af6798caca8b0a4047b7883b0edde8c864c4c4196778b75959b35e775579",
+   "bytes": 91977442
+  },
+  "shard_00035.parquet": {
+   "sha256": "77df69436ae8986e2f7da82b434e4f5fd6774a3417d68e28545029f9a217a037",
+   "bytes": 91501064
+  },
+  "shard_00036.parquet": {
+   "sha256": "aeaa99fea04a704afeba83ed976fd8669356cf1910dc76bb90f2013de5ab90ac",
+   "bytes": 91493685
+  },
+  "shard_00037.parquet": {
+   "sha256": "0e6dc92853c9929e83f639ae3c6309da92a522e5c904d17a7a57fb68b3a5ff91",
+   "bytes": 91950930
+  },
+  "shard_00038.parquet": {
+   "sha256": "67af42a646db6f448f398dc6dfa6bfa8311e1e7551ad00c9daa6e1c7e5969f8e",
+   "bytes": 91681390
+  },
+  "shard_00039.parquet": {
+   "sha256": "d0012fd5b0e380656fa8adfe31b11b39f0c2079bacba864b5c955ea489178b74",
+   "bytes": 91480777
+  },
+  "shard_00040.parquet": {
+   "sha256": "2f20e830143b4f00ee536a2bff9091e04f047730f4cd3452bc5a6abf5eb4cbc7",
+   "bytes": 91501658
+  },
+  "shard_00041.parquet": {
+   "sha256": "87ee2293190a96787efeb1db25572a317aac5e067a4af0c9eba4ca25065841da",
+   "bytes": 91995895
+  },
+  "shard_00042.parquet": {
+   "sha256": "d1b8772a64cbf212c0736fdfbb7d6965e6f7bf371516939cb8e204e27e32ae80",
+   "bytes": 91400837
+  },
+  "shard_00043.parquet": {
+   "sha256": "635074a275a5ebb77a687e0ba9fe71fc5a15663aa519dca28620e20212c94c92",
+   "bytes": 91490600
+  },
+  "shard_00044.parquet": {
+   "sha256": "14d8304c06c36171623b4f58d7695fa096ab7229a2a06cd07010a517d96c2592",
+   "bytes": 91090081
+  },
+  "shard_00045.parquet": {
+   "sha256": "71150b1e58d0709905447e1490d50fc3ed5f73a07b3c6e039969933f472341c0",
+   "bytes": 91188024
+  },
+  "shard_00046.parquet": {
+   "sha256": "57095a078359e439ee56847d085976c43c89e77b4b8e95de4086d7eb22f92517",
+   "bytes": 91600459
+  },
+  "shard_00047.parquet": {
+   "sha256": "c89cd2b66670d8e04070caf2206210dd5efb4d72739460ad5e23ef22d38bb859",
+   "bytes": 92007753
+  },
+  "shard_00048.parquet": {
+   "sha256": "2a2e202a25f861453778fd95b8465be6b8563dfd57bcd2be720eff338103cc4a",
+   "bytes": 91791765
+  },
+  "shard_00049.parquet": {
+   "sha256": "973419b4e1c1af07e1b6de788972bf370c39302a3bb0985bd0db6348a5239645",
+   "bytes": 91330275
+  },
+  "shard_00050.parquet": {
+   "sha256": "af9b7fb7c3babc3d22c208024e23cd0b4eaed464c64c0789f31237f4050d89bd",
+   "bytes": 91234778
+  },
+  "shard_00051.parquet": {
+   "sha256": "657887637ea2cbf94c47f709128dd664f12960495f8f4b74f6c93e045b1f8f65",
+   "bytes": 92016071
+  },
+  "shard_00052.parquet": {
+   "sha256": "ccc97764bf1157a9bd8fcd5b13d668f0ba9581ffa20286faaee3e9e173d3ad4d",
+   "bytes": 91529024
+  },
+  "shard_00053.parquet": {
+   "sha256": "30cba4855fe5a35b8c9419e18b05aeffaa49b7560e58258435390aabdf0777b2",
+   "bytes": 91473476
+  },
+  "shard_00054.parquet": {
+   "sha256": "2d93765a97c389fefacfa822b04b3fe9b0240c7b15cbface817a0d1ed206e2e0",
+   "bytes": 91396912
+  },
+  "shard_00055.parquet": {
+   "sha256": "471ee648a2701a39b80087871b6bf208eea459a59ae79af78b0973fbfd94cf62",
+   "bytes": 91320632
+  },
+  "shard_00056.parquet": {
+   "sha256": "fe0a34e4113c9cc5a49094018dfeafe582458ef4517c45d2cf82017bab4b3c9a",
+   "bytes": 91400250
+  },
+  "shard_00057.parquet": {
+   "sha256": "353e8f4a6fcbf8fbeb119c3f7a0e303fc353b0123197940a123763596212b9db",
+   "bytes": 91313283
+  },
+  "shard_00058.parquet": {
+   "sha256": "37c583920c2f6d282243533de17fd4493300523fd408b9a1460e77fae4b7bce3",
+   "bytes": 91911182
+  },
+  "shard_00059.parquet": {
+   "sha256": "a2c93808df841708d18e5b51e225cab8bc745f9d03531bb972ba2c6aae893899",
+   "bytes": 91555652
+  },
+  "shard_00060.parquet": {
+   "sha256": "523b1e14c42bf35deee96030f1efd4bbb4a4c8c8086d9378550db127607c4cbb",
+   "bytes": 91524191
+  },
+  "shard_00061.parquet": {
+   "sha256": "6cfc13f6030ec3a6f4a3d1f6c7dd14778b8fac024d72a7d36fb4afc17abf3112",
+   "bytes": 91823199
+  },
+  "shard_00062.parquet": {
+   "sha256": "ac94262e51deda3bb273fb5ffa4c4df7c1abef7afa2792571c178ef5e6ba8772",
+   "bytes": 91669638
+  },
+  "shard_00063.parquet": {
+   "sha256": "94cb6d88aaacb9705ec06df38f83844ff1bdb99d8315af4514ff0a879e117604",
+   "bytes": 92138204
+  },
+  "shard_00064.parquet": {
+   "sha256": "4dbc2e998b5b5aac198a016b5818608443860d2eb9703e808b89d63258f9b37c",
+   "bytes": 92027475
+  },
+  "shard_00065.parquet": {
+   "sha256": "9f7d29b168a15fc6f69aa2958959a208a5bfabe2dab147dbcaf26047b459fea6",
+   "bytes": 91610871
+  },
+  "shard_00066.parquet": {
+   "sha256": "8ba6704833745c5ab843337d9cf493c4bffb5f7235a12fa7916a09d884441713",
+   "bytes": 91782288
+  },
+  "shard_00067.parquet": {
+   "sha256": "59ffd7a94ec9d09d40cdb3a5149bdccc55a0ef46b394f070a49e5fdf19e3503f",
+   "bytes": 91627031
+  },
+  "shard_00068.parquet": {
+   "sha256": "2dbe2f84680673dc6c64967bb02bcacb2d6df16c9058cbbd19b861a65b4d906d",
+   "bytes": 91582958
+  },
+  "shard_00069.parquet": {
+   "sha256": "d1279ee1432ca8b7ce4ceb98c03344627910b70b27e16ce3ed6903a5bdd7bf1f",
+   "bytes": 92094808
+  },
+  "shard_00070.parquet": {
+   "sha256": "4c83cee45aaa604baa96438f3a50477fedd766c68d82bd3a1abd2799df9cb3b3",
+   "bytes": 91276778
+  },
+  "shard_00071.parquet": {
+   "sha256": "aba703bce48c07f277c83e4ba6b83790310929bcb27926d0ca4becc03d6d14a9",
+   "bytes": 91527354
+  },
+  "shard_00072.parquet": {
+   "sha256": "87f887c52a67f0bc39721aa5f84b277f8dda07131638aab6a789ec362390b766",
+   "bytes": 91171991
+  },
+  "shard_00073.parquet": {
+   "sha256": "a1b1dae0217ba6a05daf7c42e65a00ef4b3ccb9f638ca2e1d04b975b8f7e0557",
+   "bytes": 91820849
+  },
+  "shard_00074.parquet": {
+   "sha256": "cbb92873fb187468efdff631739206946fc7b741aceffdd3064eff537ce99c5f",
+   "bytes": 92038597
+  },
+  "shard_00075.parquet": {
+   "sha256": "38bb9a8ef589767c2e4e62643f3719b4c6afba4b3fc324e29df4926714b02224",
+   "bytes": 91542457
+  },
+  "shard_00076.parquet": {
+   "sha256": "419655acb594927272c3be1dc7940f3290574409664b2f10eb7b08d02bafbbd3",
+   "bytes": 91480315
+  },
+  "shard_00077.parquet": {
+   "sha256": "100391989ea56a1c048227d98a8db58458e14c29bb2b1f5cbc6bb0e0a2493e10",
+   "bytes": 91215695
+  },
+  "shard_00078.parquet": {
+   "sha256": "4986065e0c8d111e7a594d138d1204d7c92e1c7f35b671e570ea6231514975a7",
+   "bytes": 92297727
+  },
+  "shard_00079.parquet": {
+   "sha256": "821ccc1fcf8ef80553a5c2447fdd5eaa91af5c07b88ef5415e9d20689c24822e",
+   "bytes": 92302344
+  },
+  "shard_00080.parquet": {
+   "sha256": "775b02208f0376f3c2a62108c16205d195bfcbc00eff05e3f06a7bf88082d813",
+   "bytes": 91755139
+  },
+  "shard_00081.parquet": {
+   "sha256": "e611f4d57d042ad336f5424df1ac84985d50e2af9bb14be7decb74198f33d585",
+   "bytes": 91953019
+  },
+  "shard_00082.parquet": {
+   "sha256": "2d434d3b13434f1b89206fee32431c3d4c0a10848fe05680d6b161d3913a89ed",
+   "bytes": 91511623
+  },
+  "shard_00083.parquet": {
+   "sha256": "43f2c6e7ee9ef6f8f584c839196f9ec5e5a865eb81019c13667362b7f40dac0e",
+   "bytes": 91837292
+  },
+  "shard_00084.parquet": {
+   "sha256": "55f0748b2517ec266e8d37d0cf5512a61109127ba5eaeaecfaedf22ee3156956",
+   "bytes": 91390849
+  },
+  "shard_00085.parquet": {
+   "sha256": "d5ff66381540caf44b6311eb26c1da7487ff0306827ab0fed65dc2d004d307a3",
+   "bytes": 91447629
+  },
+  "shard_00086.parquet": {
+   "sha256": "63fbfb437bc571642a564581652fdeb6ca33f4c12d6ac37677d984c7604ec734",
+   "bytes": 92098233
+  },
+  "shard_00087.parquet": {
+   "sha256": "a93c0351ce92e6d3217c3e1e1937f4d2111666d14a0af070fbe97e4f8f3d4cd8",
+   "bytes": 91340825
+  },
+  "shard_00088.parquet": {
+   "sha256": "d9fd48374fd5b8dfa837e600ae34460ec90f3907de93a284cc6a3fce5a129843",
+   "bytes": 91228987
+  },
+  "shard_00089.parquet": {
+   "sha256": "41b3b2241a6149568bc2f9983439b2021ccdb511db54ef58070e61839e3b251f",
+   "bytes": 92064537
+  },
+  "shard_00090.parquet": {
+   "sha256": "501323ec2fb353d1f5d1ad0750969fae348baadef05ef4b98ef6c62143edec3e",
+   "bytes": 92048118
+  },
+  "shard_00091.parquet": {
+   "sha256": "f262a50bf3294f8944f158f85e60053f727003f2c05c081fac33d9348cac2cf5",
+   "bytes": 91811974
+  },
+  "shard_00092.parquet": {
+   "sha256": "a6035d40d1289f20dba2814366c8b71905c1625c4cfb206a2cb0fc287b968a90",
+   "bytes": 91820437
+  },
+  "shard_00093.parquet": {
+   "sha256": "87ff679f54c1cdf01ead49708457d66e7e4cddc592132cb379c81aefff629ff5",
+   "bytes": 92020735
+  },
+  "shard_00094.parquet": {
+   "sha256": "c6060b27302d26956feecc67aed890bf7df5b056ac4e3c6197015197b815881d",
+   "bytes": 91468677
+  },
+  "shard_00095.parquet": {
+   "sha256": "fd9b5ba61e38f10a6ef910e9c4608d8a7df5aade3080d4f04cabdcf3fd276e87",
+   "bytes": 92057617
+  },
+  "shard_00096.parquet": {
+   "sha256": "395ccdf1d0e6eaeb1c3022c0eef3fdc5b404d71a139ccd19e8fa8e6114c937ee",
+   "bytes": 92136374
+  },
+  "shard_00097.parquet": {
+   "sha256": "9b32a85618e4140526a642b219153150ce004deb559f3612aaa07280e83de13e",
+   "bytes": 91616098
+  },
+  "shard_00098.parquet": {
+   "sha256": "f48a6dfe96733c12268f5c4041d5e75d7181410af79fdc6270d57c3c8e17c432",
+   "bytes": 92137123
+  },
+  "shard_00099.parquet": {
+   "sha256": "15217ecabca5f1433373a44fe6021c58c806ba01d9056d3b6c0e512677bf63bc",
+   "bytes": 91360745
+  },
+  "shard_00100.parquet": {
+   "sha256": "580196422f42e4525b0eca04c151d321946909e5c29931cd9b3ecb7f2ef01903",
+   "bytes": 92030208
+  },
+  "shard_00101.parquet": {
+   "sha256": "b1ad2b8589be45921f64eca751b0412333bb5fcaa6f2306b051575a8cded3aa8",
+   "bytes": 91223597
+  },
+  "shard_00102.parquet": {
+   "sha256": "0de7556b8b6f4a96d7e9ea6341b3181e14154d30ccfe2b547576a879cb3f0e6a",
+   "bytes": 91907524
+  },
+  "shard_00103.parquet": {
+   "sha256": "77676bd0c79179f34ea8fd0d1697e8c092e9aec74100f9831f68d1c976608a46",
+   "bytes": 91457455
+  },
+  "shard_00104.parquet": {
+   "sha256": "99ed65f28d66968b1851ecb4f2c3c01e0b8f1c8be4ab13af43ea5f2f2053057a",
+   "bytes": 91496905
+  },
+  "shard_00105.parquet": {
+   "sha256": "5f5a8cd19548c60a5bb2f7375f3fd90d24a9b1fd649b70a7f5325966b67b3948",
+   "bytes": 91956808
+  },
+  "shard_00106.parquet": {
+   "sha256": "5ed4e5dc93728dd2e0acb15111edfefcfe03cf1f3b8d68d4d0553f781fd23d75",
+   "bytes": 91690455
+  },
+  "shard_00107.parquet": {
+   "sha256": "0248cefa58356c9656d0a642fa8c5825dee826bcf8603bf38ea62a68db718173",
+   "bytes": 92143932
+  },
+  "shard_00108.parquet": {
+   "sha256": "afd54c8e5b3699d87a2cf75093d2e7380fa9cc38970b579e62da52f0e58640cd",
+   "bytes": 92045558
+  },
+  "shard_00109.parquet": {
+   "sha256": "ae75e09124665b76a1e430625e5205ee96c8856ef995c9639f10837537700897",
+   "bytes": 91474944
+  },
+  "shard_00110.parquet": {
+   "sha256": "2348929f3f95c305586e0c188c4f219cdfedf12fdcaaabca2aa5395ab980486a",
+   "bytes": 91725399
+  },
+  "shard_00111.parquet": {
+   "sha256": "51290b47ee412a96887685d9b25b35596d3812d9610f157bb9c5ec335accc110",
+   "bytes": 91978492
+  },
+  "shard_00112.parquet": {
+   "sha256": "aef94ae9113eeabd881200ff25889cac7202555ccd167bb008003c5e2a661e90",
+   "bytes": 91671514
+  },
+  "shard_00113.parquet": {
+   "sha256": "e6bd4d755f252ef378934cf3983a2824b4ab7d0d946f7a320589690dfdb01962",
+   "bytes": 91586387
+  },
+  "shard_00114.parquet": {
+   "sha256": "e3f555bc2cec7e7863b8e3cfa1d6f62374b6a263a8e257d9fb741c492ebcab68",
+   "bytes": 91858796
+  },
+  "shard_00115.parquet": {
+   "sha256": "94e8f58352cbabfa08af2a8b9c0d1261834e7207bd8d4ec48d6bbf40520a692d",
+   "bytes": 91573477
+  },
+  "shard_00116.parquet": {
+   "sha256": "3791280c42d5a796c5a19d7ceb0390269058348ab938847471219ff9f473c9c3",
+   "bytes": 91654881
+  },
+  "shard_00117.parquet": {
+   "sha256": "7f65ad60042850f3bacd4d6893fec1b2a1303a129be80055312e9001302a9478",
+   "bytes": 92170361
+  },
+  "shard_00118.parquet": {
+   "sha256": "5a57c64c610e65771e8d3ff93bc46d015c2d03d71ed7ec4604fef778183744fd",
+   "bytes": 92029626
+  },
+  "shard_00119.parquet": {
+   "sha256": "edbe727856fdbcc6f567268c4fdf65696ee28caa080c2d484461f4e237cbfda3",
+   "bytes": 91733735
+  },
+  "shard_00120.parquet": {
+   "sha256": "a024d6a5b2c9f2726c912243b627fa70e0760716cc210c0e2f029474f5bc6059",
+   "bytes": 92138415
+  },
+  "shard_00121.parquet": {
+   "sha256": "4d4da183de7f6d0aa63c191983494bd4d45156e3b63ac3c063ca2d6d1486977a",
+   "bytes": 91671876
+  },
+  "shard_00122.parquet": {
+   "sha256": "5e48a8605a88d3db63f47ec69b86410cc7bd42b41cbfc51216cd0bd27489b486",
+   "bytes": 91482449
+  },
+  "shard_00123.parquet": {
+   "sha256": "ed38973c63d3f523b2daa79f7914c827c0bf8b30cbb2dd311f0a5494fdfa9388",
+   "bytes": 91230975
+  },
+  "shard_00124.parquet": {
+   "sha256": "a32af80a56730a1c3d7793a69c4dc2d65318f0831dafa2ecfd22f2eb0d71b5b9",
+   "bytes": 91317127
+  },
+  "shard_00125.parquet": {
+   "sha256": "d07c172ad27a2999b1bf998b643639dd637a21130ac6c1c041af67c15fdcb983",
+   "bytes": 92253123
+  },
+  "shard_00126.parquet": {
+   "sha256": "b0031f5b3fcf322017a425293d0c3b8304c62c62c139b0b15f56107c735ac206",
+   "bytes": 91884928
+  },
+  "shard_00127.parquet": {
+   "sha256": "ce69228120b8de3a6e73da41c140ea11aa020eca0caa4d393648249ced34aa1e",
+   "bytes": 92081811
+  },
+  "shard_00128.parquet": {
+   "sha256": "266d5b791343fa90626b03a2f9a1c1392d1456ff413007439d94b15298d49ba7",
+   "bytes": 91562328
+  },
+  "shard_00129.parquet": {
+   "sha256": "d850b6fc3ce9df4fc3b66df3e653c7c69ea79e15cc694ba4841a11e5bf16c54e",
+   "bytes": 91515220
+  },
+  "shard_00130.parquet": {
+   "sha256": "11bee3aca4598e73b1875a1f659e705a36090291757acb8527d492c2bd504543",
+   "bytes": 92033034
+  },
+  "shard_00131.parquet": {
+   "sha256": "f5633d31844916f9e0322d15ea127ac06d575fd57ec0db49d544bfcde2480df3",
+   "bytes": 91853766
+  },
+  "shard_00132.parquet": {
+   "sha256": "e722feece0496c8d450801c606333b9f0b40f86f26dbd6ba689275eedaa91ef6",
+   "bytes": 91477443
+  },
+  "shard_00133.parquet": {
+   "sha256": "47eacbfba6a1dc3672abb0bbe86fa2ded19a0ce608e6b304d39ce442413653d5",
+   "bytes": 91503346
+  },
+  "shard_00134.parquet": {
+   "sha256": "2bb3d75b128bf832a70f836d16cc5e0b9901af9dcec7d1ccc2ce556504a9ee8e",
+   "bytes": 91680807
+  },
+  "shard_00135.parquet": {
+   "sha256": "38c94d0e00e0ddefe37fa105c83347cc0d69768f3adf415477655cfbab06b6b9",
+   "bytes": 92048956
+  },
+  "shard_00136.parquet": {
+   "sha256": "cdfa13ba00e159a9a98bf310c8833fd9ec9018fcc1d5fabad2e928080cbd46b8",
+   "bytes": 91972305
+  },
+  "shard_00137.parquet": {
+   "sha256": "e9351e591e10a0d500f357cd047a05a9e7651f0beff5c75c9bdb605b6627e40b",
+   "bytes": 91988749
+  },
+  "shard_00138.parquet": {
+   "sha256": "c2ef9541d3d08a3d4ff9cf83a0ab7e0cf82fce7ac4f05e40c272be0df72222d6",
+   "bytes": 91458690
+  },
+  "shard_00139.parquet": {
+   "sha256": "1bd6e4f620477db554899bd0cbb7a38dcd3d1672c0e19d90f7cd83dfc19a9a63",
+   "bytes": 91189945
+  },
+  "shard_00140.parquet": {
+   "sha256": "01259f3611ad904588bd8c5475308d20959b51a0e0dac6e84bd25b644fbf9958",
+   "bytes": 91404193
+  },
+  "shard_00141.parquet": {
+   "sha256": "851ec7859403ea516cac1893fc063b8fb1d96971721734a10915e35b01a19ae0",
+   "bytes": 91956652
+  },
+  "shard_00142.parquet": {
+   "sha256": "62f5f78b05ef1c0083de9c1f069f220cd3f4dd366dceeed2970a85ae9bf6e819",
+   "bytes": 90998299
+  },
+  "shard_00143.parquet": {
+   "sha256": "fa58428cfb08b0853001a2bdb98a6848d5c4a528e60a3e44d89bffbab1fe8763",
+   "bytes": 91263468
+  },
+  "shard_00144.parquet": {
+   "sha256": "4a188c298dd8dceb44ee4c37143d8d737a3a5878b2a29cac3db7c812dd87094e",
+   "bytes": 91632293
+  },
+  "shard_00145.parquet": {
+   "sha256": "9a3e5ba75b2df811afd4f5f82b4e1732e5bc43d2b6e081be6b6138179f057745",
+   "bytes": 92094713
+  },
+  "shard_00146.parquet": {
+   "sha256": "b28687baa6342e5d87f2deb7beabacce5bd7a8a02d5d22b342649a1e3379f9ba",
+   "bytes": 91631957
+  },
+  "shard_00147.parquet": {
+   "sha256": "61b362c198b00a215579d9a7353381417c6eb157719eae564c83491030702da9",
+   "bytes": 91577857
+  },
+  "shard_00148.parquet": {
+   "sha256": "eaf37ba4041cb3ffd8464b9b5b01ad306a534d614353592e065c56f805d5ea2a",
+   "bytes": 91510406
+  },
+  "shard_00149.parquet": {
+   "sha256": "6264a078a3f0bff94713f758bbbbdcebe8d51f325cfe77c3b2e7ed48d0ee0146",
+   "bytes": 92209889
+  },
+  "shard_00150.parquet": {
+   "sha256": "90f4d7823bf26c784bc637cee1b397a93d6f0ea1b8fd1cbdcf2314c21c48c647",
+   "bytes": 92107518
+  },
+  "shard_00151.parquet": {
+   "sha256": "5618468b0236f0beeac45c287630e91fc3d98da941810408a2615b59cfc8e235",
+   "bytes": 91288627
+  },
+  "shard_00152.parquet": {
+   "sha256": "cfb23bf2c8f4b1ab4cd2364625c8ac1ee5dd2113add5027ca1bfd3b6080a4d54",
+   "bytes": 92107913
+  },
+  "shard_00153.parquet": {
+   "sha256": "435861985444fa45826f19879e9ea05ac54b1f289c66cd32cb2f7034acad7f63",
+   "bytes": 91591975
+  },
+  "shard_00154.parquet": {
+   "sha256": "bfde8f8de868547b4ee1f4ec5cdff3464d2fb49d68c603fbd284f81c24750fa9",
+   "bytes": 91879273
+  },
+  "shard_00155.parquet": {
+   "sha256": "2f2e5001250714a91875ade1dc91e4005a2fa8e6f860d5c3e00bed61b06c698c",
+   "bytes": 91627812
+  },
+  "shard_00156.parquet": {
+   "sha256": "708ed684f0fc05ede5c3a2c4b771bfaefae4fefeca72dafa722d6df5fa88d33f",
+   "bytes": 91701780
+  },
+  "shard_00157.parquet": {
+   "sha256": "95cb208334646784ed1266d9c5662b7e53034d9e0d6a76098652a26887ef785f",
+   "bytes": 91972634
+  },
+  "shard_00158.parquet": {
+   "sha256": "3e257ae1d3d7cc0fbc0723b4675c0988b3c98446e9b371f696036508f002bbd4",
+   "bytes": 91571633
+  },
+  "shard_00159.parquet": {
+   "sha256": "10233c63fcf86806f0485aed374941c11187b963db96ca9b165bae1a6a6abe92",
+   "bytes": 92152183
+  },
+  "shard_00160.parquet": {
+   "sha256": "66c1e3f81dafcab693ea3ae29fe9e653c9fc8269045e0853299982fb149c7978",
+   "bytes": 92230059
+  },
+  "shard_00161.parquet": {
+   "sha256": "2a0f82f741113c51e37a058842fde4ed6af184ac3924f946dbeb6d0e0f617771",
+   "bytes": 91432213
+  },
+  "shard_00162.parquet": {
+   "sha256": "6af5ec9f1eae4f2c6ad3880f409d11bbf57be3d4e3a6cbd8035109dcfda595bd",
+   "bytes": 92262329
+  },
+  "shard_00163.parquet": {
+   "sha256": "a7fb6718a03a0c0fd32c1b563b1fbf0c960e905c672546f8b96d50cb0ba32490",
+   "bytes": 91631871
+  },
+  "shard_00164.parquet": {
+   "sha256": "917a83b663f8ca03c0af2502a40e8b194fdfa652dabd3e04c781ce16f2dc407c",
+   "bytes": 91306308
+  },
+  "shard_00165.parquet": {
+   "sha256": "f726fcc74c7b43ff563ca4a46dc474b757bdd77c564db6e002659a94505e691e",
+   "bytes": 91202544
+  },
+  "shard_00166.parquet": {
+   "sha256": "1f3f5bb603f4839823921cdd8b3b7fdc3f32c29d6ac40ed57bd1db642d6c3a51",
+   "bytes": 91715632
+  },
+  "shard_00167.parquet": {
+   "sha256": "2fa47fc67771357b261b18d6595187ce61ddfd2a340e87b8b368f8401c6795f8",
+   "bytes": 92083729
+  },
+  "shard_00168.parquet": {
+   "sha256": "c6729209e9aefac1dd67cd2e89eb2e3962a66bfb605543e6be3ebcabe7fd82a4",
+   "bytes": 91729460
+  },
+  "shard_00169.parquet": {
+   "sha256": "400a947cfeaba14ab996957067021abfdc46444d60be924274e5a4526b6c9ddc",
+   "bytes": 91243921
+  },
+  "shard_06542.parquet": {
+   "sha256": "769fe59d108dfd2cfa186c63173b83fbfb90a7adb3519519ba6eaa6ca9889f94",
+   "bytes": 91699537
+  }
+ },
+ "val_shard": "shard_06542.parquet",
+ "tokenizer": {
+  "tokenizer.pkl": "61d7b5aa42e1047d7134cac0f9f3b1fc56286d9ba7c9e5fea43de6471d9afe3f",
+  "token_bytes.pt": "b8374a902944f329a03dbd61ab459010d6195979e979864535f9aedec42bcc85"
+ },
+ "eval_bundle_zip_sha256": "90a7c19e28ee7a52b4f6e1f87658deb9fde7f63deba2379045bdb1fe9ea5d200",
+ "reference_check": "PASS"
+}
