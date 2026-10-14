@@ -3,7 +3,7 @@
 Same Manifesto maths (hard sign-addressed read; two-alternative soft backward through the neighbour weight ``w``,
 ``weight="rational"`` or ``"softsign"``), computed by the hand-written CUDA kernels (``csrc/fused_manifesto.cu``: one
 forward and one backward kernel, nothing per table in global memory, the soft-sign temperatures' gradients included).
-Those kernels are its only implementation (spec rule 3): a case they do not cover (a CPU input, an fp64 input, an
+Those kernels are its only implementation: a case they do not cover (a CPU input, an fp64 input, an
 fp16 or fp64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case, and so
 does a missing extension, naming the cause. The reference class
 :class:`~spiky.lutorch_ex.cartridges.manifesto_hard.ManifestoHardLUT` runs everywhere else, with the same state_dict.

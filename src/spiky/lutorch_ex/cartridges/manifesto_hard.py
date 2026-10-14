@@ -31,7 +31,7 @@ Gradient asymmetry (by design).
 Read path: in training, ``F.embedding_bag`` (the per-table gather and the tph sum in one kernel) for the hard value,
 and a second one over the detached table with per-sample weights ``(-w, +w)`` on ``(c, c')`` for the surrogate (no
 ``[B, G, tph, d_out]`` rows are materialised); backward is plain autograd through ``w``. torch.compile
-wraps the eval read on CUDA only (ReferenceForward). bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward, spec amendment C).
+wraps the eval read on CUDA only (ReferenceForward). bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward).
 """
 from __future__ import annotations
 

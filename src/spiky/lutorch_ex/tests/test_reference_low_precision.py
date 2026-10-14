@@ -1,4 +1,4 @@
-"""The reference cartridges in bf16 / fp16 (spec amendment C): the same maths in fp32, exactly one rounding per leaf.
+"""The reference cartridges in bf16 / fp16: the same maths in fp32, exactly one rounding per leaf.
 
 For a low-precision table and/or input, the reference class must give exactly the fp32 run on the same
 (low-precision-representable) values, rounded once: the output to the input dtype, the input gradient to the input

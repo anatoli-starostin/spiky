@@ -1,4 +1,4 @@
-"""Spec amendment D: the fused-vs-reference equivalence harness, the one REQUIRED check binding each fused class to its
+"""The fused-vs-reference equivalence harness, the one REQUIRED check binding each fused class to its
 reference class.
 
 Per cartridge (FusedManifestoHardLUT / FusedManifestoSoftLUT with both weights, FusedConfidenceLUT with read_top_n 1

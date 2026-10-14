@@ -23,7 +23,7 @@ Scope: constant cells only, both anchor modes (inherited), read_top_n ∈ {1,2},
 trainable anchors. fp32/fp64 only (bf16 raises via the base). p2_int8 is the only preset; n=1 quant
 is a lutorch_ex extension of the reference (which was n=2-only).
 
-Implementations (spec rules 3 and 5: the class is the implementation, there is no selector):
+Implementations (the class is the implementation, there is no selector):
 * :class:`QuantisedConfidenceLUT` -- the reference: the torch definition (``_pow2``) only, every case, CPU and CUDA,
   compiled on CUDA. It loads no extension.
 * :class:`FusedQuantisedConfidenceLUT` -- the fused twin: one fused CUDA forward (``_pow2_int8.FusedQuantRead``:
@@ -37,7 +37,7 @@ Implementations (spec rules 3 and 5: the class is the implementation, there is n
   the torch definition (``_pow2``), the same integers.
 
 Both trainable classes share the quant scaffolding (:class:`QuantisedScaffold`: config, fake-quant tables, the integer
-read, deployment export) and the state_dict; neither inherits the other's forward (spec amendment B).
+read, deployment export) and the state_dict; neither inherits the other's forward.
 """
 from __future__ import annotations
 
@@ -187,7 +187,7 @@ class QuantisedScaffold:
 class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     """p2_int8 quant-aware twin of :class:`ConfidenceLUT`, the reference implementation; see module docstring."""
 
-    _ACCEPTS_LOW_PRECISION = False   # outside spec amendment C (the quantised-cartridges work decides its precision)
+    _ACCEPTS_LOW_PRECISION = False   # float32 / float64 only: the quantised read has no low-precision contract
     #: A scheduling hint, not maths. _pow2.blend_exponents left-folds the nap terms of S and of the logsigmoid sum (the
     #: kernel's operation order, what makes this reference bit-exact with FusedQuantisedConfidenceLUT): each fold reads
     #: the [B, G, tph, nap] margins as nap slices, which crosses Inductor's realize_reads_threshold (default 4), and the

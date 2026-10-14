@@ -236,7 +236,7 @@ def test_bf16_vector_widths_agree(vec):
 
 
 def test_non_cuda_cases_raise_naming_the_reference_class():
-    """No fallback (spec rule 3): an fp16 table has no kernel and a CPU input is not a CUDA case; both raise, in
+    """No fallback: an fp16 table has no kernel and a CPU input is not a CUDA case; both raise, in
     training and in eval, naming the reference classes."""
     spec = _spec("mid")
     for cls in (HARD, SOFT):

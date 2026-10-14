@@ -1,14 +1,14 @@
-"""The reference cartridges' forward (spec rule 4): the maths in plain PyTorch, ``torch.compile``d on CUDA.
+"""The reference cartridges' forward: the maths in plain PyTorch, ``torch.compile``d on CUDA.
 
 A mixin for the reference classes only (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT and its quantised
-subclass). The shared base (:class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`) has no runnable forward
-(spec amendment B), so a fused class, which inherits that base and not this mixin, has nowhere to fall back to.
+subclass). The shared base (:class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`) has no runnable forward,
+so a fused class, which inherits that base and not this mixin, has nowhere to fall back to.
 
 On CUDA the eval forward is always compiled; the train forward only for a class that sets ``_COMPILE_TRAIN`` (the
 confidence family, whose score read-out is a chain of small kernels Inductor fuses). Everything else, CPU included,
 runs eager. ``LUTORCH_EX_NO_COMPILE=1`` turns compilation off. Each instance builds its compiled forwards lazily.
 
-Low precision (spec amendment C): a bf16 / fp16 input or table runs the same maths in fp32, on fp32 views of the
+Low precision: a bf16 / fp16 input or table runs the same maths in fp32, on fp32 views of the
 low-precision parameters and of the input, the same contract as the fused classes. Every read and reduction
 accumulates in fp32; each result is rounded exactly once: the output to the input dtype, and, through the backward of
 the views, the input gradient to the input dtype and each parameter's gradient to that parameter's dtype.

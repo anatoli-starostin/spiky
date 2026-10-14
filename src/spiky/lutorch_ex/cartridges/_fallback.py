@@ -1,4 +1,4 @@
-"""The error a fused cartridge raises when its CUDA extension is unavailable (spec rule 3), with the classified cause.
+"""The error a fused cartridge raises when its CUDA extension is unavailable, with the classified cause.
 
 The CUDA extensions (``lutorch_ex_fused_manifesto`` for FusedManifestoHardLUT / FusedManifestoSoftLUT,
 ``lutorch_ex_fused_confidence`` for FusedConfidenceLUT) are JIT-built at first use. A fused class has no other

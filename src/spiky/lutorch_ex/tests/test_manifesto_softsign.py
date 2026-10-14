@@ -103,7 +103,7 @@ def test_forward_backward_runs(Cls, anchor_mode, h_in, h_out, device):
 @pytest.mark.parametrize("Cls", CARTRIDGES)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_accepts_low_precision(Cls, dtype):
-    """Spec amendment C: low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
+    """Low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
     test_reference_low_precision.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(dtype)

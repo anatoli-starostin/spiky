@@ -1,6 +1,6 @@
 """A fused class without its CUDA extension (cartridges/_fallback.py): each build-failure cause it claims to detect is
 detected from the evidence for it, and a fused class raises NativeUnavailableError naming the cause -- there is no
-fallback (spec rule 3). A case the kernels do not cover raises a RuntimeError naming the case and the reference class.
+fallback. A case the kernels do not cover raises a RuntimeError naming the case and the reference class.
 """
 import importlib.util
 
@@ -174,7 +174,7 @@ def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
                                  lx.FusedQuantisedConfidenceLUT],
                          ids=lambda c: c.__name__)
 def test_no_backend_argument(cls):
-    """Spec rule 3: the class is the implementation; there is nothing to select."""
+    """The class is the implementation; there is nothing to select."""
     with pytest.raises(TypeError, match="backend"):
         cls(_spec(), seed=0, backend="cuda")
 
@@ -247,7 +247,7 @@ def test_fused_quantised_uncovered_cases_raise_naming_the_reference(case, kw, x)
 
 
 def test_no_env_var_switch_left():
-    """LUTORCH_EX_NO_CUDA_EXT / SPIKY_P2_CUDA_DISABLE and the module switch are gone (spec rules 3 and 5)."""
+    """LUTORCH_EX_NO_CUDA_EXT / SPIKY_P2_CUDA_DISABLE and the module switch are gone."""
     import pathlib
     from spiky.lutorch_ex.cartridges import _pow2_int8
     assert not hasattr(_pow2_int8, "set_enabled") and not hasattr(_pow2_int8, "_enabled")

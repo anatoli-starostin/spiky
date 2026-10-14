@@ -13,7 +13,7 @@ in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which 
 hardware. Nothing in it is architecture-specific; the allowlist records validation, not a hardware requirement. Anything
 else -- no CUDA, an architecture not on the list, no nvcc, a failed build -- makes `load()` return None and records the
 classified cause (cartridges/_fallback.py), which FusedQuantisedConfidenceLUT raises with. There is no fallback and no
-switch (spec rules 3 and 5): to run without the extension, construct QuantisedConfidenceLUT.
+switch: to run without the extension, construct QuantisedConfidenceLUT.
 
 CUSTOM OP -- the per-table integers of the power-of-two read.
 

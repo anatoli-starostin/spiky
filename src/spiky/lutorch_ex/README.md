@@ -263,10 +263,10 @@ This is a known upstream constraint. lutorch_ex documents it but doesn't enforce
 
 ## Reference and fused cartridges
 
-Each class has exactly one implementation; there is no `backend=` argument (ARCHITECTURE.md, rules 3 and 5).
+Each class has exactly one implementation; there is no `backend=` argument.
 The reference cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT` (either weight) and `ConfidenceLUT`, are
 readable PyTorch (compiled on CUDA) and run anywhere. They are the **oracle**: `tests/test_fused_vs_reference.py` is the required equivalence
-harness (spec amendment D): every fused class against its reference class, per dtype, on the value, the input
+harness: every fused class against its reference class, per dtype, on the value, the input
 gradient, the table gradient and every learned scalar, with explicit tolerances justified in its docstring.
 `tests/test_fused_manifesto_cuda.py` and `tests/test_fused_confidence.py` add the kernel-specific checks.
 

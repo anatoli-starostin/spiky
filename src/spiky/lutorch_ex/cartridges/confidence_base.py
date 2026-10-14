@@ -1,11 +1,11 @@
-"""Shared scaffolding of the confidence family (spec amendment A): the Gen-3 parameters, nothing that runs.
+"""Shared scaffolding of the confidence family: the Gen-3 parameters, nothing that runs.
 
 :class:`ConfidenceBase` adds to :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT` (tables, anchors,
 addressing) the confidence score's learned temperatures ``beta`` / ``gamma`` and, at ``read_top_n = 2``, the blend
 temperature ``tau``, all stored log-parametrised. The reference
 (:class:`~spiky.lutorch_ex.cartridges.confidence.ConfidenceLUT`, and its quantised subclass) and the fused twin
 (:class:`~spiky.lutorch_ex.cartridges.fused_confidence.FusedConfidenceLUT`) both build on it; neither inherits the
-other's forward (amendment B). The maths is in each of them.
+other's forward. The maths is in each of them.
 """
 from __future__ import annotations
 

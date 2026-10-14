@@ -10,7 +10,7 @@ rounding* can cause near a boundary (an inherent, correct property of a bf16 fro
 reference therefore uses ``x_ref = x_bf16.float()`` (identical values), isolating what bf16
 support must get right.
 
-The REFERENCE cartridges (ManifestoHardLUT / ManifestoSoftLUT) accept bf16/fp16 too (spec amendment C): the
+The REFERENCE cartridges (ManifestoHardLUT / ManifestoSoftLUT) accept bf16/fp16 too: the
 same maths in fp32 on fp32 views, one rounding per leaf (bit-exact against the fp32 run in
 test_reference_low_precision.py). ProjectionMHL wrapping either runs in bf16.
 """
@@ -115,7 +115,7 @@ def test_fused_bf16_cuda_training_step(Cls, needs_manifesto_ext):
 @pytest.mark.parametrize("Cls", PURE)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_reference_cartridge_accepts_low_precision(device, Cls, dtype):
-    """Spec amendment C: bf16/fp16 params OR inputs run on the reference cartridges and give the input dtype."""
+    """bf16/fp16 params OR inputs run on the reference cartridges and give the input dtype."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(device).to(dtype)
     assert m(torch.randn(8, 2, 6, device=device)).dtype == torch.float32      # low table, fp32 input

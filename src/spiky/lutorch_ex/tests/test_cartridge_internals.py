@@ -69,7 +69,7 @@ def test_compile_not_used_on_cpu():
 import pytest as _pytest  # noqa: E402
 
 import spiky.lutorch_ex as _lx  # noqa: E402
-_FusedConfidenceLUT = _lx.FusedConfidenceLUT  # the public export (spec amendment E)  # noqa: E305
+_FusedConfidenceLUT = _lx.FusedConfidenceLUT  # the public export  # noqa: E305
 from spiky.lutorch_ex.tests._weights import softsign  # noqa: E402
 
 
@@ -89,7 +89,7 @@ def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):
         cls(spec, seed=0, bogus=1, also_bogus=2)
 
 
-# ---- spec amendment B: the shared base has no runnable forward; no fused class inherits a reference forward ----------
+# ---- the shared base has no runnable forward; no fused class inherits a reference forward -----------------------
 from spiky.lutorch_ex.cartridges.confidence_base import ConfidenceBase  # noqa: E402
 from spiky.lutorch_ex.cartridges.manifesto_base import ManifestoLUT  # noqa: E402
 from spiky.lutorch_ex.cartridges.reference_base import ReferenceForward  # noqa: E402
@@ -115,7 +115,7 @@ def test_no_fused_class_inherits_a_reference_forward():
 
 
 def test_every_fused_class_is_exported():
-    """Spec amendment E: the class names are the public API, so every fused class is importable from lutorch_ex."""
+    """The class names are the public API, so every fused class is importable from lutorch_ex."""
     for name in ("FusedManifestoHardLUT", "FusedManifestoSoftLUT", "FusedConfidenceLUT",
                  "FusedQuantisedConfidenceLUT"):
         assert name in _lx.__all__ and getattr(_lx, name).__name__ == name

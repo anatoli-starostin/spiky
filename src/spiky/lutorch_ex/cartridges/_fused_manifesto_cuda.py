@@ -1,4 +1,4 @@
-"""The CUDA implementation of FusedManifestoHardLUT / FusedManifestoSoftLUT, their only one (spec rule 3): hand-written
+"""The CUDA implementation of FusedManifestoHardLUT / FusedManifestoSoftLUT, their only one: hand-written
 forward + backward kernels (``csrc/fused_manifesto.cu``), built the way FusedConfidenceLUT's are. A case the kernels do
 not cover, or a missing extension, raises; the reference classes (ManifestoHardLUT / ManifestoSoftLUT) cover the rest.
 

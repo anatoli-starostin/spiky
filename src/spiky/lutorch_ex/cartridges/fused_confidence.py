@@ -14,7 +14,7 @@ Every launch decision Inductor makes heuristically is an explicit knob here (:cl
 vector atomics. Defaults come from ``LUTORCH_EX_CONF_CUDA_*`` environment variables and can be changed per instance
 through ``cartridge.knobs``.
 
-The kernels are its only implementation (spec rule 3). A case they do not cover (a CPU input, an fp64 input, an fp16
+The kernels are its only implementation. A case they do not cover (a CPU input, an fp64 input, an fp16
 or fp64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case, and so does a
 missing extension, naming the cause; :class:`ConfidenceLUT` runs everywhere else.
 

@@ -101,7 +101,7 @@ _INT32_MAX_ENTRIES = torch.iinfo(torch.int32).max
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
 
-    Scaffolding only (spec amendment A / B): state (tables, anchors, the soft-sign temperatures), validation, the
+    Scaffolding only: state (tables, anchors, the soft-sign temperatures), validation, the
     addressing and the neighbour weight (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
     runnable forward: a reference class gets its forward from
     :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so a
@@ -299,7 +299,7 @@ class ManifestoLUT(MultiHeadLUT):
         return (torch.rand(B, G, tph, device=device, dtype=dtype) < keep_prob).to(dtype) / keep_prob
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Abstract (spec amendment B): the shared base never runs a read. Construct a reference class
+        """Abstract: the shared base never runs a read. Construct a reference class
         (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT) or a fused one (Fused*)."""
         raise NotImplementedError(f"{type(self).__name__} is the shared scaffolding base and has no forward")
 

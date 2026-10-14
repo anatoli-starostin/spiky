@@ -101,7 +101,7 @@ def test_fan_in_and_d24_geometry():
 
 
 def test_no_fallback_off_cuda():
-    """No fallback (spec rule 3): a CPU input and an fp64 input raise, naming the case and the reference class."""
+    """No fallback: a CPU input and an fp64 input raise, naming the case and the reference class."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
     with pytest.raises(RuntimeError, match=r"the input is on cpu.*Construct ConfidenceLUT"):
         FusedConfidenceLUT(spec, seed=0).eval()(torch.randn(5, 2, 8))

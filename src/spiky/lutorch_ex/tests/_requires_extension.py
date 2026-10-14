@@ -1,6 +1,6 @@
 """Skip (or fail) a test that needs a lutorch_ex CUDA extension, i.e. one that runs a fused class.
 
-The fused classes have no fallback (spec rule 3), so a test that runs one needs its extension. Two cases:
+The fused classes have no fallback, so a test that runs one needs its extension. Two cases:
 * no CUDA device: the extension cannot exist on this machine -> a skip (a CPU-only run is legitimate);
 * a CUDA device, the extension unavailable (failed to build or load, e.g. setuptools missing) -> a FAILURE naming the
   extension and its recorded cause, so a broken build cannot pass as a green run.

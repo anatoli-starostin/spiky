@@ -24,7 +24,7 @@ Gradients flow to the weight tables, ``β``, ``γ`` and (``n = 2``) ``τ``.
 
 Scope (locked): **scored-only** (no hard-forward mode / STE stitch / score rescale), **constant
 cells** only (``w_c ∈ R^{d_out}``), both anchor modes (inherited from the base). Precision:
-fp32 / fp64; bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward, spec amendment C). (QuantisedConfidenceLUT keeps rejecting bf16 / fp16.)
+fp32 / fp64; bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward). (QuantisedConfidenceLUT keeps rejecting bf16 / fp16.)
 
 One read, for train and eval and both n: ``y = Σ_k w_k · W[r_k]`` over the flat table rows ``r`` and weights
 ``w`` from :meth:`_cells_and_weights` (``w = s`` at n = 1; ``s(1-v)`` and ``s v`` over ``c`` and ``c'`` at n = 2).
