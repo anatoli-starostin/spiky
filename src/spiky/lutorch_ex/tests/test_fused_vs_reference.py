@@ -702,7 +702,7 @@ def test_deployed_kernel_bit_exact_vs_torch_definition(read_top_n, anchor_mode):
     accumulator of the torch definition of the same read (its _forward_impl, the CPU path, run here on the same CUDA
     input): the same integers per table, then an exact integer sum. No tolerance. Also equal to the trained cartridge's
     own integer read (forward_int) once the folded scale is applied."""
-    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
+    from spiky.lutorch_ex.cartridges.deployed_quantised_confidence import DeployedQuantisedConfidenceLUT
     requires_extension("quantised")
     spec = LUTSpec(**dict(CHAMPION, anchor_mode=anchor_mode))
     kw = dict(QUANT_KW, read_top_n=read_top_n)

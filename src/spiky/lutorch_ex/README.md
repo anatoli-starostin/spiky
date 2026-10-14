@@ -535,7 +535,9 @@ lutorch_ex/
 │   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
 │   ├── fused_manifesto_hard.py, fused_manifesto_soft.py   fused twins
 │   ├── confidence.py                Gen-3 ConfidenceLUT
-│   ├── quantised_confidence.py      QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
+│   ├── quantised_confidence.py      QuantisedConfidenceLUT (and the family's shared QuantisedScaffold)
+│   ├── fused_quantised_confidence.py    FusedQuantisedConfidenceLUT
+│   ├── deployed_quantised_confidence.py DeployedQuantisedConfidenceLUT
 │   ├── _pow2.py                     the power-of-two quantisation maths (the torch definition)
 │   ├── _fused_quantised_cuda.py     Fused/DeployedQuantisedConfidenceLUT glue for csrc/pow2_int8_read.cu
 │   ├── fused_confidence.py          FusedConfidenceLUT

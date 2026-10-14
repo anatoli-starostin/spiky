@@ -135,7 +135,7 @@ def test_eval_int32_vs_int64(device, name, kw):
 @pytest.mark.parametrize("device", DEVICES)
 def test_deployed_int8_read_bit_identical(device):
     """The deploy-only packed-int8 object (n=2): int32 indices reach its int8 shift-add read too."""
-    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
+    from spiky.lutorch_ex.cartridges.deployed_quantised_confidence import DeployedQuantisedConfidenceLUT
     spec = LUTSpec(**GEOM)
     torch.manual_seed(0)
     q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=2).to(device)
@@ -150,7 +150,7 @@ def test_deployed_int8_read_bit_identical(device):
 
 
 def test_default_is_int32_everywhere_when_the_table_fits():
-    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
+    from spiky.lutorch_ex.cartridges.deployed_quantised_confidence import DeployedQuantisedConfidenceLUT
     spec = LUTSpec(**GEOM)
     for name, kw in CARTRIDGES:
         m = getattr(lx, name)(spec, seed=1, **kw)
