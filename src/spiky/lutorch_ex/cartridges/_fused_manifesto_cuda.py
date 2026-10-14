@@ -21,26 +21,12 @@ from __future__ import annotations
 import torch
 
 from . import _fallback
-from ._cuda_ext import _MAX_CTA_THREADS, ManifestoCudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
+from ._cuda_ext import _MAX_CTA_THREADS, Extension, ManifestoCudaKnobs, _launch, _row_launch  # noqa: F401
 from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 
-EXT_NAME = "lutorch_ex_fused_manifesto"
 MODE_HARD, MODE_SOFT = 0, 1
 MAX_NAP = 16
-
-_EXT = None
-_TRIED = False
-
-
-def fused_manifesto_ext():
-    """Build/load the ``lutorch_ex_fused_manifesto`` JIT extension; None if unavailable (never raises; the cause is
-    recorded for the error the cartridge raises)."""
-    global _EXT, _TRIED
-    if _TRIED:
-        return _EXT
-    _TRIED = True
-    _EXT = load_extension(EXT_NAME, ["fused_manifesto.cu"])
-    return _EXT
+EXT = Extension("lutorch_ex_fused_manifesto", ["fused_manifesto.cu"])
 
 
 #: The one remedy every ineligibility message gives (the case is fine on the reference class).
@@ -90,8 +76,8 @@ def require_cuda(module, x: torch.Tensor) -> None:
     reason = ineligible_reason(module, x)
     if reason is not None:
         raise RuntimeError(f"{type(module).__name__}: {reason}")
-    if fused_manifesto_ext() is None:
-        _fallback.raise_unavailable(type(module).__name__, EXT_NAME)
+    if EXT.get() is None:
+        _fallback.raise_unavailable(type(module).__name__, EXT.name)
 
 
 class _FusedManifesto(torch.autograd.Function):
@@ -100,7 +86,7 @@ class _FusedManifesto(torch.autograd.Function):
         # z: float32 or bfloat16 [B, G, d_in]. weights: float32 or bfloat16 [G, tph, K, d_out] (read in place).
         # temps: float32 [2] (T_soft, T_select) for weight="softsign", None for "rational". mask: float32 [B, G, tph]
         # or None. out_bf16: the kernel stores its (float32-accumulated) output as bfloat16; only for a bfloat16 z.
-        ext = fused_manifesto_ext()
+        ext = EXT.get()
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
         out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, temps, nap, mode, fwd_threads, knobs.rows_per_cta,
@@ -114,7 +100,7 @@ class _FusedManifesto(torch.autograd.Function):
         z, weights, temps, anc_a, anc_b, mask = ctx.saved_tensors
         nap, mode, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
-        gW, gz, gtemps = fused_manifesto_ext().manifesto_bwd(
+        gW, gz, gtemps = EXT.get().manifesto_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, mask, temps, nap, mode,
             bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         # gW accumulates in float32 whatever the table dtype; cast once to the parameter's dtype.

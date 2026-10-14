@@ -495,7 +495,7 @@ def _fused_n1_integers(fused, x):
     """The fused n = 1 forward's own integers: (k', skip) unpacked from the per-table int32s it saves for the backward
     (pack_tab1: c1 | (k' + 8) << 16 | skip << 27; c2 = q = 0), and c1."""
     from spiky.lutorch_ex.cartridges import _pow2_int8
-    ext = _pow2_int8.load()
+    ext = _pow2_int8.EXT.get()
     cfg = fused._quant
     W2 = fused.weights.detach().reshape(-1, fused.spec.d_out)
     E = ext.table_exponents(W2, fused.weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))

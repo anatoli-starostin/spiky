@@ -1,11 +1,10 @@
 """Shared plumbing for the co-located CUDA extensions: where the sources live, the JIT build, and the launch knobs of
-the two hand-written kernel families (FusedManifesto* and FusedConfidenceLUT).
+the two knob-driven kernel families (FusedManifesto* and FusedConfidenceLUT).
 
-* :func:`load_extension` is the one JIT build / load of the fused cartridges' extensions (fused_manifesto,
-  fused_confidence; FusedQuantisedConfidenceLUT's p2_scalars extension has its own architecture-gated loader in
-  ``_pow2_int8``). It never raises:
-  when the extension is unavailable it records the classified cause (:mod:`._fallback`) and returns None, and the
-  fused cartridge that needs it raises with that cause.
+* :class:`Extension` is one extension's JIT build / load, once per process, for every fused family (fused_manifesto,
+  fused_confidence, and the quantised family's pow2_int8_read, which passes its architecture allowlist and its extra
+  nvcc flag). It never raises: when the extension is unavailable it records the classified cause (:mod:`._fallback`)
+  and returns None, and the fused cartridge that needs it raises with that cause.
 * :class:`KernelKnobs` is the launch configuration of the two kernel families. :class:`ManifestoCudaKnobs` and
   :class:`CudaKnobs` (FusedConfidenceLUT) are the same fields, defaulting from ``LUTORCH_EX_MANI_CUDA_*`` resp.
   ``LUTORCH_EX_CONF_CUDA_*``.
@@ -28,23 +27,55 @@ CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
 os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
 
 
-def load_extension(name: str, sources: Sequence[str]):
-    """JIT-build / load extension ``name`` from ``sources`` (file names under ``csrc/``); the module, or None after
-    recording the classified cause (no CUDA device, or a failed build). Never raises."""
-    if not torch.cuda.is_available():
-        _fallback.record_build_failure(name)
-        return None
-    try:
-        from torch.utils.cpp_extension import load
-        # torch's default -std=c++17 does not compile its own headers here (ATen/core/List_inl.h). cpp_extension
-        # supplies the CUDA_HOME include paths and a compatible host compiler, and targets the visible device's arch.
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        flags = [f"-std={std}", "-O3"]
-        return load(name=name, sources=[os.path.join(CSRC, s) for s in sources], extra_cflags=flags,
-                    extra_cuda_cflags=flags, verbose=False)
-    except Exception as e:
-        _fallback.record_build_failure(name, e)
-        return None
+class Extension:
+    """One co-located CUDA extension, JIT-built / loaded on the first :meth:`get` of the process.
+
+    ``sources`` are file names under ``csrc/``; ``extra_cuda_cflags`` are added to the common ``-std=<SPIKY_CXX_STD,
+    default c++20> -O3``; ``validated_arches`` (compute capabilities), when given, enables the extension only on those
+    devices. :meth:`get` returns the module, or None after recording the classified cause -- no CUDA device, a device
+    outside ``validated_arches``, or a failed build. Never raises."""
+
+    def __init__(self, name: str, sources: Sequence[str], *, extra_cuda_cflags: Sequence[str] = (),
+                 validated_arches: Optional[tuple] = None):
+        self.name = name
+        self.sources = tuple(sources)
+        self.extra_cuda_cflags = tuple(extra_cuda_cflags)
+        self.validated_arches = validated_arches
+        self.module = None
+        self.tried = False
+
+    def get(self):
+        if not self.tried:
+            self.tried = True
+            self.module = self._build()
+        return self.module
+
+    def _build(self):
+        if not torch.cuda.is_available():
+            _fallback.record_build_failure(self.name)                       # -> no_cuda_device
+            return None
+        if self.validated_arches is not None:
+            cap = torch.cuda.get_device_capability()
+            if cap not in self.validated_arches:
+                _fallback.record_cause(self.name, _fallback.Cause(
+                    "unvalidated_arch", f"device compute capability {cap} is not in {self.validated_arches}"))
+                return None
+        try:
+            from torch.utils.cpp_extension import load
+            # torch's default -std=c++17 does not compile its own headers here (ATen/core/List_inl.h).
+            # cpp_extension supplies the CUDA_HOME include paths and a compatible host compiler, and targets the
+            # visible device's architecture.
+            std = os.environ.get("SPIKY_CXX_STD", "c++20")
+            flags = [f"-std={std}", "-O3"]
+            return load(name=self.name, sources=[os.path.join(CSRC, s) for s in self.sources], extra_cflags=flags,
+                        extra_cuda_cflags=flags + list(self.extra_cuda_cflags), verbose=False)
+        except Exception as e:                                           # no nvcc, compile error, ...: recorded
+            _fallback.record_build_failure(self.name, e)
+            return None
+
+    def reset(self) -> None:
+        """Forget the build (tests): the next :meth:`get` builds / loads again."""
+        self.module, self.tried = None, False
 
 
 _KNOB_DEFAULTS = (("fwd_threads", "FWD_THREADS", 64), ("bwd_threads", "BWD_THREADS", 64),

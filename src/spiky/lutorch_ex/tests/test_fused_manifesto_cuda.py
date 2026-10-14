@@ -286,9 +286,9 @@ def test_cuda_matches_the_fp64_oracle_at_the_d_out_boundary(pure_cls, cls, d_out
 def test_missing_extension_raises_in_training_and_in_eval(monkeypatch):
     """The extension 'fails to build': both classes raise with the classified cause, in training and in eval."""
     _fallback._reset_for_tests()
-    monkeypatch.setattr(fmc, "_TRIED", True)
-    monkeypatch.setattr(fmc, "_EXT", None)
-    _fallback.record_build_failure(fmc.EXT_NAME, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
+    monkeypatch.setattr(fmc.EXT, "tried", True)
+    monkeypatch.setattr(fmc.EXT, "module", None)
+    _fallback.record_build_failure(fmc.EXT.name, ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
     spec = _spec("mid")
     x = torch.randn(8, spec.h_in, spec.d_in, device="cuda")
     for cls in (HARD, SOFT):

@@ -378,7 +378,7 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
             remedy = "" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."
             raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}.{remedy}")
         if not _pow2_int8.ensure_registered():
-            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT_NAME)
+            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT.name)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         self._check_input(x)
@@ -487,9 +487,9 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
             problems.append(f"d_out={d_out} needs more than 1024 threads per CTA")
         if problems:
             raise RuntimeError(f"{type(self).__name__}: not a case the CUDA kernel covers: {'; '.join(problems)}.")
-        ext = _pow2_int8.load()
+        ext = _pow2_int8.EXT.get()
         if ext is None:
-            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT_NAME)
+            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT.name)
         return ext
 
     def _forward_kernel(self, x: torch.Tensor, ext) -> torch.Tensor:

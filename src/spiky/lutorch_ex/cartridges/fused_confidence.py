@@ -34,25 +34,11 @@ from __future__ import annotations
 import torch
 
 from . import _fallback
-from ._cuda_ext import _MAX_CTA_THREADS, CudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
+from ._cuda_ext import _MAX_CTA_THREADS, CudaKnobs, Extension, _launch, _row_launch  # noqa: F401
 from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 from .confidence_base import ConfidenceBase
 
-EXT_NAME = "lutorch_ex_fused_confidence"
-
-_EXT = None
-_TRIED = False
-
-
-def fused_confidence_ext():
-    """Build/load the ``lutorch_ex_fused_confidence`` JIT extension; None if unavailable (never raises; the cause is
-    recorded for the error the cartridge raises)."""
-    global _EXT, _TRIED
-    if _TRIED:
-        return _EXT
-    _TRIED = True
-    _EXT = load_extension(EXT_NAME, ["fused_confidence.cu"])
-    return _EXT
+EXT = Extension("lutorch_ex_fused_confidence", ["fused_confidence.cu"])
 
 
 class _FusedConfidence(torch.autograd.Function):
@@ -61,7 +47,7 @@ class _FusedConfidence(torch.autograd.Function):
                 out_bf16):
         # z: float32 or bfloat16 (upconverted in-kernel). log_beta / log_gamma / log_tau: float32. weights: float32 or
         # bfloat16 (the kernels read it in place). The output is float32, or bfloat16 when out_bf16 (bfloat16 z only).
-        ext = fused_confidence_ext()
+        ext = EXT.get()
         W2 = weights.reshape(-1, weights.shape[-1])
         # The knobs made legal for this d_out, as for the Manifesto kernels: the vector width is halved until it divides
         # d_out and each thread count is raised to cover one table row (a no-op at the default knobs for d_out <= 256
@@ -80,7 +66,7 @@ class _FusedConfidence(torch.autograd.Function):
         W2 = weights.reshape(-1, weights.shape[-1])
         # The kernel reads go in float32 (a bfloat16 go from the bfloat16-output mode is upcast: exact).
         # gz comes back in z's dtype.
-        gW, gz, gscal = fused_confidence_ext().confidence_bwd(
+        gW, gz, gscal = EXT.get().confidence_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
             nap, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
         g = gscal.sum(0)
@@ -130,8 +116,8 @@ class FusedConfidenceLUT(ConfidenceBase):
         if problems:
             raise RuntimeError(f"{type(self).__name__}: not a case the fused kernels cover: {'; '.join(problems)}. "
                                f"Construct ConfidenceLUT (the reference class) for this case.")
-        if fused_confidence_ext() is None:
-            _fallback.raise_unavailable(type(self).__name__, EXT_NAME)
+        if EXT.get() is None:
+            _fallback.raise_unavailable(type(self).__name__, EXT.name)
 
     def _keep_flags(self, B: int, device):
         """Table-dropout keep flags ``[B, G, tph]`` bool (TRAIN + grad only, else None); kernels scale by 1/keep."""

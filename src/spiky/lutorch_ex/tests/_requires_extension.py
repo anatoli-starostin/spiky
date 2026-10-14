@@ -25,14 +25,14 @@ def _probe(which: str):
     """``(available, ext_name)`` for ``which`` in {'manifesto', 'confidence', 'quantised'}; loads (JIT-builds) the
     extension."""
     if which == "manifesto":
-        from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import EXT_NAME, fused_manifesto_ext
-        return fused_manifesto_ext() is not None, EXT_NAME
+        from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import EXT
+        return EXT.get() is not None, EXT.name
     if which == "confidence":
-        from spiky.lutorch_ex.cartridges.fused_confidence import EXT_NAME, fused_confidence_ext
-        return fused_confidence_ext() is not None, EXT_NAME
+        from spiky.lutorch_ex.cartridges.fused_confidence import EXT
+        return EXT.get() is not None, EXT.name
     if which == "quantised":
         from spiky.lutorch_ex.cartridges import _pow2_int8
-        return _pow2_int8.ensure_registered(), _pow2_int8.EXT_NAME
+        return _pow2_int8.ensure_registered(), _pow2_int8.EXT.name
     raise ValueError(f"unknown extension {which!r} (expected 'manifesto', 'confidence' or 'quantised')")
 
 

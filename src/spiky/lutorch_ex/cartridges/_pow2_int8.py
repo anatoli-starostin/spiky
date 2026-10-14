@@ -11,8 +11,8 @@ fused forward) and `quant_bwd` (the fused backward), wrapped by FusedQuantRead.
 Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an
 architecture in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been
 validated on real hardware. Nothing in it is architecture-specific; the allowlist records validation, not a hardware
-requirement. Anything else -- no CUDA, an architecture not on the list, no nvcc, a failed build -- makes `load()` return
-None and records the classified cause (cartridges/_fallback.py), which FusedQuantisedConfidenceLUT raises with. There is
+requirement. Anything else -- no CUDA, an architecture not on the list, no nvcc, a failed build -- makes `EXT.get()`
+return None and records the classified cause (cartridges/_fallback.py), which FusedQuantisedConfidenceLUT raises with. There is
 no fallback and no switch: to run without the extension, construct QuantisedConfidenceLUT.
 
 CUSTOM OP -- the per-table integers of the power-of-two read.
@@ -26,55 +26,20 @@ reference, so the same gradient semantics, including the ratio gradient of skipp
 """
 from __future__ import annotations
 
-import os
 from typing import Tuple
 
 import torch
 
-from . import _fallback
+from ._cuda_ext import Extension
 from ._pow2 import ste_cell_weights
 
-EXT_NAME = "lutorch_ex_pow2_int8_read"
 DISCARD = 15                # shift code of a cell that is not read (csrc/pow2_scalars.cuh)
-_CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
-# Compute capabilities the kernel is enabled on -- only those it has been validated on, on real hardware:
-#   (12, 0) sm_120  RTX 5090 (Blackwell), validated on gpustar
-#   (9, 0)  sm_90   H100 (Hopper), enabled for validation on nebius-h100 (see the lut_ablation exp_n_abl_47
-#                   package's validation gate)
+#: Compute capabilities the kernel is enabled on -- only those it has been validated on, on real hardware:
+#: (12, 0) sm_120 (RTX 5090, Blackwell) and (9, 0) sm_90 (H100, Hopper).
 VALIDATED_ARCHES = ((12, 0), (9, 0))
-
-_ext = None
-_tried = False
-
-
-def load():
-    """Build / load the extension once. Returns the module or None (never raises; the cause is recorded)."""
-    global _ext, _tried
-    if _tried:
-        return _ext
-    _tried = True
-    if not torch.cuda.is_available():
-        _fallback.record_build_failure(EXT_NAME)                       # -> no_cuda_device
-        return None
-    cap = torch.cuda.get_device_capability()
-    if cap not in VALIDATED_ARCHES:
-        _fallback.record_cause(EXT_NAME, _fallback.Cause(
-            "unvalidated_arch", f"device compute capability {cap} is not in VALIDATED_ARCHES {VALIDATED_ARCHES}"))
-        return None
-    try:
-        from torch.utils.cpp_extension import load as _load
-        _ext = _load(name=EXT_NAME, sources=[os.path.join(_CSRC, "pow2_int8_read.cu")],
-                     extra_cuda_cflags=["-O3", "-std=c++20", "--fmad=false"], extra_cflags=["-O3", "-std=c++20"],
-                     verbose=False)                          # cpp_extension targets the visible device's architecture
-    except Exception as e:                                   # no nvcc, compile error, ...: recorded; the class raises
-        _ext = None
-        _fallback.record_build_failure(EXT_NAME, e)
-    return _ext
-
-
-def _reset_for_tests():
-    global _ext, _tried
-    _ext, _tried = None, False
+#: --fmad=false: no fused multiply-add contraction, so every add of the fixed reduction order is a separate float32 add.
+EXT = Extension("lutorch_ex_pow2_int8_read", ["pow2_int8_read.cu"], extra_cuda_cflags=["--fmad=false"],
+                validated_arches=VALIDATED_ARCHES)
 
 
 # ======================================================================================================================
@@ -88,7 +53,7 @@ def ensure_registered() -> bool:
     global _registered
     if _registered:
         return True
-    ext = load()
+    ext = EXT.get()
     if ext is None:
         return False
 
@@ -154,7 +119,7 @@ class FusedQuantRead(torch.autograd.Function):
     @staticmethod
     def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, cfg, n, grad_mode):
         # n = read_top_n, the kernels' template parameter N (log_tau is None at n = 1: no blend, no tau)
-        ext = load()
+        ext = EXT.get()
         W2 = weights.reshape(-1, weights.shape[-1])
         E = ext.table_exponents(W2, weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
         qlo, qhi = -(1 << (cfg["bits"] - 1)), (1 << (cfg["bits"] - 1)) - 1
@@ -171,7 +136,7 @@ class FusedQuantRead(torch.autograd.Function):
     def backward(ctx, go):
         z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, tabs = ctx.saved_tensors
         W2 = weights.reshape(-1, weights.shape[-1])
-        gz, gW, gscal = load().quant_bwd(go.contiguous(), z, anc_a16, anc_b16, zoff, zent, tabs, W2, E, dmask,
+        gz, gW, gscal = EXT.get().quant_bwd(go.contiguous(), z, anc_a16, anc_b16, zoff, zent, tabs, W2, E, dmask,
                                          log_beta, log_gamma, log_tau, *ctx.cfg)
         gs = gscal.sum(0)                      # over CTAs (a fixed-shape reduction: deterministic)
         need = ctx.needs_input_grad
