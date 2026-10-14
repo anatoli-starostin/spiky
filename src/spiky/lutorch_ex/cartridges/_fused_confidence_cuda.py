@@ -7,7 +7,8 @@ from __future__ import annotations
 import torch
 
 from . import _fallback
-from ._cuda_ext import Extension, _launch, _row_launch, device_problem, not_covered, row_problem
+from ._cuda_ext import (Extension, _launch, _row_launch, device_problem, forward_group_major, not_covered,
+                        row_problem)
 from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 
 EXT = Extension("lutorch_ex_fused_confidence", ["fused_confidence.cu"])
@@ -47,7 +48,8 @@ class FusedConfidence(torch.autograd.Function):
         # divisible by 4, so those launches are unchanged).
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
         out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-                                 nap, n, fwd_threads, knobs.rows_per_cta, vec, out_bf16)
+                                 nap, n, fwd_threads, knobs.rows_per_cta, vec, out_bf16,
+                                 forward_group_major("CONF", z.device))
         ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep)
         ctx.cfg = (keep_scale, nap, n, knobs, vec, bwd_threads)
         return out

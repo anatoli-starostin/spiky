@@ -293,6 +293,14 @@ anchors, a CPU input or a non-fp32 input / table raise, naming the case; it is e
 architectures (sm_120, sm_90), elsewhere it raises with that cause. Despite the file name the extension is not an
 int8 read: int8 tables are always read with the torch definition (`_pow2.int_blend_read`).
 
+**CTA order.** Every fused backward kernel runs its CTAs group-major (one group's CTAs consecutive), so the table
+reads and gradient atomics in flight stay within one or two groups' slices of the table, in L2. The forward kernels
+take their order from one per-architecture table (`cartridges/_cuda_ext._ARCH_DEFAULTS`): group-major on sm_90 (the
+H100's partitioned L2 otherwise thrashes on a 48 MiB table: 16-38% faster), interleaved on sm_120 (the RTX 5090's
+96 MB L2 holds the table either way, and its large-batch forward is 2-8% slower group-major), and interleaved on any
+architecture not listed. `LUTORCH_EX_{MANI,CONF,QUANT}_CUDA_CTA_ORDER=group|interleaved` overrides the table. The
+forward output is bit-identical in either order.
+
 **Precision.** Every Manifesto and confidence class, reference and fused, runs fp32 and accepts a bf16 / fp16
 input and a bf16 table with one contract: addressing runs in fp32, so a lossy margin cannot flip a bit; reads and
 reductions accumulate in fp32; and each result is rounded once (the output and the input gradient to the input dtype,

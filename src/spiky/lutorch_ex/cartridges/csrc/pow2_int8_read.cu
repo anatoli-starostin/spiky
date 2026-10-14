@@ -119,6 +119,7 @@ struct Params {
   int32_t* tabs;            // [B, G, tph] each table's packed integers (pack_tab): written by the forward when the
                             // backward will run, read by the backward; nullptr in a forward without autograd
   int B, G, tph, nap, d_in, d_out, lo, hi, Q;
+  int group_major;          // CTA order: forward from the per-arch table, backward ignores it (always 1)
   float qlo, qhi;
 };
 
@@ -245,8 +246,13 @@ __global__ void quant_fwd_kernel(Params p, float* __restrict__ out) {
   int16_t* sb = reinterpret_cast<int16_t*>(smem_raw + L.sb);
 
   const int tid = threadIdx.x, bd = blockDim.x;
-  const int g = blockIdx.x % p.G;
-  const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * QF_ROWS);
+  // CTA order, Params::group_major (the per-arch default, _cuda_ext._ARCH_DEFAULTS): group-major keeps
+  // one group's CTAs consecutive, so the CTAs in flight read ~1-2 groups' table slices (L2 locality);
+  // interleaved walks the groups. One uniform choice per CTA, outside every loop.
+  const int64_t cta = static_cast<int64_t>(blockIdx.x);
+  const int64_t nb = (p.B + QF_ROWS - 1) / QF_ROWS;          // CTAs per group
+  const int g = static_cast<int>(p.group_major ? cta / nb : cta % p.G);
+  const int b0 = static_cast<int>((p.group_major ? cta % nb : cta / p.G) * QF_ROWS);
   const int an = p.tph * p.nap;
   for (int i = tid; i < an; i += bd) {
     sa[i] = p.anc_a[(size_t)g * an + i];
@@ -433,8 +439,12 @@ __global__ void quant_bwd_kernel(Params p, const float* __restrict__ go, const i
   int16_t* sb = reinterpret_cast<int16_t*>(smem_raw + L.sb);
 
   const int tid = threadIdx.x, bd = blockDim.x;
-  const int g = blockIdx.x % p.G;
-  const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * QF_ROWS);
+  // Always group-major: one group's CTAs consecutive, so the table reads and the gradient atomics of the
+  // CTAs in flight stay within ~1-2 groups' slices (L2 locality; faster on every measured card).
+  const int64_t cta = static_cast<int64_t>(blockIdx.x);
+  const int64_t nb = (p.B + QF_ROWS - 1) / QF_ROWS;          // CTAs per group
+  const int g = static_cast<int>(cta / nb);
+  const int b0 = static_cast<int>((cta % nb) * QF_ROWS);
   const int nap = p.nap, an = p.tph * nap;
   for (int i = tid; i < an; i += bd) {
     sa[i] = p.anc_a[(size_t)g * an + i];
@@ -613,6 +623,7 @@ struct Params {
   const float* log_gamma;
   const float* log_tau;
   int B, G, tph, nap, d_in, d_out, lo, hi, Q;
+  int group_major;          // CTA order: forward from the per-arch table, backward ignores it (always 1)
 };
 
 template <int VEC> struct Bytes;
@@ -657,8 +668,13 @@ __global__ void deploy_fwd_kernel(Params p, float* __restrict__ out) {
   int16_t* sb = reinterpret_cast<int16_t*>(smem_raw + L.sb);
 
   const int tid = threadIdx.x, bd = blockDim.x;
-  const int g = blockIdx.x % p.G;
-  const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * qf::QF_ROWS);
+  // CTA order, Params::group_major (the per-arch default, _cuda_ext._ARCH_DEFAULTS): group-major keeps
+  // one group's CTAs consecutive, so the CTAs in flight read ~1-2 groups' table slices (L2 locality);
+  // interleaved walks the groups. One uniform choice per CTA, outside every loop.
+  const int64_t cta = static_cast<int64_t>(blockIdx.x);
+  const int64_t nb = (p.B + qf::QF_ROWS - 1) / qf::QF_ROWS;          // CTAs per group
+  const int g = static_cast<int>(p.group_major ? cta / nb : cta % p.G);
+  const int b0 = static_cast<int>((p.group_major ? cta % nb : cta / p.G) * qf::QF_ROWS);
   const int nap = p.nap, an = p.tph * nap;
   const bool single = p.anc_b == nullptr;
   for (int i = tid; i < an; i += bd) {
@@ -816,9 +832,10 @@ std::vector<torch::Tensor> quant_fwd(const torch::Tensor& z, const torch::Tensor
                                      const c10::optional<torch::Tensor>& dmask, const torch::Tensor& log_beta,
                                      const torch::Tensor& log_gamma, const c10::optional<torch::Tensor>& log_tau,
                                      int64_t n, int64_t lo, int64_t hi, int64_t Q, double qlo, double qhi,
-                                     bool save_tables) {
+                                     bool save_tables, bool group_major) {
   const c10::cuda::CUDAGuard guard(z.device());
   qf::Params p = read_params(z, anc_a, anc_b, W, E, dmask, log_beta, log_gamma, log_tau, n, lo, hi, Q, qlo, qhi);
+  p.group_major = group_major;
   auto out = torch::empty({p.B, p.G, p.d_out}, z.options());
   auto tabs = save_tables ? torch::empty({p.B, p.G, p.tph}, z.options().dtype(torch::kInt32))
                           : torch::empty({0}, z.options().dtype(torch::kInt32));
@@ -900,7 +917,7 @@ std::vector<torch::Tensor> quant_bwd(const torch::Tensor& go, const torch::Tenso
 torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, const c10::optional<torch::Tensor>& anc_b,
                          const torch::Tensor& P, const torch::Tensor& log_beta, const torch::Tensor& log_gamma,
                          const c10::optional<torch::Tensor>& log_tau, int64_t n, int64_t lo, int64_t hi,
-                         int64_t Q) {
+                         int64_t Q, bool group_major) {
   TORCH_CHECK(z.is_cuda() && z.scalar_type() == torch::kFloat32 && z.is_contiguous() && z.dim() == 3,
               "z: contiguous fp32 CUDA [B, G, d_in]");
   TORCH_CHECK(P.is_cuda() && P.scalar_type() == torch::kInt8 && P.is_contiguous() && P.dim() == 2,
@@ -920,6 +937,7 @@ torch::Tensor deploy_fwd(const torch::Tensor& z, const torch::Tensor& anc_a, con
   p.B = z.size(0); p.G = z.size(1); p.d_in = z.size(2);
   p.tph = anc_a.size(1); p.nap = anc_a.size(2); p.d_out = P.size(1);
   p.lo = lo; p.hi = hi; p.Q = Q;
+  p.group_major = group_major;
   TORCH_CHECK(p.nap >= 1 && p.nap <= qf::NAP_MAX, "nap must be in [1, 8]");
   TORCH_CHECK(anc_a.size(0) == p.G, "anchor groups != z groups");
   TORCH_CHECK(P.size(0) == ((int64_t)p.G * p.tph << p.nap), "P rows != G * tph * 2**nap");

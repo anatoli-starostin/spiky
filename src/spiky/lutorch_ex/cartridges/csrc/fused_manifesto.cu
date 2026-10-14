@@ -53,6 +53,7 @@ struct Params {
     const float* mask;       // [B, G, tph] table-dropout factor (ManifestoLUT._table_dropout_mask), nullptr = none
     const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational weight
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
+    int group_major;         // CTA order: forward from the per-arch table, backward ignores it (always 1)
 };
 
 __host__ __device__ inline size_t align16(size_t n) { return (n + 15) & ~size_t(15); }
@@ -219,8 +220,13 @@ __device__ __forceinline__ void manifesto_fwd_body(const Params& p, float* __res
     int16_t* sb = p.anc_b ? reinterpret_cast<int16_t*>(smem_raw + L.sb) : nullptr;
 
     const int tid = threadIdx.x, bd = blockDim.x;
-    const int g = blockIdx.x % p.G;
-    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
+    // CTA order, Params::group_major (the per-arch default, _cuda_ext._ARCH_DEFAULTS): group-major keeps
+    // one group's CTAs consecutive, so the CTAs in flight read ~1-2 groups' table slices (L2 locality);
+    // interleaved walks the groups. One uniform choice per CTA, outside every loop.
+    const int64_t cta = static_cast<int64_t>(blockIdx.x);
+    const int64_t nb = (p.B + p.rows_per_cta - 1) / p.rows_per_cta;          // CTAs per group
+    const int g = static_cast<int>(p.group_major ? cta / nb : cta % p.G);
+    const int b0 = static_cast<int>((p.group_major ? cta % nb : cta / p.G) * p.rows_per_cta);
     const int an = p.tph * p.nap;
     for (int i = tid; i < an; i += bd) {                 // this group's anchors, once per CTA
         sa[i] = p.anc_a[(size_t)g * an + i];
@@ -296,8 +302,12 @@ __device__ __forceinline__ void manifesto_bwd_body(const Params& p, const float*
     int16_t* sb = p.anc_b ? reinterpret_cast<int16_t*>(smem_raw + L.sb) : nullptr;
 
     const int tid = threadIdx.x, bd = blockDim.x;
-    const int g = blockIdx.x % p.G;
-    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
+    // Always group-major: one group's CTAs consecutive, so the table reads and the gradient atomics of the
+    // CTAs in flight stay within ~1-2 groups' slices (L2 locality; faster on every measured card).
+    const int64_t cta = static_cast<int64_t>(blockIdx.x);
+    const int64_t nb = (p.B + p.rows_per_cta - 1) / p.rows_per_cta;          // CTAs per group
+    const int g = static_cast<int>(cta / nb);
+    const int b0 = static_cast<int>((cta % nb) * p.rows_per_cta);
     const int an = p.tph * p.nap;
     for (int i = tid; i < an; i += bd) {
         sa[i] = p.anc_a[(size_t)g * an + i];
@@ -470,9 +480,10 @@ void dispatch_table(const torch::Tensor& W, Fn&& fn) {
 torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<torch::Tensor> anc_b,
                             torch::Tensor W, c10::optional<torch::Tensor> mask, c10::optional<torch::Tensor> temps,
                             int64_t nap, int64_t mode,
-                            int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16) {
+                            int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16, bool group_major) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, rows_per_cta);
+    p.group_major = group_major;
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     // float32 output, or bfloat16 when the caller asks (only for a bfloat16 input whose groups map 1:1 onto output
     // heads).

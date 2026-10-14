@@ -12,6 +12,7 @@ import torch.nn as nn
 
 from ..lut_spec import LUTSpec
 from . import _fused_quantised_cuda, _pow2
+from ._cuda_ext import forward_group_major
 from ._dtypes import _LOW_PRECISION
 from ._fused_ops import _global_cells
 from .manifesto_base import resolve_index_dtype
@@ -99,7 +100,8 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
                                  self.confidence_log_beta.float().reshape(1),
                                  self.confidence_log_gamma.float().reshape(1),
                                  self.log_read_tau.float().reshape(1) if self.read_top_n == 2 else None,
-                                 self.read_top_n, cfg["lo"], cfg["hi"], cfg["Q"])
+                                 self.read_top_n, cfg["lo"], cfg["hi"], cfg["Q"],
+                                 forward_group_major("QUANT", z.device))
         return self._route(grp_out, x)   # RAW (units 2^-6); scale folded into decompress
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
