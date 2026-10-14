@@ -242,7 +242,7 @@ def test_non_cuda_cases_raise_naming_the_reference_class():
     for cls in (HARD, SOFT):
         for train in (True, False):
             m = cls(spec).cuda().train(train).half()
-            with torch.no_grad(), pytest.raises(RuntimeError, match=r"table dtype float16 .*ManifestoHardLUT / "
+            with torch.no_grad(), pytest.raises(RuntimeError, match=r"table dtype torch\.float16 .*ManifestoHardLUT / "
                                                                      r"ManifestoSoftLUT"):
                 m(torch.randn(64, spec.h_in, spec.d_in, device="cuda").half())
             c = cls(spec).train(train)

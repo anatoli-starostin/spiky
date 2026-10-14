@@ -22,6 +22,7 @@ import torch
 
 from . import _fallback
 from ._cuda_ext import _MAX_CTA_THREADS, ManifestoCudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
+from ._dtypes import unsupported_dtype
 
 EXT_NAME = "lutorch_ex_fused_manifesto"
 MODE_HARD, MODE_SOFT = 0, 1
@@ -48,22 +49,17 @@ def fused_manifesto_ext():
 REMEDY = "Construct the reference class (ManifestoHardLUT / ManifestoSoftLUT) for this case."
 
 
-def _dt(dtype) -> str:
-    return str(dtype).replace("torch.", "")
-
-
 def _ineligible(module, x: torch.Tensor):
-    """``(what, internals)`` when this input / configuration is NOT a case the kernels cover, else None."""
+    """``(what, internals)`` when this input / configuration is NOT a case the kernels cover, else None (``internals``
+    may be None when ``what`` says it all)."""
     if not x.is_cuda:
         if not torch.cuda.is_available():
             return "This machine has no CUDA device, which the fused kernel needs.", "torch.cuda.is_available() is False"
         return "The input is on the CPU, but the fused kernel runs on CUDA only.", f"input device: {x.device}"
     if x.dtype not in CUDA_INPUT_DTYPES:
-        return (f"The input dtype {_dt(x.dtype)} is not supported by the fused kernel.",
-                "supported inputs: " + ", ".join(_dt(d) for d in CUDA_INPUT_DTYPES))
+        return f"The {unsupported_dtype('input', x.dtype, CUDA_INPUT_DTYPES)}.", None
     if module.weights.dtype not in CUDA_TABLE_DTYPES:
-        return (f"The table dtype {_dt(module.weights.dtype)} is not supported by the fused kernel.",
-                "supported tables: " + ", ".join(_dt(d) for d in CUDA_TABLE_DTYPES))
+        return f"The {unsupported_dtype('table', module.weights.dtype, CUDA_TABLE_DTYPES)}.", None
     if module.spec.nap > MAX_NAP:
         return (f"nap={module.spec.nap} is more than the fused kernel supports (max {MAX_NAP}).",
                 f"the cell index packs at most {MAX_NAP} bits")
@@ -84,7 +80,9 @@ def ineligible_reason(module, x: torch.Tensor):
     parenthetical. The cases: no CUDA device or a CPU input, an fp64 input, an fp16 / fp64 table, nap > 16, d_in beyond
     int16 anchors, or a d_out one CTA cannot cover."""
     r = _ineligible(module, x)
-    return None if r is None else f"{r[0]} {REMEDY} ({r[1]})"
+    if r is None:
+        return None
+    return f"{r[0]} {REMEDY}" + (f" ({r[1]})" if r[1] is not None else "")
 
 
 def require_cuda(module, x: torch.Tensor) -> None:

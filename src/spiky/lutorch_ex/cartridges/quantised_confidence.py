@@ -49,6 +49,7 @@ import torch.nn.functional as F
 
 from ..lut_spec import LUTSpec
 from . import _fallback, _pow2, _pow2_int8   # _pow2_int8: FusedQuantisedConfidenceLUT only
+from ._dtypes import unsupported_dtype
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
 from .confidence_base import ConfidenceBase
@@ -306,9 +307,10 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
         return self._route(self._quant_grp_out(u, c, c_alt, u_abs_star, frozen_coef=frozen_coef), x)
 
 
-#: The quantised family's fused CUDA kernels (quant_fwd / quant_bwd, deploy_fwd) take fp32 input and write fp32 output
-#: only (Anatoly's rule for the fused CUDA cartridges); one phrase for every message that refuses another dtype.
-FUSED_FP32_ONLY = "the fused CUDA kernel takes fp32 input and writes fp32 output only"
+#: The quantised family's fused CUDA kernels (quant_fwd / quant_bwd, deploy_fwd) take float32 input and a float32 table
+#: and write float32 output only.
+_FUSED_DTYPES = (torch.float32,)
+_FUSED_OUTPUT = "the output is torch.float32"
 
 
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
@@ -360,9 +362,9 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         if not x.is_cuda:
             problems.append(f"the input is on {x.device}, the kernel runs on CUDA only")
         if x.dtype != torch.float32:
-            problems.append(f"input dtype {x.dtype} ({FUSED_FP32_ONLY})")
+            problems.append(unsupported_dtype("input", x.dtype, _FUSED_DTYPES, _FUSED_OUTPUT))
         if self.weights.dtype != torch.float32:
-            problems.append(f"table dtype {self.weights.dtype} (the fused CUDA kernel reads an fp32 table only)")
+            problems.append(unsupported_dtype("table", self.weights.dtype, _FUSED_DTYPES))
         d_out = self.spec.d_out
         vec = 4 if d_out % 4 == 0 else (2 if d_out % 2 == 0 else 1)
         if -(-(d_out // vec) // 32) * 32 > 1024:
@@ -456,9 +458,9 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         # On CUDA this is a fused CUDA cartridge: fp32 in / out only (fp64 is refused by _require_kernel); the CPU path
         # runs the torch definition, which also takes fp64. The message is true on both devices.
         if x.dtype in _LOW_PRECISION:
-            raise TypeError(
-                f"{type(self).__name__}: input dtype {x.dtype} is not supported: {FUSED_FP32_ONLY} (on CPU the torch "
-                f"definition also takes fp64)")
+            raise TypeError(f"{type(self).__name__}: " + unsupported_dtype(
+                "input", x.dtype, _FUSED_DTYPES, f"{_FUSED_OUTPUT}; on the CPU the torch definition also takes "
+                "torch.float64"))
         if x.is_cuda:
             self._check_input(x)
             ext = self._require_kernel(x)
@@ -470,7 +472,7 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         NativeUnavailableError when only the extension is missing."""
         problems = []
         if x.dtype != torch.float32:
-            problems.append(f"input dtype {x.dtype} on CUDA ({FUSED_FP32_ONLY})")
+            problems.append(unsupported_dtype("input", x.dtype, _FUSED_DTYPES, _FUSED_OUTPUT))
         if self.spec.nap > 8:
             problems.append(f"nap={self.spec.nap} (max 8)")
         if self.spec.d_in > torch.iinfo(torch.int16).max:

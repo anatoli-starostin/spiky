@@ -35,6 +35,7 @@ import torch
 
 from . import _fallback
 from ._cuda_ext import _MAX_CTA_THREADS, CudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
+from ._dtypes import unsupported_dtype
 from .confidence_base import ConfidenceBase
 
 EXT_NAME = "lutorch_ex_fused_confidence"
@@ -120,9 +121,9 @@ class FusedConfidenceLUT(ConfidenceBase):
         if not x.is_cuda:
             problems.append(f"the input is on {x.device}, the kernels run on CUDA only")
         if x.dtype not in (torch.float32,) + _LOW_PREC:
-            problems.append(f"input dtype {x.dtype} (supported: float32, bfloat16, float16)")
+            problems.append(unsupported_dtype("input", x.dtype, (torch.float32,) + _LOW_PREC))
         if self.weights.dtype not in _CUDA_TABLE_DTYPES:
-            problems.append(f"table dtype {self.weights.dtype} (supported: float32, bfloat16)")
+            problems.append(unsupported_dtype("table", self.weights.dtype, _CUDA_TABLE_DTYPES))
         if self.spec.nap > 16:
             problems.append(f"nap={self.spec.nap} (max 16)")
         if need > _MAX_CTA_THREADS:

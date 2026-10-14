@@ -44,7 +44,7 @@ class ReferenceForward:
         if not self._ACCEPTS_LOW_PRECISION:
             raise TypeError(
                 f"{type(self).__name__} does not support low precision: got input dtype {x.dtype} and weight dtype "
-                f"{self.weights.dtype}; keep it (and ProjectionMHL wrapping it) in float32/float64.")
+                f"{self.weights.dtype}; keep it (and ProjectionMHL wrapping it) in torch.float32 / torch.float64.")
         # fp32 views: autograd rounds each leaf's fp32-accumulated gradient once, back to the leaf's own dtype.
         with _reparametrize_module(self, {n: t.float() for n, t in lowp.items()}):
             y = self._dispatch(x.float() if x.dtype in _LOW_PRECISION else x)

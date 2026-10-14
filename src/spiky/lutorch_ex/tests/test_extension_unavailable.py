@@ -222,10 +222,11 @@ def test_fused_quantised_rejects_low_precision(where, dtype):
     x = torch.randn(8, 4, 8, device="cuda")
     if where == "input":
         x = x.to(dtype)
-        msg = rf"input dtype {re.escape(str(dtype))} \(the fused CUDA kernel takes fp32 input and writes fp32 output only\)"
+        msg = (rf"input dtype {re.escape(str(dtype))} is not supported by the fused kernel \(supported: torch\.float32; "
+               rf"the output is torch\.float32\)")
     else:
         m = m.to(dtype)
-        msg = rf"table dtype {re.escape(str(dtype))} \(the fused CUDA kernel reads an fp32 table only\)"
+        msg = rf"table dtype {re.escape(str(dtype))} is not supported by the fused kernel \(supported: torch\.float32\)"
     with pytest.raises(RuntimeError, match=msg) as e:
         m(x)
     assert "Construct QuantisedConfidenceLUT" not in str(e.value)
@@ -275,5 +276,25 @@ def test_deployed_without_extension_raises_with_cause(no_quantised_ext, n):
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 def test_deployed_cuda_fp64_input_raises_naming_the_case():
-    with pytest.raises(RuntimeError, match=r"input dtype torch.float64 on CUDA"):
+    with pytest.raises(RuntimeError, match=r"input dtype torch\.float64 is not supported by the fused kernel "
+                                           r"\(supported: torch\.float32; the output is torch\.float32\)"):
         _deployed()(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))
+
+
+# -- one phrasing for a refused dtype, in every fused family -----------------------------------------------------------
+
+#: (class, kwargs, the input dtypes its kernels take) for every fused family.
+FUSED_FAMILIES = [
+    (lx.FusedManifestoHardLUT, {}, "torch.float32, torch.bfloat16, torch.float16"),
+    (lx.FusedConfidenceLUT, dict(read_top_n=2), "torch.float32, torch.bfloat16, torch.float16"),
+    (lx.FusedQuantisedConfidenceLUT, dict(read_top_n=2), "torch.float32"),
+]
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls,kw,supported", FUSED_FAMILIES, ids=lambda v: getattr(v, "__name__", ""))
+def test_every_fused_family_refuses_a_dtype_in_the_same_words(cls, kw, supported):
+    m = cls(_spec(), seed=0, **kw).cuda()
+    with pytest.raises(RuntimeError) as e:
+        m(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))
+    assert f"input dtype torch.float64 is not supported by the fused kernel (supported: {supported}" in str(e.value)

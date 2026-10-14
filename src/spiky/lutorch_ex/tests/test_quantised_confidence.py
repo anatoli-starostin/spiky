@@ -197,8 +197,9 @@ def test_deployed_rejects_low_precision_input(read_top_n, dtype, device):
     q = QuantisedConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n)
     p = q.to_deployment()
     d = QuantisedConfidenceLUT.from_deployment(spec, p["tensors"], p["meta"], device=device)
-    msg = (rf"DeployedQuantisedConfidenceLUT: input dtype {re.escape(str(dtype))} is not supported: the fused CUDA "
-           rf"kernel takes fp32 input and writes fp32 output only \(on CPU the torch definition also takes fp64\)")
+    msg = (rf"DeployedQuantisedConfidenceLUT: input dtype {re.escape(str(dtype))} is not supported by the fused kernel "
+           rf"\(supported: torch\.float32; the output is torch\.float32; on the CPU the torch definition also takes "
+           rf"torch\.float64\)")
     with pytest.raises(TypeError, match=msg):
         d(torch.randn(8, 2, 6, device=device, dtype=dtype))
 
