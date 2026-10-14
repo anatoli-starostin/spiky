@@ -18,7 +18,8 @@ from __future__ import annotations
 import torch
 from torch.nn.utils.stateless import _reparametrize_module
 
-from .manifesto_base import _COMPILE_ENABLED, _LOW_PRECISION
+from ._dtypes import _LOW_PRECISION
+from .manifesto_base import _COMPILE_ENABLED
 
 
 class ReferenceForward:

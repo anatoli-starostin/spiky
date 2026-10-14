@@ -49,11 +49,11 @@ import torch.nn.functional as F
 
 from ..lut_spec import LUTSpec
 from . import _fallback, _pow2, _pow2_int8   # _pow2_int8: FusedQuantisedConfidenceLUT only
-from ._dtypes import unsupported_dtype
+from ._dtypes import _LOW_PRECISION, unsupported_dtype
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
 from .confidence_base import ConfidenceBase
-from .manifesto_base import _LOW_PRECISION, resolve_index_dtype
+from .manifesto_base import resolve_index_dtype
 
 
 class QuantisedScaffold:

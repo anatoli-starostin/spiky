@@ -59,8 +59,6 @@ from .uncertainty import rational_uncertainty
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
 _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
 
-_LOW_PRECISION = (torch.bfloat16, torch.float16)
-
 #: The neighbour-weight functions (see the module docstring).
 WEIGHTS = ("rational", "softsign")
 

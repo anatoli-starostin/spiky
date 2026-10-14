@@ -22,12 +22,10 @@ import torch
 
 from . import _fallback
 from ._cuda_ext import _MAX_CTA_THREADS, ManifestoCudaKnobs, _launch, _row_launch, load_extension  # noqa: F401
-from ._dtypes import unsupported_dtype
+from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 
 EXT_NAME = "lutorch_ex_fused_manifesto"
 MODE_HARD, MODE_SOFT = 0, 1
-CUDA_TABLE_DTYPES = (torch.float32, torch.bfloat16)
-CUDA_INPUT_DTYPES = (torch.float32, torch.bfloat16, torch.float16)
 MAX_NAP = 16
 
 _EXT = None
@@ -56,10 +54,10 @@ def _ineligible(module, x: torch.Tensor):
         if not torch.cuda.is_available():
             return "This machine has no CUDA device, which the fused kernel needs.", "torch.cuda.is_available() is False"
         return "The input is on the CPU, but the fused kernel runs on CUDA only.", f"input device: {x.device}"
-    if x.dtype not in CUDA_INPUT_DTYPES:
-        return f"The {unsupported_dtype('input', x.dtype, CUDA_INPUT_DTYPES)}.", None
-    if module.weights.dtype not in CUDA_TABLE_DTYPES:
-        return f"The {unsupported_dtype('table', module.weights.dtype, CUDA_TABLE_DTYPES)}.", None
+    if x.dtype not in _CUDA_INPUT_DTYPES:
+        return f"The {unsupported_dtype('input', x.dtype, _CUDA_INPUT_DTYPES)}.", None
+    if module.weights.dtype not in _CUDA_TABLE_DTYPES:
+        return f"The {unsupported_dtype('table', module.weights.dtype, _CUDA_TABLE_DTYPES)}.", None
     if module.spec.nap > MAX_NAP:
         return (f"nap={module.spec.nap} is more than the fused kernel supports (max {MAX_NAP}).",
                 f"the cell index packs at most {MAX_NAP} bits")
