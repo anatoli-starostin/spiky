@@ -19,7 +19,7 @@ had a dead `compute_dtype="bf16"` field its trainer never applied — removed he
 Launch — **ONLINE-or-die wandb** (hard requirement): run as a BARE `python train.py` on a CUDA box
 with the lutorch_ex extension built, OUTBOUND NETWORK, and wandb logged in. `wandb.init` runs FIRST
 (before data/model/GPU); with no network (e.g. inside the sbox cage) or no wandb login it HARD-FAILS
-in seconds — no offline fallback. NOT via `sbox`. NOT launched yet.
+in seconds — no offline fallback. NOT via `sbox`. Launched + completed 2026-10-12 -> best val_bpb 1.096980 (see RESULT.md).
     cd 06_conf_n1 && setsid nohup python train.py > stdout.log 2>&1 &
     # short sanity: SMOKE_STEPS=40 python train.py
 Artifacts land here: metrics.csv, summary.json, ckpt.pt (resume), stdout.log.
