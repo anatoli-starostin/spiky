@@ -307,6 +307,7 @@ takes fp64). `QuantisedConfidenceLUT` is the pure-PyTorch reference and is not p
 - The reference cartridges' forward (`cartridges/reference_base.py`) is `torch.compile`d on CUDA in eval,
   and in training too for Gen-3; CPU always runs eager. The fused classes bypass compile: they call their
   kernels directly.
+- `cell_tv()` (every cartridge) is `torch.compile`d on CUDA; CPU runs it eager.
 - CUDA extensions are built lazily, on first use. The build is cached in `TORCH_EXTENSIONS_DIR`, which
   defaults to `~/.cache/torch_extensions_lutorch_ex`.
 - A fused class whose extension cannot be built raises `NativeUnavailableError` with the classified cause
@@ -368,7 +369,9 @@ Both regularisers live in the shared base class, so every cartridge has them. Bo
 in one bit, averaged over all tables of the layer; `d_out` is summed, not averaged.
 `cell_tv_penalty(module)` averages `cell_tv()` over every cartridge inside `module`. Scale it by `λ` and
 add it to the loss. The prior it encodes: a one-bit change of address should change the read only a
-little.
+little. On CUDA the penalty runs through `torch.compile`: at h=16, tph=64, nap=8 in fp32 its forward plus
+backward takes 0.36 ms instead of 2.6 ms eager, and it holds no per-axis intermediates for the backward
+(eager holds `nap/2` copies of the table's size).
 
 **Table dropout.** `table_dropout_rate=p` drops whole tables in training. One Bernoulli draw per
 (sample, head, table) keeps each table with probability `1 - p`, and the survivors are scaled by

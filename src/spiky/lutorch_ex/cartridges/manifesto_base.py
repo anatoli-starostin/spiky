@@ -201,6 +201,7 @@ class ManifestoLUT(MultiHeadLUT):
         # The reference forward's lazily-built torch.compile objects (ReferenceForward; unused by the fused classes).
         self._compiled = None          # eval forward
         self._compiled_train = None    # train forward (only when _COMPILE_TRAIN)
+        self._compiled_tv = None       # cell_tv (every cartridge, CUDA)
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
@@ -257,21 +258,25 @@ class ManifestoLUT(MultiHeadLUT):
     def cell_tv(self) -> torch.Tensor:
         """Hamming-1 adjacent-cell total-variation penalty on the cell table ``[G, tph, K, d_out]``.
 
-        View the ``K = 2**nap`` cells of each table as the vertices of an nap-cube
-        (``[G*tph, 2, 2, ..., 2, d_out]``) and sum ``(v_c - v_c')**2`` over every Hamming-1 pair
-        (each counted once, via a size-2 ``diff`` along each of the nap bit-axes), then divide by the
-        pair count ``n_tables * nap * 2**(nap-1)`` -- the mean over pairs (and tables) of
-        ``||v_c - v_c'||**2`` (d_out summed in, not averaged). Differentiable w.r.t. ``weights``; adds no nodes to the forward
-        (called only by the trainer when its TV lambda > 0)."""
-        G, tph, K, d_out = self.weights.shape
+        The mean over Hamming-1 cell pairs (and tables) of ``||v_c - v_c'||**2`` (d_out summed in, not averaged); the
+        formula is :func:`_cell_tv_eager`. Differentiable w.r.t. ``weights``; adds no nodes to the forward (called only
+        by the trainer when its TV lambda > 0).
+
+        The single dispatch point for the penalty, as :meth:`ReferenceForward._dispatch` is for the reference forward:
+        on CUDA it runs :func:`_cell_tv_eager` through a lazily built per-instance ``torch.compile`` (static shapes),
+        which fuses the nap per-axis passes and does not materialise the per-axis differences (eager holds nap of
+        them, 4x the table at nap=8, for the backward); on the CPU, or with ``LUTORCH_EX_NO_COMPILE=1``, the plain
+        eager formula. ``LUTORCH_EX_NO_COMPILE=1`` means "pure PyTorch, no acceleration" here."""
         nap = self.spec.nap
-        t = self.weights.reshape(G * tph, *([2] * nap), d_out)   # [T, 2,..,2, d_out] hypercube
-        tv = t.new_zeros(())
-        for ax in range(1, nap + 1):                             # one cube axis per bit
-            d = t.diff(dim=ax)
-            tv = tv + (d * d).sum()
-        n_pairs = (G * tph) * nap * (1 << (nap - 1))             # total Hamming-1 pairs
-        return tv / n_pairs
+        w = self.weights.reshape(-1, *self.weights.shape[2:])       # [n_tables, K, d_out]
+        if _COMPILE_ENABLED and w.is_cuda:
+            if self._compiled_tv is None:
+                # Static shapes, unlike the reference forward's dynamic=True: on symbolic shapes Inductor's per-axis
+                # reductions are ~4x slower (0.86 vs 0.21 ms of GPU time at h16 tph64 nap8 d48, fp32). A table never
+                # changes shape, so this costs one compile per (table shape, nap, dtype), shared by every instance.
+                self._compiled_tv = torch.compile(_cell_tv_eager, dynamic=False)
+            return self._compiled_tv(w, nap)
+        return _cell_tv_eager(w, nap)
 
     def to_deployment(self) -> dict:
         """SupportsDeploymentExport (deployment-compaction axis): base no-op pass-through. A cartridge
@@ -336,6 +341,22 @@ class ManifestoLUT(MultiHeadLUT):
         c_alt = c ^ powers[j_star]
         return z, u, c, j_star, u_abs_star, c_alt
 
+
+
+def _cell_tv_eager(weights: torch.Tensor, nap: int) -> torch.Tensor:
+    """The cell-TV formula in plain PyTorch (see :meth:`ManifestoLUT.cell_tv`), ``weights [n_tables, 2**nap, d_out]``.
+
+    View the ``K = 2**nap`` cells of each table as the vertices of an nap-cube (``[n_tables, 2, 2, ..., 2, d_out]``)
+    and sum ``(v_c - v_c')**2`` over every Hamming-1 pair (each counted once, via a size-2 ``diff`` along each of the
+    nap bit-axes), then divide by the pair count ``n_tables * nap * 2**(nap-1)``."""
+    n_tables, K, d_out = weights.shape
+    t = weights.reshape(n_tables, *([2] * nap), d_out)       # [T, 2,..,2, d_out] hypercube
+    tv = t.new_zeros(())
+    for ax in range(1, nap + 1):                             # one cube axis per bit
+        d = t.diff(dim=ax)
+        tv = tv + (d * d).sum()
+    n_pairs = n_tables * nap * (1 << (nap - 1))              # total Hamming-1 pairs
+    return tv / n_pairs
 
 
 def cell_tv_penalty(module: nn.Module) -> torch.Tensor:
