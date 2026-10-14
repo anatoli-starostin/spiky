@@ -256,7 +256,7 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
 # twin the frozen scalars are buffers (not in named_parameters(), no requires_grad) and get no gradient from a real
 # backward, while every remaining Parameter -- the table and any scalar left learnable -- still does; then the pair is
 # compared by test_fused_matches_reference itself (its checks and tolerances), at float32 on the small per-head
-#geometry.
+# geometry.
 
 #: (id, fused class, reference class, kwargs, extension, the scalars the kwargs freeze)
 FROZEN = [

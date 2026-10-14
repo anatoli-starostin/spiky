@@ -209,7 +209,7 @@ class ManifestoLUT(MultiHeadLUT):
         intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
 
         Operates in the weight dtype as-is — this pure path carries no mixed-precision handling
-        (bfloat16/fp16 support lives in the fused cartridges). See the class docstring.
+        (bfloat16 / float16 support lives in the fused cartridges). See the class docstring.
         """
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
         W2 = self.weights.reshape(G * tph * K, self.spec.d_out)

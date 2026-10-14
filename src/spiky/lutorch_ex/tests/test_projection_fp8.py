@@ -1,7 +1,7 @@
 """ProjectionMHL fp8_projections: opt-in fp8 GEMMs for compress / decompress (float32 masters, float32 accumulate).
 
 The flip-rate bound is measured, not assumed: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default
-init, e4m3 compress operands flip ~1.2% of sign bits / ~9.1% of cells vs an exact-fp32 compress (measured
+init, e4m3 compress operands flip ~1.2% of sign bits / ~9.1% of cells vs an exact-float32 compress (measured
 2026-10-09) - the flips come from the operand quantisation, so the output dtype (float32 vs bfloat16) does not matter.
 """
 import pytest

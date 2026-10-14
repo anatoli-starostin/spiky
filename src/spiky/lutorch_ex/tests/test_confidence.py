@@ -2,7 +2,7 @@
 
 Covers: float64 gradcheck of the scored backward (input, weights, β, γ, and τ for n=2); both anchor
 modes; read_top_n ∈ {1,2}; gradients reach β/γ/τ; the address is detached (x gets gradient ONLY
-through the score / blend, no routing grad); bfloat16/fp16 runs (exactness: test_reference_low_precision.py);
+through the score / blend, no routing grad); bfloat16 / float16 runs (exactness: test_reference_low_precision.py);
 single-anchor canonical coverage; train == eval forward value; the removed read flags raise; shape/dtype invariants.
 """
 import pytest
@@ -21,7 +21,7 @@ def _normrel(a, b):
 @pytest.mark.parametrize("read_top_n", [1, 2])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_gradcheck_fp64(read_top_n, anchor_mode):
-    """fp64 gradcheck wrt input, weights, and the score/blend temperatures — the scored forward
+    """float64 gradcheck wrt input, weights, and the score/blend temperatures — the scored forward
     is value==gradient, so finite differences verify the analytic backward."""
     torch.set_default_dtype(torch.float64)
     try:

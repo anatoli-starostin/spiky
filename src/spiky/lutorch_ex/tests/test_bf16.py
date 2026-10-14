@@ -1,6 +1,6 @@
-"""bf16/fp16 dtype coverage.
+"""bfloat16 / float16 dtype coverage.
 
-bfloat16/fp16 is a **fused-cartridge feature** (FusedManifestoHardLUT / FusedManifestoSoftLUT and
+bfloat16 / float16 is a **fused-cartridge feature** (FusedManifestoHardLUT / FusedManifestoSoftLUT and
 ProjectionMHL wrapping them; CUDA only -- the fused classes run only on their kernels). There it is mixed precision: the discrete addressing (margins,
 argmin j*, packed cell index) runs in float32 and every reduction accumulates in float32; only the
 stored LUT table, the inputs, and the final output carry bfloat16. So against a float32 reference
@@ -10,7 +10,7 @@ rounding* can cause near a boundary (an inherent, correct property of a bfloat16
 reference therefore uses ``x_ref = x_bf16.float()`` (identical values), isolating what bfloat16
 support must get right.
 
-The REFERENCE cartridges (ManifestoHardLUT / ManifestoSoftLUT) accept bfloat16/fp16 too: the
+The REFERENCE cartridges (ManifestoHardLUT / ManifestoSoftLUT) accept bfloat16 / float16 too: the
 same maths in float32 on float32 views, one rounding per leaf (bit-exact against the float32 run in
 test_reference_low_precision.py). ProjectionMHL wrapping either runs in bfloat16.
 """
@@ -115,7 +115,7 @@ def test_fused_bf16_cuda_training_step(Cls, needs_manifesto_ext):
 @pytest.mark.parametrize("Cls", PURE)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_reference_cartridge_accepts_low_precision(device, Cls, dtype):
-    """bf16/fp16 params OR inputs run on the reference cartridges and give the input dtype."""
+    """bfloat16 / float16 params OR inputs run on the reference cartridges and give the input dtype."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(device).to(dtype)
     assert m(torch.randn(8, 2, 6, device=device)).dtype == torch.float32      # low table, float32 input

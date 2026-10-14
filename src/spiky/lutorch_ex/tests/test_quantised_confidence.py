@@ -36,7 +36,7 @@ def _param_leaves(m):
 @pytest.mark.parametrize("read_top_n", [1, 2])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_surrogate_gradcheck_fp64(read_top_n, anchor_mode):
-    """fp64 gradcheck of the smooth STE surrogate wrt input + β + γ (+ τ for n=2)."""
+    """float64 gradcheck of the smooth STE surrogate wrt input + β + γ (+ τ for n=2)."""
     torch.set_default_dtype(torch.float64)
     try:
         spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4, anchor_mode=anchor_mode)

@@ -227,8 +227,8 @@ class ProjectionMHL(nn.Module):
             self._check_fp8(x)        # eager only: inside a compiled region _scaled_mm raises its own error
 
         if "compress" in self.fp8_projections:
-            # fp8 operands, float32 accumulator; the result (float32 or bfloat16-rounded) goes to the cartridge in x's
-            #dtype.
+            # fp8 operands, float32 accumulator; the result (float32 or bfloat16-rounded) goes to the cartridge in
+            # x's dtype.
             z = fp8_linear(x, self.compress, self.compress_fp8_out_dtype).to(x.dtype)
         elif self.projection_dtype is not None and self.has_compress:
             # GEMM in projection_dtype; cast back up BEFORE the cartridge so the addressing margins are compared in

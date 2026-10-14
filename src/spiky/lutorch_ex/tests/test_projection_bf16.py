@@ -1,7 +1,7 @@
 """ProjectionMHL projection_dtype: bfloat16 compress/decompress GEMMs from float32 masters, cartridge stays float32.
 
 The flip-rate bound is measured: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default init, bfloat16
-compress flips ~0.07% of sign bits / ~0.6% of cells vs an exact-fp32 compress (measured 2026-10-09).
+compress flips ~0.07% of sign bits / ~0.6% of cells vs an exact-float32 compress (measured 2026-10-09).
 """
 import pytest
 import torch

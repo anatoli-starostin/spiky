@@ -114,8 +114,7 @@ def test_no_fallback_off_cuda():
 #------------------------------------------------------------------------------------------------------
 # bfloat16 keeps 8 significant bits, so its unit roundoff is u = 2**-8 (3.9e-3). In the kernels every intermediate is
 # float32; only the leaves are rounded once to bfloat16: the output (bfloat16 input), grad x, grad W, grad beta / gamma
-#/ tau.
-# One rounding gives a rel-norm error of about u / sqrt(3) (uniform rounding error); BF16_TOL = 2u bounds it with
+# / tau. One rounding gives a rel-norm error of about u / sqrt(3) (uniform rounding error); BF16_TOL = 2u bounds it with
 # margin. FP32_TOL is the existing float32 tolerance.
 BF16_TOL = 2.0 * 2.0 ** -8
 FP32_TOL = 1e-4
@@ -220,7 +219,7 @@ def test_grad_w_accumulates_in_fp32_under_heavy_row_collision(dtype):
 @pytest.mark.parametrize("vec", [1, 2, 4, 8])
 @pytest.mark.parametrize("n", [1, 2])
 def test_bf16_vector_widths_agree(vec, n):
-    """Every bfloat16 vector width (8 = one 16-byte load) gives the dense-bf16 result."""
+    """Every bfloat16 vector width (8 = one 16-byte load) gives the dense-bfloat16 result."""
     torch.manual_seed(0)
     cud = _model(n, torch.bfloat16, knobs=CudaKnobs(vec_bf16=vec, rows_per_cta=3))
     x = torch.randn(50, 4, 24, device="cuda").to(torch.bfloat16)

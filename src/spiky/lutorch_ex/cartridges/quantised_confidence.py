@@ -20,7 +20,7 @@ shift-add read (``forward_int``, units 2^-6) is provided for inference / cross-c
 the fake-quant value to round-off.
 
 Scope: constant cells only, both anchor modes (inherited), read_top_n ∈ {1,2}, no hard forward, no
-trainable anchors. float32/fp64 only (bfloat16 raises via the base). p2_int8 is the only preset; n=1 quant
+trainable anchors. float32 / float64 only (bfloat16 raises via the base). p2_int8 is the only preset; n=1 quant
 is a lutorch_ex extension of the reference (which was n=2-only).
 
 Implementations (the class is the implementation, there is no selector):
@@ -30,7 +30,7 @@ Implementations (the class is the implementation, there is no selector):
   addressing, the per-table integers and straight-through weights, the fake-quant gather, in one kernel after the
   table exponents) and one hand-written CUDA backward that reads the forward's per-table integers back; read_top_n 1
   and 2 are two instantiations of the same kernels (template parameter N, as in the deployed kernel). Cases the
-  kernel does not cover (single anchors, nap > 8, a CPU input, a non-fp32 input or table) raise, naming the case, and
+  kernel does not cover (single anchors, nap > 8, a CPU input, a non-float32 input or table) raise, naming the case, and
   so does a missing extension.
 * :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form, read_top_n 1 or 2 as exported: on CUDA ONE
   kernel (``csrc/pow2_int8_read.cu``, deploy_fwd: addressing, the integers, the int8 shift-add read), float32 input; on
@@ -373,8 +373,7 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
             problems.append(f"d_out={d_out} needs more than 1024 threads per CTA at vec {vec}")
         if problems:
             # The reference class is offered for the cases it runs; not for a bfloat16 / float16 input or table, which
-            #it does
-            # not take either.
+            # it does not take either.
             lowp = x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
             remedy = "" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."
             raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}.{remedy}")
@@ -458,12 +457,10 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference
         # No float32 ``weights`` Parameter here (int8 ``packed`` instead), so the reference forward's low-precision
-        #guard
-        # (which reads ``self.weights.dtype``) cannot run on it -- hence the override, rejecting bfloat16/fp16 on the
-        #input.
+        # guard (which reads ``self.weights.dtype``) cannot run on it -- hence the override, rejecting bfloat16 /
+        # float16 on the input.
         # On CUDA this is a fused CUDA cartridge: float32 in / out only (float64 is refused by _require_kernel); the CPU
-        #path
-        # runs the torch definition, which also takes float64. The message is true on both devices.
+        # path runs the torch definition, which also takes float64. The message is true on both devices.
         if x.dtype in _LOW_PRECISION:
             raise TypeError(f"{type(self).__name__}: " + unsupported_dtype(
                 "input", x.dtype, _FUSED_DTYPES, f"{_FUSED_OUTPUT}; on the CPU the torch definition also takes "

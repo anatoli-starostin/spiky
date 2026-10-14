@@ -11,13 +11,13 @@ import torch
 import torch.nn.functional as F
 
 # Low-precision reductions accumulate in float32 and the result is cast back to the caller's dtype
-# (the cartridge does that in _route). For bfloat16/fp16 weights the embedding_bag reduce runs on an
+# (the cartridge does that in _route). For bfloat16 / float16 weights the embedding_bag reduce runs on an
 # float32 view of the table (torch's embedding_bag has no accumulate-dtype knob), so summing a
 # group's tph rows does not lose precision. float32 and float64 keep their own dtype (so the float64
 # equivalence tests stay bit-exact — upcasting float32 to float64 or downcasting float64 to float32 would
 # both be wrong).
 def _acc_dtype(dtype: torch.dtype) -> torch.dtype:
-    """fp32 for bfloat16/fp16, else the dtype itself (float32->float32, float64->float64)."""
+    """float32 for bfloat16 / float16, else the dtype itself (float32->float32, float64->float64)."""
     return torch.float32 if dtype in (torch.bfloat16, torch.float16) else dtype
 
 

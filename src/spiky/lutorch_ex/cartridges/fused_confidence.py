@@ -18,8 +18,8 @@ The kernels are its only implementation. A case they do not cover (a CPU input, 
 or float64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case, and so
 does a missing extension, naming the cause; :class:`ConfidenceLUT` runs everywhere else.
 
-bfloat16/fp16 (like the other fused cartridges): addressing runs in float32 (so the discrete bit decisions don't drift),
-every read and reduction accumulates in float32, and the output is rounded to the input dtype once. A
+bfloat16 / float16 (like the other fused cartridges): addressing runs in float32 (so the discrete bit decisions don't
+drift), every read and reduction accumulates in float32, and the output is rounded to the input dtype once. A
 bfloat16 input is read by the kernels directly (upconverted while each row is staged) and, when groups map 1:1 onto
 output heads, the kernel stores the bfloat16 output itself (a fan-in keeps the float32 output, sums the groups, then
 casts); both are bitwise identical to casting outside the kernel. A bfloat16 table stays bfloat16 in memory and is
@@ -60,8 +60,7 @@ class _FusedConfidence(torch.autograd.Function):
     def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, n, knobs,
                 out_bf16):
         # z: float32 or bfloat16 (upconverted in-kernel). log_beta / log_gamma / log_tau: float32. weights: float32 or
-        #bfloat16 (the
-        # kernels read it in place). The output is float32, or bfloat16 when out_bf16 (bfloat16 z only).
+        # bfloat16 (the kernels read it in place). The output is float32, or bfloat16 when out_bf16 (bfloat16 z only).
         ext = fused_confidence_ext()
         W2 = weights.reshape(-1, weights.shape[-1])
         # The knobs made legal for this d_out, as for the Manifesto kernels: the vector width is halved until it divides
@@ -87,8 +86,7 @@ class _FusedConfidence(torch.autograd.Function):
         g = gscal.sum(0)
         g_tau = g[2] if n == 2 else None
         # gW is accumulated in float32 whatever the table dtype; a bfloat16 Parameter must receive a bfloat16 .grad, so
-        #it is
-        # cast once here (one rounding per element, after the whole accumulation; a no-op for a float32 table).
+        # it is cast once here (one rounding per element, after the whole accumulation; a no-op for a float32 table).
         return (gz, gW.view_as(weights).to(weights.dtype), g[0], g[1], g_tau,
                 None, None, None, None, None, None, None, None)
 
@@ -149,16 +147,15 @@ class FusedConfidenceLUT(ConfidenceBase):
         self._require_cuda(x)
         # [B, G, d_in]; when every group reads its own head (h_in == n_groups) the in_head gather is the identity and
         # is skipped (no copy of the input). Addressing runs in float32: a bfloat16 input goes to the kernels as is and
-        #is
-        # upconverted while each row is staged (exact); float16 is cast here. grad x comes back in the input dtype.
+        # is upconverted while each row is staged (exact); float16 is cast here. grad x comes back in the input dtype.
         # A gather (h_in != n_groups) can send one input head to several groups: cast a low-precision input to float32
         # BEFORE it, so those groups' input gradients sum in float32 and are rounded to the input dtype once.
         zin = x if self.spec.h_in == self.spec.n_groups else \
             (x if x.dtype == torch.float32 else x.float())[:, self.in_head, :]
         z = (zin if zin.dtype == torch.bfloat16 else zin.float()).contiguous()
         # bfloat16 output straight from the kernel (one rounding, as the cast it replaces) when groups map 1:1 onto
-        #output
-        # heads; a fan-in sums the groups in _route first, so it keeps the float32 output and casts once after the sum.
+        # output heads; a fan-in sums the groups in _route first, so it keeps the float32 output and casts once after
+        # the sum.
         out_bf16 = z.dtype == torch.bfloat16 and self.spec.h_out == self.spec.n_groups
         keep = self._keep_flags(x.shape[0], x.device)
         keep_scale = 1.0 / (1.0 - self.table_dropout_rate)

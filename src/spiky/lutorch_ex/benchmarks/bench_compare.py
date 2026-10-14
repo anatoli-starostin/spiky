@@ -13,8 +13,8 @@ How cells are joined and marked:
 - Each cell has its own noise floor (``noise_floor``), the run-to-run spread measured on this machine with identical
   code and clocks unlocked: a timing whose before value is under 0.5 ms (launch-bound) +-15%; any other timing at
   8,192 vectors or fewer +-10%; any other timing +-6%; peak memory +-5%. A change within the cell's floor is
-  "within noise": the bars draw the floor as a shaded band around the before value, hatch the after-bar, and label the ratio in grey with
-  the floor ("x1.03 . within +-10%"); a change beyond it gets the ratio in black.
+  "within noise": the bars draw the floor as a shaded band around the before value, hatch the after-bar, and label
+  the ratio in grey with the floor ("x1.03 . within +-10%"); a change beyond it gets the ratio in black.
 - A row only the AFTER snapshot has (new functionality: nothing to compare it with) is drawn too, as the after bar
   alone, labelled "NEW" -- no ratio and no noise-floor judgement; it is listed, not plotted, on the ratio strip. A row
   only the BEFORE snapshot has is reported on stdout. Without after-only rows the figures are unchanged.
@@ -88,7 +88,8 @@ def join(before_path, after_path):
             if b is None and a is None:
                 continue                                  # e.g. Deployed has no training phases
             for m, ml, _ in METRICS:
-                c = dict(cls=key[0], vectors=key[1], dtype=key[2], phase=phl, metric=ml, before=None, after=None, ratio=None, noise=None, status="")
+                c = dict(cls=key[0], vectors=key[1], dtype=key[2], phase=phl, metric=ml, before=None, after=None,
+                         ratio=None, noise=None, status="")
                 if b == "OOM" or a == "OOM" or b is None or a is None:
                     c.update(before=None if b in ("OOM", None) else b[m], after=None if a in ("OOM", None) else a[m],
                              status=f"{'OOM' if b == 'OOM' else 'missing' if b is None else 'fits'} before, "
