@@ -31,6 +31,7 @@ One folder per ablation; each has a **self-contained `train.py` with the model d
 | 08_qconf_n2     | FusedQuantisedConfidenceLUT(p2_int8, n=2) | 1.089864 | −0.007116 | −4.7σ |
 | 06_conf_n1      | FusedConfidenceLUT(read_top_n=1)          | 1.096980 (seeds 1.096980 / 1.096822 / 1.094599; mean 1.09613, σ 0.001331) | 0 | 0 |
 | 07_qconf_n1     | FusedQuantisedConfidenceLUT(p2_int8, n=1) | 1.099281 | +0.002301 | +2.4σ |
+| 10_vanilla_dropout02 | dense MLP + dropout 0.2 (after GELU, in MLP) | 1.105455 | +0.008475 | +6.4σ\* |
 | 04_fms_softsign | FusedManifestoSoftLUT(softsign)           | 1.109537 | +0.012557 | +10.1σ |
 | 03_fms_rational | FusedManifestoSoftLUT(rational)           | 1.118633 | +0.021653 | +16.9σ |
 | 01_fmh_rational | FusedManifestoHardLUT(rational)           | 1.132425 | +0.035445 | +27.3σ |
@@ -46,6 +47,13 @@ costs little: +0.0023 on conf_n1, +0.0033 on conf_n2 (qconf_n2 ends up tied with
 arms, **soft beats hard** for both weights, and the weight ordering flips with the read — under HARD
 rational<softsign, under SOFT softsign<rational — so `fms_softsign` is the strongest manifesto arm (1.1095).
 All on the full 170-shard corpus; NOT comparable to abl47-family numbers (see aux_runs/README.md).
+
+Dropout arms (dense MLP + STANDARD dropout INSIDE the MLP, right after the GELU; attention untouched — the
+closest analogue to the fused arms' table dropout): **10_vanilla_dropout02 (p=0.2) = 1.105455**, which HURTS
+vs the no-dropout 00_vanilla (1.089362) by **+0.016093** — expected at <1 epoch (~1.18B tokens, data-bound not
+overfitting, so dropout removes signal rather than curbing overfit). `09_vanilla_dropout01` (p=0.1) is prepared
++ committed but UNRUN. So regularisation does not help the dense baseline here, which also supports reading the
+fused arms' table dropout as (at best) neutral at this scale/epoch budget.
 
 Quantised arms 07/08 (added after the main-merge): `07_qconf_n1` and `08_qconf_n2` run
 `FusedQuantisedConfidenceLUT(quant_mode="p2_int8")` at read_top_n 1 and 2.
