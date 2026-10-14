@@ -494,7 +494,7 @@ def test_quantised_layer1_with_table_dropout(seed):
 def _fused_n1_integers(fused, x):
     """The fused n = 1 forward's own integers: (k', skip) unpacked from the per-table int32s it saves for the backward
     (pack_tab1: c1 | (k' + 8) << 16 | skip << 27; c2 = q = 0), and c1."""
-    from spiky.lutorch_ex.cartridges import _fused_quantised_cuda
+    from spiky.lutorch_ex.cartridges import _cuda_ext, _fused_quantised_cuda
     ext = _fused_quantised_cuda.EXT.get()
     cfg = fused._quant
     W2 = fused.weights.detach().reshape(-1, fused.spec.d_out)
@@ -503,7 +503,7 @@ def _fused_n1_integers(fused, x):
     z = (x if fused.spec.h_in == fused.spec.n_groups else x[:, fused.in_head, :]).contiguous()
     _, tabs = ext.quant_fwd(z, fused._anc_a16, fused._anc_b16, W2, E, None, fused.confidence_log_beta.float(),
                             fused.confidence_log_gamma.float(), None, 1, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo),
-                            float(qhi), True)
+                            float(qhi), True, _cuda_ext.forward_group_major("QUANT", z.device))
     v = tabs.long()
     return ((v >> 16) & 15) - 8, ((v >> 27) & 1) == 1, v & 255, ((v >> 8) & 255) | ((v >> 20) & 127) | (v >> 28)
 

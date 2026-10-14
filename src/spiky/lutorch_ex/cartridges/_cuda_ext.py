@@ -12,9 +12,12 @@ the two knob-driven kernel families (FusedManifesto* and FusedConfidenceLUT).
   ``LUTORCH_EX_CONF_CUDA_*``.
 * :func:`_row_launch` / :func:`_launch` fit the knobs to a ``d_out``: the vector width is halved until it divides
   ``d_out``, each thread count is raised to cover one table row.
+* :data:`_ARCH_DEFAULTS` is the one table of per-architecture launch defaults (today: the forward kernels' CTA order),
+  resolved per device by :func:`forward_group_major`.
 """
 from __future__ import annotations
 
+import functools
 import os
 from dataclasses import dataclass
 from typing import ClassVar, Optional, Sequence
@@ -148,6 +151,49 @@ class ManifestoCudaKnobs(KernelKnobs):
 class CudaKnobs(KernelKnobs):
     """FusedConfidenceLUT's 'cuda' kernels' knobs (env defaults ``LUTORCH_EX_CONF_CUDA_*``)."""
     ENV: ClassVar[str] = "CONF"
+
+
+#: Per-architecture launch defaults, keyed by compute capability: ONE table for every fused family.
+#:
+#: ``cta_order`` is the FORWARD kernels' CTA order. ``"group"`` (group-major) keeps one group's CTAs consecutive, so the
+#: CTAs in flight read ~1-2 groups' table slices and those stay in L2; ``"interleaved"`` lets consecutive CTAs walk the
+#: groups (``g = CTA % G``), so every group's slice is live at once. Measured (h16 tph64 nap8 d48, 8k / 32k): on the
+#: H100 (9.0) group-major takes the forward from 6-37x its compulsory DRAM reads at ~50% L2 hits to <= 1x at 92-99%
+#: (16-38% faster); on the RTX 5090 (12.0), whose 96 MB L2 holds the whole table either way, it makes the large-batch
+#: forward 1.6-8.4% slower. The BACKWARD kernels are always group-major (faster on both cards); not a knob.
+#:
+#: An architecture not listed takes :data:`_ARCH_FALLBACK`: interleaved, the order every kernel used before this table,
+#: so an unlisted card never silently changes. ``LUTORCH_EX_<FAMILY>_CUDA_CTA_ORDER`` (``group`` / ``interleaved``;
+#: FAMILY = MANI, CONF or QUANT) overrides the table.
+_ARCH_DEFAULTS = {(9, 0): {"cta_order": "group"}, (12, 0): {"cta_order": "interleaved"}}
+_ARCH_FALLBACK = {"cta_order": "interleaved"}
+_CTA_ORDERS = ("interleaved", "group")
+
+
+def resolve_cta_order(capability, env_value: Optional[str] = None) -> str:
+    """The forward CTA order for a device of compute ``capability`` (major, minor): ``env_value`` when given (the
+    ``LUTORCH_EX_<FAMILY>_CUDA_CTA_ORDER`` override), else the :data:`_ARCH_DEFAULTS` entry, else the fallback."""
+    if env_value is not None:
+        if env_value not in _CTA_ORDERS:
+            raise ValueError(f"CTA order {env_value!r}: expected one of {', '.join(_CTA_ORDERS)}")
+        return env_value
+    return _ARCH_DEFAULTS.get(tuple(capability), _ARCH_FALLBACK)["cta_order"]
+
+
+@functools.lru_cache(maxsize=None)
+def _forward_group_major(family: str, device_index: int) -> bool:
+    env = f"LUTORCH_EX_{family}_CUDA_CTA_ORDER"
+    try:
+        order = resolve_cta_order(torch.cuda.get_device_capability(device_index), os.environ.get(env))
+    except ValueError as e:
+        raise ValueError(f"{env}: {e}") from None
+    return order == "group"
+
+
+def forward_group_major(family: str, device: torch.device) -> bool:
+    """Whether ``family``'s forward kernels (MANI, CONF or QUANT) run group-major on ``device``: resolved once per
+    (family, device) per process from the env override, else the per-architecture table (see :data:`_ARCH_DEFAULTS`)."""
+    return _forward_group_major(family, device.index if device.index is not None else torch.cuda.current_device())
 
 
 #: Threads per CTA the kernels may launch.

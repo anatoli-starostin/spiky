@@ -36,7 +36,7 @@ from typing import Tuple
 import torch
 
 from . import _fallback
-from ._cuda_ext import Extension, device_problem, not_covered, row_problem, row_threads
+from ._cuda_ext import Extension, device_problem, forward_group_major, not_covered, row_problem, row_threads
 from ._dtypes import _LOW_PRECISION, unsupported_dtype
 from ._pow2 import ste_cell_weights
 
@@ -188,7 +188,7 @@ class FusedQuantRead(torch.autograd.Function):
         # the integers are saved exactly when a backward can follow: the caller's grad mode (grad mode is off inside
         # forward) and an input that needs a gradient -- autograd state, not a user switch
         save = grad_mode and any(ctx.needs_input_grad[:5])
-        out, tabs = ext.quant_fwd(z, anc_a16, anc_b16, *args, save)
+        out, tabs = ext.quant_fwd(z, anc_a16, anc_b16, *args, save, forward_group_major("QUANT", z.device))
         ctx.save_for_backward(z, weights, E, log_beta, log_gamma, log_tau, anc_a16, anc_b16, zoff, zent, dmask, tabs)
         ctx.cfg = (n, cfg["lo"], cfg["hi"], cfg["Q"], float(qlo), float(qhi))
         return out

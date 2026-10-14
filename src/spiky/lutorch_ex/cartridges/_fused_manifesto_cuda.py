@@ -23,7 +23,7 @@ import torch
 
 from . import _fallback
 from ._cuda_ext import (_MAX_CTA_THREADS, Extension, ManifestoCudaKnobs, _launch, _row_launch,  # noqa: F401
-                        device_problem, not_covered, row_problem)
+                        device_problem, forward_group_major, not_covered, row_problem)
 from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 
 MODE_HARD, MODE_SOFT = 0, 1
@@ -67,7 +67,7 @@ class _FusedManifesto(torch.autograd.Function):
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
         out = ext.manifesto_fwd(z, anc_a, anc_b, W2, mask, temps, nap, mode, fwd_threads, knobs.rows_per_cta,
-                                vec, out_bf16)
+                                vec, out_bf16, forward_group_major("MANI", z.device))
         ctx.save_for_backward(z, weights, temps, anc_a, anc_b, mask)
         ctx.cfg = (nap, mode, knobs, vec, bwd_threads)
         return out                                                   # float32 [B, G, d_out]

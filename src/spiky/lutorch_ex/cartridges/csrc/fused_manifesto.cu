@@ -1,25 +1,25 @@
 // FusedManifestoHardLUT / FusedManifestoSoftLUT: hand-written CUDA forward + backward for the Manifesto read, both
-// uncertainty functions, built the way fused_confidence.cu is (one forward and one backward kernel, nothing per-table in
+// weight functions, built the way fused_confidence.cu is (one forward and one backward kernel, nothing per-table in
 // global memory).
 //
 // The Manifesto math (manifesto_base.py, manifesto_hard.py, manifesto_soft.py), per (b, g, t), with the table-dropout
 // factor m (the [B, G, tph] mask ManifestoLUT._table_dropout_mask returns, 0 or 1/keep_prob; 1 without dropout):
 //   margins u_j = z[a_j] - z[b_j] (single anchors: z[a_j]); address c = MSB-first [u_j > 0]; j* = first argmin |u_j|;
-//   neighbour c' = c with bit j* flipped; the uncertainty U of mu = |u_j*|, the deciding margin's magnitude:
-//     rational (temps == nullptr)          U = 0.5 / (1 + mu),                         -dU/dmu = 0.5 / (1 + mu)^2;
-//     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), U = sigmoid(-2 rho / T_sel),
-//                                          -dU/dmu = U (1-U) 2 T_s / (T_sel (T_s + mu)^2),
-//                                          dU/dT_s = U (1-U) 2 mu / (T_sel (T_s + mu)^2), dU/dT_sel = U (1-U) 2 rho / T_sel^2.
+//   neighbour c' = c with bit j* flipped; the neighbour weight w of mu = |u_j*|:
+//     rational (temps == nullptr)          w = 0.5 / (1 + mu),                         -dw/dmu = 0.5 / (1 + mu)^2;
+//     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), w = sigmoid(-2 rho / T_sel),
+//                                          -dw/dmu = w (1-w) 2 T_s / (T_sel (T_s + mu)^2),
+//                                          dw/dT_s = w (1-w) 2 mu / (T_sel (T_s + mu)^2), dw/dT_sel = w (1-w) 2 rho / T_sel^2.
 //   HARD  value  m W[c];                grad W[c] += m go;                  (no table gradient for c')
-//   SOFT  value  m ((1-U) W[c] + U W[c']); grad W[c] += m (1-U) go, grad W[c'] += m U go.
-//   Both: d value~ / d u_j* = m (W[c] - W[c']) . go * sign(u_j*) (-dU/dmu), scattered +to a_j*, -to b_j* (single
-//   anchors: +to a_j* only); softsign also d value~ / d T = m (W[c'] - W[c]) . go * dU/dT, summed over every
+//   SOFT  value  m ((1-w) W[c] + w W[c']); grad W[c] += m (1-w) go, grad W[c'] += m w go.
+//   Both: d value~ / d u_j* = m (W[c] - W[c']) . go * sign(u_j*) (-dw/dmu), scattered +to a_j*, -to b_j* (single
+//   anchors: +to a_j* only); softsign also d value~ / d T = m (W[c'] - W[c]) . go * dw/dT, summed over every
 //   (b, g, t). For HARD this is the straight-through surrogate (the gradient of the blend whose value is replaced by
 //   the hard read); for SOFT it is the exact derivative of the blend.
 //
 // One CTA owns one group g and `rows_per_cta` consecutive samples b of it. Per (b, g) row:
-//   phase A  (thread per table)  margins from the z row in shared memory, c, j*, c', U, the read weights;
-//   phase B  (stripe x chunk)    forward: the weighted read sum_t w1 W[c] (+ w2 W[c']); backward: the weight-gradient
+//   phase A  (thread per table)  margins from the z row in shared memory, c, j*, c', w, the read weights;
+//   phase B  (stripe x chunk)    forward: the weighted read sum_t w W[c] (+ w' W[c']); backward: the weight-gradient
 //                                scatter and the dot products W[c] . go, W[c'] . go, VEC elements per load;
 //   phase C                      forward: reduce the stripes into the output row; backward: the margin gradient of
 //                                each table's j* pair into the z row (shared memory), written once, and (softsign)
@@ -51,8 +51,9 @@ struct Params {
     const float* W;          // [G * tph * K, d_out], float32 table (nullptr when the table is bfloat16)
     const __nv_bfloat16* Wb; // the same, bfloat16 table (nullptr when the table is float32)
     const float* mask;       // [B, G, tph] table-dropout factor (ManifestoLUT._table_dropout_mask), nullptr = none
-    const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational uncertainty
+    const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational weight
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
+    int group_major;         // CTA order: forward from the per-arch table, backward ignores it (always 1)
 };
 
 __host__ __device__ inline size_t align16(size_t n) { return (n + 15) & ~size_t(15); }
@@ -71,11 +72,11 @@ struct Smem {
         cas = o;  o = align16(o + sizeof(int) * tph);
         rc = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));
         ra = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));
-        cf = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));    // m sign(u*) (-dU/dmu): the margin-gradient coefficient
+        cf = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));    // m sign(u*) (-dw/dmu): the margin-gradient coefficient
         ia = o;   o = align16(o + (bwd ? sizeof(int) * tph : 0));      // anchor coordinates of the j* pair
         ib = o;   o = align16(o + (bwd ? sizeof(int) * tph : 0));
-        t1 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dU/dT_s
-        t2 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dU/dT_sel
+        t1 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dw/dT_s
+        t2 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dw/dT_sel
         gt = o;   o = align16(o + (bwd && ss ? sizeof(float) * 2 : 0));      // softsign: this CTA's [dT_s, dT_sel]
         part = o; o = align16(o + (bwd ? 0 : sizeof(float) * nstripe * d_out));
         sa = o;   o = align16(o + sizeof(int16_t) * tph * nap);
@@ -166,31 +167,31 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
     const int base = (g * p.tph + t) << nap;
     cs[t] = base + c;
     cas[t] = base + (c ^ (1 << (nap - 1 - jstar)));
-    float U, ndU;                                          // the uncertainty and -dU/dmu (see the header)
+    float w, ndw;                                          // the neighbour weight and -dw/dmu (see the header)
     float ts = 0.f, tl = 1.f, den = 1.f, rho = 0.f, s = 0.f;
     if constexpr (SS) {
         ts = p.temps[0];
         tl = p.temps[1];
         den = ts + mstar;
         rho = mstar / den;
-        U = 1.f / (1.f + expf(2.f * rho / tl));            // sigmoid(-2 rho / T_sel)
-        s = U * (1.f - U);
-        ndU = s * 2.f * ts / (tl * den * den);
+        w = 1.f / (1.f + expf(2.f * rho / tl));            // sigmoid(-2 rho / T_sel)
+        s = w * (1.f - w);
+        ndw = s * 2.f * ts / (tl * den * den);
     } else {
         const float q = 1.f + mstar;
-        U = 0.5f / q;
-        ndU = 0.5f / (q * q);
+        w = 0.5f / q;
+        ndw = 0.5f / (q * q);
     }
     if constexpr (MODE == SOFT) {
-        w1[t] = mk * (1.f - U);
-        w2[t] = mk * U;
+        w1[t] = mk * (1.f - w);
+        w2[t] = mk * w;
     } else {
         w1[t] = mk;
         w2[t] = 0.f;
     }
     if (cf) {
         const float sgn = float((ustar > 0.f) - (ustar < 0.f));   // d|u|/du = sign(u), 0 at 0
-        if constexpr (SS) cf[t] = mk * sgn * ndU;
+        if constexpr (SS) cf[t] = mk * sgn * ndw;
         else { const float q = 1.f + mstar; cf[t] = mk * 0.5f * sgn / (q * q); }   // the rational order, unchanged
         const int i = t * nap + jstar;
         ia[t] = sa[i];
@@ -219,8 +220,13 @@ __device__ __forceinline__ void manifesto_fwd_body(const Params& p, float* __res
     int16_t* sb = p.anc_b ? reinterpret_cast<int16_t*>(smem_raw + L.sb) : nullptr;
 
     const int tid = threadIdx.x, bd = blockDim.x;
-    const int g = blockIdx.x % p.G;
-    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
+    // CTA order, Params::group_major (the per-arch default, _cuda_ext._ARCH_DEFAULTS): group-major keeps
+    // one group's CTAs consecutive, so the CTAs in flight read ~1-2 groups' table slices (L2 locality);
+    // interleaved walks the groups. One uniform choice per CTA, outside every loop.
+    const int64_t cta = static_cast<int64_t>(blockIdx.x);
+    const int64_t nb = (p.B + p.rows_per_cta - 1) / p.rows_per_cta;          // CTAs per group
+    const int g = static_cast<int>(p.group_major ? cta / nb : cta % p.G);
+    const int b0 = static_cast<int>((p.group_major ? cta % nb : cta / p.G) * p.rows_per_cta);
     const int an = p.tph * p.nap;
     for (int i = tid; i < an; i += bd) {                 // this group's anchors, once per CTA
         sa[i] = p.anc_a[(size_t)g * an + i];
@@ -296,12 +302,8 @@ __device__ __forceinline__ void manifesto_bwd_body(const Params& p, const float*
     int16_t* sb = p.anc_b ? reinterpret_cast<int16_t*>(smem_raw + L.sb) : nullptr;
 
     const int tid = threadIdx.x, bd = blockDim.x;
-    // Group-major CTA order, unconditionally (the forward kernels keep g = blockIdx.x % G). This backward is
-    // dominated by its gradient atomics: walking the groups put every group's gradient slice in flight at once,
-    // and on the H100 the atomic targets were evicted from L2 and written back again and again (75-604 M L2
-    // atomic sectors at 14.8 sectors / request, 1-8 GB of DRAM writes for a 50 MB gradient). With one group's
-    // CTAs consecutive, the CTAs in flight work on ~1-2 groups' ~3 MiB slices, which stay in L2. Measured faster
-    // on both the H100 and the RTX 5090, so it is not a knob.
+    // Always group-major: one group's CTAs consecutive, so the table reads and the gradient atomics of the
+    // CTAs in flight stay within ~1-2 groups' slices (L2 locality; faster on every measured card).
     const int64_t cta = static_cast<int64_t>(blockIdx.x);
     const int64_t nb = (p.B + p.rows_per_cta - 1) / p.rows_per_cta;          // CTAs per group
     const int g = static_cast<int>(cta / nb);
@@ -478,9 +480,10 @@ void dispatch_table(const torch::Tensor& W, Fn&& fn) {
 torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<torch::Tensor> anc_b,
                             torch::Tensor W, c10::optional<torch::Tensor> mask, c10::optional<torch::Tensor> temps,
                             int64_t nap, int64_t mode,
-                            int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16) {
+                            int64_t threads, int64_t rows_per_cta, int64_t vec, bool out_bf16, bool group_major) {
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, rows_per_cta);
+    p.group_major = group_major;
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
     // float32 output, or bfloat16 when the caller asks (only for a bfloat16 input whose groups map 1:1 onto output
     // heads).
