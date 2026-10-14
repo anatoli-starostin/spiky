@@ -245,6 +245,9 @@ def test_fused_quantised_uncovered_cases_raise_naming_the_reference(case, kw, x)
     spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8, anchor_mode=kw.pop("spec", {}).get("anchor_mode",
                                                                                                     "pairs"))
     m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, **{"read_top_n": 2, **kw})
+    # A CPU input on a machine with no CUDA device at all is reported as that (device_problem).
+    if case == "the input is on cpu" and not CUDA:
+        case = "this machine has no CUDA device"
     with pytest.raises(RuntimeError, match=rf"(?s){case}.*Construct QuantisedConfidenceLUT"):
         m(x())
 
@@ -290,7 +293,8 @@ def test_deployed_too_wide_d_out_raises_naming_the_case():
     spec = LUTSpec(h_in=1, h_out=1, tph=1, nap=1, d_in=2, d_out=16384)
     p = lx.QuantisedConfidenceLUT(spec, seed=0, read_top_n=2).to_deployment()
     d = lx.DeployedQuantisedConfidenceLUT(spec, p["tensors"], p["meta"], device="cuda")
-    with pytest.raises(RuntimeError, match=r"not a case the CUDA kernel covers: d_out=16384 needs more than 1024 threads"):
+    with pytest.raises(RuntimeError, match=r"not a case the fused kernels cover: d_out=16384 needs 2048 threads per CTA "
+                                           r"at vec 8 \(limit 1024\)"):
         d(torch.randn(4, 1, 2, device="cuda"))
 
 

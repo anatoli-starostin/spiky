@@ -247,7 +247,8 @@ def test_non_cuda_cases_raise_naming_the_reference_class():
                                                                      r"ManifestoSoftLUT"):
                 m(torch.randn(64, spec.h_in, spec.d_in, device="cuda").half())
             c = cls(spec).train(train)
-            with torch.no_grad(), pytest.raises(RuntimeError, match="The input is on the CPU"):
+            with torch.no_grad(), pytest.raises(RuntimeError, match=r"the input is on cpu, the kernels run on CUDA only"
+                                                                     r".*Construct ManifestoHardLUT / ManifestoSoftLUT"):
                 c(torch.randn(8, spec.h_in, spec.d_in))
 
 
@@ -259,7 +260,8 @@ def test_wide_d_out_is_not_a_cuda_case(cls, d_out, vec):
     training and in eval, saying why, instead of failing at launch."""
     spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=2, d_in=4, d_out=d_out, anchor_mode="pairs")
     x = torch.randn(4, 1, 4, device="cuda")
-    msg = rf"d_out={d_out} is too wide for the fused kernel \(max {vec * 1024} "
+    need = -(-(d_out // vec) // 32) * 32
+    msg = rf"d_out={d_out} needs {need} threads per CTA at vec {vec} \(limit 1024\)"
     with pytest.raises(RuntimeError, match=msg):
         cls(spec).cuda().train()(x)
     with torch.no_grad(), pytest.raises(RuntimeError, match=msg):

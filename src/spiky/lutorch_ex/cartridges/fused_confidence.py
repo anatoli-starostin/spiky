@@ -34,7 +34,8 @@ from __future__ import annotations
 import torch
 
 from . import _fallback
-from ._cuda_ext import _MAX_CTA_THREADS, CudaKnobs, Extension, _launch, _row_launch  # noqa: F401
+from ._cuda_ext import (_MAX_CTA_THREADS, CudaKnobs, Extension, _launch, _row_launch,  # noqa: F401
+                        device_problem, not_covered, row_problem)
 from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 from .confidence_base import ConfidenceBase
 
@@ -97,25 +98,21 @@ class FusedConfidenceLUT(ConfidenceBase):
             self._anc_b16 = None
 
     def _require_cuda(self, x: torch.Tensor) -> None:
-        """Raise unless the kernels can run this input: a RuntimeError naming the unsupported case (a CPU input, an
-        input other than float32 / bfloat16 / float16, a table other than float32 / bfloat16, nap > 16, a d_out one CTA
-        cannot cover), or the classified NativeUnavailableError when only the extension is missing."""
-        vec, need = _row_launch(self.knobs, self.spec.d_out, self.weights.dtype)
-        problems = []
-        if not x.is_cuda:
-            problems.append(f"the input is on {x.device}, the kernels run on CUDA only")
+        """Raise unless the kernels can run this input: a RuntimeError naming every case they do not cover (no CUDA
+        device or a CPU input, an input other than float32 / bfloat16 / float16, a table other than float32 /
+        bfloat16, nap > 16, a d_out one CTA cannot cover), or the classified NativeUnavailableError when only the
+        extension is missing."""
+        problems = [p for p in (device_problem(x),) if p]
         if x.dtype not in _CUDA_INPUT_DTYPES:
             problems.append(unsupported_dtype("input", x.dtype, _CUDA_INPUT_DTYPES))
         if self.weights.dtype not in _CUDA_TABLE_DTYPES:
             problems.append(unsupported_dtype("table", self.weights.dtype, _CUDA_TABLE_DTYPES))
         if self.spec.nap > 16:
             problems.append(f"nap={self.spec.nap} (max 16)")
-        if need > _MAX_CTA_THREADS:
-            problems.append(f"d_out={self.spec.d_out} needs {need} threads per CTA at vec {vec} "
-                            f"(limit {_MAX_CTA_THREADS})")
+        problems += [p for p in (row_problem(self.spec.d_out, *_row_launch(self.knobs, self.spec.d_out,
+                                                                            self.weights.dtype)),) if p]
         if problems:
-            raise RuntimeError(f"{type(self).__name__}: not a case the fused kernels cover: {'; '.join(problems)}. "
-                               f"Construct ConfidenceLUT (the reference class) for this case.")
+            raise RuntimeError(not_covered(type(self).__name__, problems, "ConfidenceLUT"))
         if EXT.get() is None:
             _fallback.raise_unavailable(type(self).__name__, EXT.name)
 

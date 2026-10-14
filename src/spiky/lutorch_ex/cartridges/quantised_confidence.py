@@ -49,6 +49,7 @@ import torch.nn.functional as F
 
 from ..lut_spec import LUTSpec
 from . import _fallback, _pow2, _pow2_int8   # _pow2_int8: FusedQuantisedConfidenceLUT only
+from ._cuda_ext import device_problem, not_covered, row_problem, row_threads
 from ._dtypes import _LOW_PRECISION, unsupported_dtype
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
@@ -354,29 +355,24 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
             self._anc_b16 = self._zoff = self._zent = None
 
     def _require(self, x: torch.Tensor) -> None:
-        """Raise unless the kernel can run this call: a RuntimeError naming the unsupported case, or the classified
-        NativeUnavailableError when only the extension is missing."""
+        """Raise unless the kernel can run this call: a RuntimeError naming every case it does not cover (single
+        anchors, nap > 8, a CPU input, an input or table other than float32, a d_out one CTA cannot cover), or the
+        classified NativeUnavailableError when only the extension is missing. The reference class is offered only for
+        the cases it runs: not for a bfloat16 / float16 input or table, which it does not take either."""
         problems = []
         if self.single:
             problems.append("anchor_mode='single' (pairs only)")
         if self.spec.nap > 8:
             problems.append(f"nap={self.spec.nap} (max 8)")
-        if not x.is_cuda:
-            problems.append(f"the input is on {x.device}, the kernel runs on CUDA only")
+        problems += [p for p in (device_problem(x),) if p]
         if x.dtype != torch.float32:
             problems.append(unsupported_dtype("input", x.dtype, _FUSED_DTYPES, _FUSED_OUTPUT))
         if self.weights.dtype != torch.float32:
             problems.append(unsupported_dtype("table", self.weights.dtype, _FUSED_DTYPES))
-        d_out = self.spec.d_out
-        vec = 4 if d_out % 4 == 0 else (2 if d_out % 2 == 0 else 1)
-        if -(-(d_out // vec) // 32) * 32 > 1024:
-            problems.append(f"d_out={d_out} needs more than 1024 threads per CTA at vec {vec}")
+        problems += [p for p in (row_problem(self.spec.d_out, *row_threads(self.spec.d_out, (4, 2, 1))),) if p]
         if problems:
-            # The reference class is offered for the cases it runs; not for a bfloat16 / float16 input or table, which
-            # it does not take either.
             lowp = x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
-            remedy = "" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."
-            raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}.{remedy}")
+            raise RuntimeError(not_covered(type(self).__name__, problems, None if lowp else "QuantisedConfidenceLUT"))
         if not _pow2_int8.ensure_registered():
             _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT.name)
 
@@ -472,21 +468,20 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         return self._forward_impl(x)
 
     def _require_kernel(self, x: torch.Tensor):
-        """The extension module, or raise: a RuntimeError naming the case the kernel does not cover, or the classified
-        NativeUnavailableError when only the extension is missing."""
+        """The extension module, or raise: a RuntimeError naming every case the deploy kernel does not cover (an input
+        other than float32, nap > 8, d_in beyond int16 anchors, a d_out one CTA cannot cover at the kernel's widths
+        8 / 4 / 2 / 1), or the classified NativeUnavailableError when only the extension is missing. The deployed
+        class has no reference twin to offer."""
         problems = []
         if x.dtype != torch.float32:
             problems.append(unsupported_dtype("input", x.dtype, _FUSED_DTYPES, _FUSED_OUTPUT))
         if self.spec.nap > 8:
             problems.append(f"nap={self.spec.nap} (max 8)")
         if self.spec.d_in > torch.iinfo(torch.int16).max:
-            problems.append(f"d_in={self.spec.d_in} (max 32767)")
-        d_out = self.spec.d_out
-        vec = next(v for v in (8, 4, 2, 1) if d_out % v == 0)       # the kernel's width: dq::vec_for
-        if -(-(d_out // vec) // 32) * 32 > 1024:
-            problems.append(f"d_out={d_out} needs more than 1024 threads per CTA")
+            problems.append(f"d_in={self.spec.d_in} (max {torch.iinfo(torch.int16).max})")
+        problems += [p for p in (row_problem(self.spec.d_out, *row_threads(self.spec.d_out, (8, 4, 2, 1))),) if p]
         if problems:
-            raise RuntimeError(f"{type(self).__name__}: not a case the CUDA kernel covers: {'; '.join(problems)}.")
+            raise RuntimeError(not_covered(type(self).__name__, problems, None))
         ext = _pow2_int8.EXT.get()
         if ext is None:
             _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT.name)

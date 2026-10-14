@@ -21,7 +21,8 @@ from __future__ import annotations
 import torch
 
 from . import _fallback
-from ._cuda_ext import _MAX_CTA_THREADS, Extension, ManifestoCudaKnobs, _launch, _row_launch  # noqa: F401
+from ._cuda_ext import (_MAX_CTA_THREADS, Extension, ManifestoCudaKnobs, _launch, _row_launch,  # noqa: F401
+                        device_problem, not_covered, row_problem)
 from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
 
 MODE_HARD, MODE_SOFT = 0, 1
@@ -29,53 +30,27 @@ MAX_NAP = 16
 EXT = Extension("lutorch_ex_fused_manifesto", ["fused_manifesto.cu"])
 
 
-#: The one remedy every ineligibility message gives (the case is fine on the reference class).
-REMEDY = "Construct the reference class (ManifestoHardLUT / ManifestoSoftLUT) for this case."
-
-
-def _ineligible(module, x: torch.Tensor):
-    """``(what, internals)`` when this input / configuration is NOT a case the kernels cover, else None (``internals``
-    may be None when ``what`` says it all)."""
-    if not x.is_cuda:
-        if not torch.cuda.is_available():
-            return ("This machine has no CUDA device, which the fused kernel needs.",
-                    "torch.cuda.is_available() is False")
-        return "The input is on the CPU, but the fused kernel runs on CUDA only.", f"input device: {x.device}"
-    if x.dtype not in _CUDA_INPUT_DTYPES:
-        return f"The {unsupported_dtype('input', x.dtype, _CUDA_INPUT_DTYPES)}.", None
-    if module.weights.dtype not in _CUDA_TABLE_DTYPES:
-        return f"The {unsupported_dtype('table', module.weights.dtype, _CUDA_TABLE_DTYPES)}.", None
-    if module.spec.nap > MAX_NAP:
-        return (f"nap={module.spec.nap} is more than the fused kernel supports (max {MAX_NAP}).",
-                f"the cell index packs at most {MAX_NAP} bits")
-    d_in_max = torch.iinfo(torch.int16).max
-    if module.spec.d_in > d_in_max:
-        return (f"d_in={module.spec.d_in} is too wide for the fused kernel (max {d_in_max}).",
-                "anchor indices are stored as int16")
-    vec, need = _row_launch(module.knobs, module.spec.d_out, module.weights.dtype)
-    if need > _MAX_CTA_THREADS:
-        return (f"d_out={module.spec.d_out} is too wide for the fused kernel (max {vec * _MAX_CTA_THREADS} at this "
-                f"vector width).", f"needs {need} threads per CTA, limit {_MAX_CTA_THREADS}, vec {vec}")
-    return None
-
-
-def ineligible_reason(module, x: torch.Tensor):
-    """Why this input / configuration is NOT a case the kernels cover (None when it is), as a user-facing message:
-    what the kernel cannot handle, the remedy (the same sentence for every reason), then the internals in a trailing
-    parenthetical. The cases: no CUDA device or a CPU input, a float64 input, a float16 / float64 table, nap > 16, d_in
-    beyond int16 anchors, or a d_out one CTA cannot cover."""
-    r = _ineligible(module, x)
-    if r is None:
-        return None
-    return f"{r[0]} {REMEDY}" + (f" ({r[1]})" if r[1] is not None else "")
+REFERENCE = "ManifestoHardLUT / ManifestoSoftLUT"
 
 
 def require_cuda(module, x: torch.Tensor) -> None:
-    """Raise unless the kernels can run this input: a RuntimeError naming the unsupported case, or the classified
-    NativeUnavailableError when the case is supported but the extension is not available."""
-    reason = ineligible_reason(module, x)
-    if reason is not None:
-        raise RuntimeError(f"{type(module).__name__}: {reason}")
+    """Raise unless the kernels can run this input: a RuntimeError naming every case they do not cover (no CUDA
+    device or a CPU input, an input other than float32 / bfloat16 / float16, a table other than float32 / bfloat16,
+    nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover), or the classified NativeUnavailableError when
+    only the extension is missing."""
+    problems = [p for p in (device_problem(x),) if p]
+    if x.dtype not in _CUDA_INPUT_DTYPES:
+        problems.append(unsupported_dtype("input", x.dtype, _CUDA_INPUT_DTYPES))
+    if module.weights.dtype not in _CUDA_TABLE_DTYPES:
+        problems.append(unsupported_dtype("table", module.weights.dtype, _CUDA_TABLE_DTYPES))
+    if module.spec.nap > MAX_NAP:
+        problems.append(f"nap={module.spec.nap} (max {MAX_NAP}: the cell index packs at most {MAX_NAP} bits)")
+    if module.spec.d_in > torch.iinfo(torch.int16).max:
+        problems.append(f"d_in={module.spec.d_in} (max {torch.iinfo(torch.int16).max}: anchors are int16)")
+    problems += [p for p in (row_problem(module.spec.d_out, *_row_launch(module.knobs, module.spec.d_out,
+                                                                          module.weights.dtype)),) if p]
+    if problems:
+        raise RuntimeError(not_covered(type(module).__name__, problems, REFERENCE))
     if EXT.get() is None:
         _fallback.raise_unavailable(type(module).__name__, EXT.name)
 
