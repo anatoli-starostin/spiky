@@ -29,6 +29,8 @@ export WANDB_GROUP=${WANDB_GROUP:-nanochat_lut_ffn}
 # read_top_n=1,beta=2,gamma=1,seed=1,std=1e-3,table_dropout=0.2,tv_lambda=10,lut_lr=3e-3).
 export ARCH_TAG=${ARCH_TAG:-lut_ffn_confidence_n1}
 export EXTRA_TAGS="${EXTRA_TAGS:-},ffn=confidenceLUT,read_top_n=1,r=768,tph=64,nap=8,cells=256"
-export TRAIN_EXTRA="--lut-ffn ${TRAIN_EXTRA:-}"
+# --no-lr-rescale is REQUIRED for parity with the reference run (forces batch_lr_scale=1.0; without it the
+# base LRs get sqrt(B/B_ref)=1.4142x rescaled, which is NOT the tuned recipe). Keep it in the default.
+export TRAIN_EXTRA="--lut-ffn --no-lr-rescale ${TRAIN_EXTRA:-}"
 
 exec bash runs/baseline_d24_1xh100.sh "$@"
