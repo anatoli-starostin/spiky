@@ -10,7 +10,7 @@
 // Nothing per-table goes through global memory: the address, score, mask and margins live in registers / shared
 // memory, and the backward recomputes them from z instead of saving them.
 //
-// Launch knobs (host side, see fused_confidence.py): threads per CTA (forward and backward separately), rows per
+// Launch knobs (host side, see _fused_confidence_cuda.py): threads per CTA (forward and backward separately), rows per
 // CTA, vector width VEC (1, 2, 4; 8 for bfloat16) and whether the weight-gradient scatter uses vector atomics (sm_90+).
 //
 // Table dtype T: float32 or bfloat16. A bfloat16 table is loaded and upconverted to float32 in registers; every

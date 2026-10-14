@@ -1,6 +1,7 @@
-"""The CUDA side of FusedQuantisedConfidenceLUT: the p2 extension's build / load and device gating, the
-lutorch_ex::p2_scalars custom op and the fused read. Used ONLY by the fused class; the reference QuantisedConfidenceLUT
-never calls it (importing this module builds nothing: ensure_registered() loads the extension).
+"""The CUDA implementation of FusedQuantisedConfidenceLUT and DeployedQuantisedConfidenceLUT: the p2 extension's
+build / load and device gating, the lutorch_ex::p2_scalars custom op, the fused read, and the checks that a call is a
+case the kernels cover. Used ONLY by those two classes; the reference QuantisedConfidenceLUT never calls it (importing
+this module builds nothing: ensure_registered() loads the extension).
 
 EXTENSION
 
@@ -12,7 +13,7 @@ Built lazily with torch.utils.cpp_extension on first use, for the visible device
 architecture in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been
 validated on real hardware. Nothing in it is architecture-specific; the allowlist records validation, not a hardware
 requirement. Anything else -- no CUDA, an architecture not on the list, no nvcc, a failed build -- makes `EXT.get()`
-return None and records the classified cause (cartridges/_fallback.py), which FusedQuantisedConfidenceLUT raises with. There is
+return None and records the classified cause (cartridges/_fallback.py), which the fused classes raise with. There is
 no fallback and no switch: to run without the extension, construct QuantisedConfidenceLUT.
 
 CUSTOM OP -- the per-table integers of the power-of-two read.
@@ -30,7 +31,9 @@ from typing import Tuple
 
 import torch
 
-from ._cuda_ext import Extension
+from . import _fallback
+from ._cuda_ext import Extension, device_problem, not_covered, row_problem, row_threads
+from ._dtypes import _LOW_PRECISION, unsupported_dtype
 from ._pow2 import ste_cell_weights
 
 DISCARD = 15                # shift code of a cell that is not read (csrc/pow2_scalars.cuh)
@@ -40,6 +43,60 @@ VALIDATED_ARCHES = ((12, 0), (9, 0))
 #: --fmad=false: no fused multiply-add contraction, so every add of the fixed reduction order is a separate float32 add.
 EXT = Extension("lutorch_ex_pow2_int8_read", ["pow2_int8_read.cu"], extra_cuda_cflags=["--fmad=false"],
                 validated_arches=VALIDATED_ARCHES)
+REFERENCE = "QuantisedConfidenceLUT"
+#: The quantised family's fused CUDA kernels (quant_fwd / quant_bwd, deploy_fwd) take float32 input and a float32 table
+#: and write float32 output only.
+_FUSED_DTYPES = (torch.float32,)
+_FUSED_OUTPUT = "the output is torch.float32"
+
+
+def input_dtype_problem(dtype: torch.dtype, note: str = "") -> str:
+    """The refusal of an input dtype the quantised kernels do not take (with the output dtype, and an optional note)."""
+    return unsupported_dtype("input", dtype, _FUSED_DTYPES, _FUSED_OUTPUT + (f"; {note}" if note else ""))
+
+
+def require_cuda(module, x: torch.Tensor) -> None:
+    """FusedQuantisedConfidenceLUT: raise unless the kernel can run this call: a RuntimeError naming every case it does
+    not cover (single anchors, nap > 8, a CPU input, an input or table other than float32, a d_out one CTA cannot
+    cover), or the classified NativeUnavailableError when only the extension is missing. The reference class is offered
+    only for the cases it runs: not for a bfloat16 / float16 input or table, which it does not take either."""
+    problems = []
+    if module.single:
+        problems.append("anchor_mode='single' (pairs only)")
+    if module.spec.nap > 8:
+        problems.append(f"nap={module.spec.nap} (max 8)")
+    problems += [p for p in (device_problem(x),) if p]
+    if x.dtype != torch.float32:
+        problems.append(input_dtype_problem(x.dtype))
+    if module.weights.dtype != torch.float32:
+        problems.append(unsupported_dtype("table", module.weights.dtype, _FUSED_DTYPES))
+    problems += [p for p in (row_problem(module.spec.d_out, *row_threads(module.spec.d_out, (4, 2, 1))),) if p]
+    if problems:
+        lowp = x.dtype in _LOW_PRECISION or module.weights.dtype in _LOW_PRECISION
+        raise RuntimeError(not_covered(type(module).__name__, problems, None if lowp else REFERENCE))
+    if not ensure_registered():
+        _fallback.raise_unavailable(type(module).__name__, EXT.name)
+
+
+def require_deploy_cuda(module, x: torch.Tensor):
+    """DeployedQuantisedConfidenceLUT on a CUDA input: the extension module, or raise: a RuntimeError naming every case
+    the deploy kernel does not cover (an input other than float32, nap > 8, d_in beyond int16 anchors, a d_out one CTA
+    cannot cover at the kernel's widths 8 / 4 / 2 / 1), or the classified NativeUnavailableError when only the extension
+    is missing. The deployed class has no reference twin to offer."""
+    problems = []
+    if x.dtype != torch.float32:
+        problems.append(input_dtype_problem(x.dtype))
+    if module.spec.nap > 8:
+        problems.append(f"nap={module.spec.nap} (max 8)")
+    if module.spec.d_in > torch.iinfo(torch.int16).max:
+        problems.append(f"d_in={module.spec.d_in} (max {torch.iinfo(torch.int16).max})")
+    problems += [p for p in (row_problem(module.spec.d_out, *row_threads(module.spec.d_out, (8, 4, 2, 1))),) if p]
+    if problems:
+        raise RuntimeError(not_covered(type(module).__name__, problems, None))
+    ext = EXT.get()
+    if ext is None:
+        _fallback.raise_unavailable(type(module).__name__, EXT.name)
+    return ext
 
 
 # ======================================================================================================================

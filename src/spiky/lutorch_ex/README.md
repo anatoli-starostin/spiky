@@ -537,8 +537,9 @@ lutorch_ex/
 │   ├── confidence.py                Gen-3 ConfidenceLUT
 │   ├── quantised_confidence.py      QuantisedConfidenceLUT, FusedQuantisedConfidenceLUT, DeployedQuantisedConfidenceLUT
 │   ├── _pow2.py                     the power-of-two quantisation maths (the torch definition)
-│   ├── _pow2_int8.py                FusedQuantisedConfidenceLUT glue: the p2_scalars op (csrc/pow2_int8_read.cu)
-│   ├── fused_confidence.py          FusedConfidenceLUT (glue for csrc/fused_confidence.cu)
+│   ├── _fused_quantised_cuda.py     Fused/DeployedQuantisedConfidenceLUT glue for csrc/pow2_int8_read.cu
+│   ├── fused_confidence.py          FusedConfidenceLUT
+│   ├── _fused_confidence_cuda.py    FusedConfidenceLUT glue for csrc/fused_confidence.cu
 │   ├── reference_base.py            ReferenceForward: the reference classes' (compiled) forward
 │   ├── confidence_base.py           ConfidenceBase: ConfidenceLUT / FusedConfidenceLUT parameters and scaffolding
 │   ├── _fused_ops.py                the reference reads (embedding_bag)

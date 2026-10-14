@@ -362,7 +362,7 @@ def test_quantised_layer1_fused_bit_exact_vs_eager_reference(seed, geom):
     drop) equal the eager reference definition's (_pow2.blend_exponents on the same margins) on EVERY table, and the
     eager reference's output equals the fused class's bit for bit, in eval and in the training forward. No tolerance,
     no gate."""
-    from spiky.lutorch_ex.cartridges import _pow2, _pow2_int8
+    from spiky.lutorch_ex.cartridges import _fused_quantised_cuda, _pow2
     ref, fused, x = _champion_pair(seed, LAYER1_GEOMS[geom])
     with torch.no_grad():
         z, u, c, j, ustar, calt = ref._addresses(x)
@@ -373,7 +373,7 @@ def test_quantised_layer1_fused_bit_exact_vs_eager_reference(seed, geom):
         m = u.abs()
         qr, kr, skr, dr = _pow2.blend_exponents(m, m.min(-1, keepdim=True).values, tau, g0, beta, gamma, cfg)
         _, cells, kq = torch.ops.lutorch_ex.p2_scalars(u, tau, g0, beta, gamma, cfg["lo"], cfg["hi"], cfg["Q"])
-        qo, ko, sko, do = _pow2_int8._integers_from(cells, kq, cfg["Q"])
+        qo, ko, sko, do = _fused_quantised_cuda._integers_from(cells, kq, cfg["Q"])
         differ = (qr != qo) | (kr != ko) | (skr != sko) | (dr != do)
         assert int(differ.sum()) == 0, f"{int(differ.sum())} integer disagreements with the kernel"
         for train in (False, True):
@@ -494,8 +494,8 @@ def test_quantised_layer1_with_table_dropout(seed):
 def _fused_n1_integers(fused, x):
     """The fused n = 1 forward's own integers: (k', skip) unpacked from the per-table int32s it saves for the backward
     (pack_tab1: c1 | (k' + 8) << 16 | skip << 27; c2 = q = 0), and c1."""
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    ext = _pow2_int8.EXT.get()
+    from spiky.lutorch_ex.cartridges import _fused_quantised_cuda
+    ext = _fused_quantised_cuda.EXT.get()
     cfg = fused._quant
     W2 = fused.weights.detach().reshape(-1, fused.spec.d_out)
     E = ext.table_exponents(W2, fused.weights.shape[0], float(cfg["bits"] - 1 - cfg["offset"]))
@@ -673,7 +673,7 @@ def test_quantised_exact_ties_round_half_up():
     constructed. q: x == 3 exactly -> q = 3. k': gamma = 0, q >= 8, log2 S + 1/2 == 4 exactly -> k' = 4 (inside the
     window, so neither clamped nor skipped)."""
     requires_extension("quantised")
-    from spiky.lutorch_ex.cartridges import _pow2, _pow2_int8
+    from spiky.lutorch_ex.cartridges import _fused_quantised_cuda, _pow2
     cfg = _pow2.resolve_quant_config("p2_int8")
     g0 = torch.zeros((), device="cuda")
     beta, gamma1 = torch.tensor(1.7, device="cuda"), torch.tensor(0.8, device="cuda")
@@ -681,7 +681,7 @@ def test_quantised_exact_ties_round_half_up():
     m = d.abs()
     qr = _pow2.blend_exponents(m, m.min(-1, keepdim=True).values, tau, g0, beta, gamma1, cfg)[0]
     _, cells, kq = torch.ops.lutorch_ex.p2_scalars(d, tau, g0, beta, gamma1, cfg["lo"], cfg["hi"], cfg["Q"])
-    qo = _pow2_int8._integers_from(cells, kq, cfg["Q"])[0]
+    qo = _fused_quantised_cuda._integers_from(cells, kq, cfg["Q"])[0]
     assert float(qr) == 3.0 and float(qo) == 3.0, (float(qr), float(qo))
     d, tau = _tie_margins(target_k=4)
     gamma0 = torch.zeros((), device="cuda")
@@ -689,7 +689,7 @@ def test_quantised_exact_ties_round_half_up():
     q, k = _pow2.blend_exponents(m, m.min(-1, keepdim=True).values, tau, g0, beta, gamma0, cfg)[:2]
     assert float(q) >= 8, "the construction needs q >= 8 (c_q = 0)"
     _, cells, kq = torch.ops.lutorch_ex.p2_scalars(d, tau, g0, beta, gamma0, cfg["lo"], cfg["hi"], cfg["Q"])
-    qo, ko = _pow2_int8._integers_from(cells, kq, cfg["Q"])[:2]
+    qo, ko = _fused_quantised_cuda._integers_from(cells, kq, cfg["Q"])[:2]
     assert float(k) == 4.0 and float(ko) == 4.0 and float(qo) == float(q), (float(k), float(ko))
 
 

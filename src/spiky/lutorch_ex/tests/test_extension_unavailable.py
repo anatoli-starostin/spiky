@@ -8,7 +8,8 @@ import pytest
 import torch
 
 import spiky.lutorch_ex as lx
-from spiky.lutorch_ex.cartridges import _fallback, _fused_manifesto_cuda, fused_confidence
+from spiky.lutorch_ex.cartridges import _fallback, _fused_confidence_cuda, _fused_manifesto_cuda
+from spiky.lutorch_ex.cartridges import _fused_quantised_cuda
 from spiky.lutorch_ex.cartridges._fallback import NativeUnavailableError, classify, record_build_failure
 from spiky.lutorch_ex.lut_spec import LUTSpec
 from spiky.lutorch_ex.tests._weights import softsign
@@ -151,9 +152,9 @@ def test_fused_manifesto_cpu_input_raises_naming_the_reference_class(cls):
 
 @pytest.fixture
 def no_confidence_ext(monkeypatch):
-    monkeypatch.setattr(fused_confidence.EXT, "tried", True)
-    monkeypatch.setattr(fused_confidence.EXT, "module", None)
-    record_build_failure(fused_confidence.EXT.name, RuntimeError(
+    monkeypatch.setattr(_fused_confidence_cuda.EXT, "tried", True)
+    monkeypatch.setattr(_fused_confidence_cuda.EXT, "module", None)
+    record_build_failure(_fused_confidence_cuda.EXT.name, RuntimeError(
         "\nThe detected CUDA version (13.0) mismatches the version that was used to compile\nPyTorch (12.8)."))
 
 
@@ -184,11 +185,10 @@ def test_no_backend_argument(cls):
 
 @pytest.fixture
 def no_quantised_ext(monkeypatch):
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    monkeypatch.setattr(_pow2_int8, "_registered", False)
-    monkeypatch.setattr(_pow2_int8.EXT, "tried", True)
-    monkeypatch.setattr(_pow2_int8.EXT, "module", None)
-    record_build_failure(_pow2_int8.EXT.name, RuntimeError("Ninja is required to load C++ extensions"))
+    monkeypatch.setattr(_fused_quantised_cuda, "_registered", False)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "tried", True)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "module", None)
+    record_build_failure(_fused_quantised_cuda.EXT.name, RuntimeError("Ninja is required to load C++ extensions"))
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
@@ -200,15 +200,14 @@ def test_fused_quantised_without_extension_raises_with_cause(no_quantised_ext):
 
 
 def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    monkeypatch.setattr(_pow2_int8.EXT, "tried", False)
-    monkeypatch.setattr(_pow2_int8.EXT, "module", None)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "tried", False)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "module", None)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (7, 5))
-    assert _pow2_int8.EXT.get() is None
-    assert _fallback.recorded(_pow2_int8.EXT.name).kind == "unvalidated_arch"
+    assert _fused_quantised_cuda.EXT.get() is None
+    assert _fallback.recorded(_fused_quantised_cuda.EXT.name).kind == "unvalidated_arch"
     with pytest.raises(NativeUnavailableError, match=r"(?s)\[unvalidated_arch\].*\(7, 5\)"):
-        _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _pow2_int8.EXT.name)
+        _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _fused_quantised_cuda.EXT.name)
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
@@ -255,8 +254,7 @@ def test_fused_quantised_uncovered_cases_raise_naming_the_reference(case, kw, x)
 def test_no_env_var_switch_left():
     """LUTORCH_EX_NO_CUDA_EXT / SPIKY_P2_CUDA_DISABLE and the module switch are gone."""
     import pathlib
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    assert not hasattr(_pow2_int8, "set_enabled") and not hasattr(_pow2_int8, "_enabled")
+    assert not hasattr(_fused_quantised_cuda, "set_enabled") and not hasattr(_fused_quantised_cuda, "_enabled")
     root = pathlib.Path(lx.__file__).parent / "cartridges"
     for src in root.glob("*.py"):
         text = src.read_text()

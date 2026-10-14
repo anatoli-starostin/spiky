@@ -33,50 +33,9 @@ from __future__ import annotations
 
 import torch
 
-from . import _fallback
-from ._cuda_ext import (_MAX_CTA_THREADS, CudaKnobs, Extension, _launch, _row_launch,  # noqa: F401
-                        device_problem, not_covered, row_problem)
-from ._dtypes import _CUDA_INPUT_DTYPES, _CUDA_TABLE_DTYPES, unsupported_dtype
+from ._cuda_ext import CudaKnobs
+from ._fused_confidence_cuda import FusedConfidence, require_cuda
 from .confidence_base import ConfidenceBase
-
-EXT = Extension("lutorch_ex_fused_confidence", ["fused_confidence.cu"])
-
-
-class _FusedConfidence(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep, keep_scale, nap, n, knobs,
-                out_bf16):
-        # z: float32 or bfloat16 (upconverted in-kernel). log_beta / log_gamma / log_tau: float32. weights: float32 or
-        # bfloat16 (the kernels read it in place). The output is float32, or bfloat16 when out_bf16 (bfloat16 z only).
-        ext = EXT.get()
-        W2 = weights.reshape(-1, weights.shape[-1])
-        # The knobs made legal for this d_out, as for the Manifesto kernels: the vector width is halved until it divides
-        # d_out and each thread count is raised to cover one table row (a no-op at the default knobs for d_out <= 256
-        # divisible by 4, so those launches are unchanged).
-        fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
-        out = ext.confidence_fwd(z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-                                 nap, n, fwd_threads, knobs.rows_per_cta, vec, out_bf16)
-        ctx.save_for_backward(z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep)
-        ctx.cfg = (keep_scale, nap, n, knobs, vec, bwd_threads)
-        return out
-
-    @staticmethod
-    def backward(ctx, go):
-        z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
-        keep_scale, nap, n, knobs, vec, bwd_threads = ctx.cfg
-        W2 = weights.reshape(-1, weights.shape[-1])
-        # The kernel reads go in float32 (a bfloat16 go from the bfloat16-output mode is upcast: exact).
-        # gz comes back in z's dtype.
-        gW, gz, gscal = EXT.get().confidence_bwd(
-            go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
-            nap, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
-        g = gscal.sum(0)
-        g_tau = g[2] if n == 2 else None
-        # gW is accumulated in float32 whatever the table dtype; a bfloat16 Parameter must receive a bfloat16 .grad, so
-        # it is cast once here (one rounding per element, after the whole accumulation; a no-op for a float32 table).
-        return (gz, gW.view_as(weights).to(weights.dtype), g[0], g[1], g_tau,
-                None, None, None, None, None, None, None, None)
-
 
 class FusedConfidenceLUT(ConfidenceBase):
     """The fused twin of :class:`ConfidenceLUT`; see the module docstring.
@@ -97,25 +56,6 @@ class FusedConfidenceLUT(ConfidenceBase):
         else:
             self._anc_b16 = None
 
-    def _require_cuda(self, x: torch.Tensor) -> None:
-        """Raise unless the kernels can run this input: a RuntimeError naming every case they do not cover (no CUDA
-        device or a CPU input, an input other than float32 / bfloat16 / float16, a table other than float32 /
-        bfloat16, nap > 16, a d_out one CTA cannot cover), or the classified NativeUnavailableError when only the
-        extension is missing."""
-        problems = [p for p in (device_problem(x),) if p]
-        if x.dtype not in _CUDA_INPUT_DTYPES:
-            problems.append(unsupported_dtype("input", x.dtype, _CUDA_INPUT_DTYPES))
-        if self.weights.dtype not in _CUDA_TABLE_DTYPES:
-            problems.append(unsupported_dtype("table", self.weights.dtype, _CUDA_TABLE_DTYPES))
-        if self.spec.nap > 16:
-            problems.append(f"nap={self.spec.nap} (max 16)")
-        problems += [p for p in (row_problem(self.spec.d_out, *_row_launch(self.knobs, self.spec.d_out,
-                                                                            self.weights.dtype)),) if p]
-        if problems:
-            raise RuntimeError(not_covered(type(self).__name__, problems, "ConfidenceLUT"))
-        if EXT.get() is None:
-            _fallback.raise_unavailable(type(self).__name__, EXT.name)
-
     def _keep_flags(self, B: int, device):
         """Table-dropout keep flags ``[B, G, tph]`` bool (TRAIN + grad only, else None); kernels scale by 1/keep."""
         if not (self.training and self.table_dropout_rate > 0.0 and torch.is_grad_enabled()):
@@ -127,7 +67,7 @@ class FusedConfidenceLUT(ConfidenceBase):
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         self._check_input(x)
-        self._require_cuda(x)
+        require_cuda(self, x)
         # [B, G, d_in]; when every group reads its own head (h_in == n_groups) the in_head gather is the identity and
         # is skipped (no copy of the input). Addressing runs in float32: a bfloat16 input goes to the kernels as is and
         # is upconverted while each row is staged (exact); float16 is cast here. grad x comes back in the input dtype.
@@ -143,8 +83,8 @@ class FusedConfidenceLUT(ConfidenceBase):
         keep = self._keep_flags(x.shape[0], x.device)
         keep_scale = 1.0 / (1.0 - self.table_dropout_rate)
         log_tau = self.log_read_tau if self.read_top_n == 2 else self.confidence_log_beta
-        grp = _FusedConfidence.apply(z, self.weights, self.confidence_log_beta.float(),
-                                     self.confidence_log_gamma.float(), log_tau.float(),
-                                     self._anc_a16, self._anc_b16, keep, keep_scale, self.spec.nap,
-                                     self.read_top_n, self.knobs, out_bf16)
+        grp = FusedConfidence.apply(z, self.weights, self.confidence_log_beta.float(),
+                                    self.confidence_log_gamma.float(), log_tau.float(),
+                                    self._anc_a16, self._anc_b16, keep, keep_scale, self.spec.nap,
+                                    self.read_top_n, self.knobs, out_bf16)
         return self._route(grp, x).to(x.dtype)

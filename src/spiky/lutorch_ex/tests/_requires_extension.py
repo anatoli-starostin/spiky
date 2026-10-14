@@ -28,11 +28,11 @@ def _probe(which: str):
         from spiky.lutorch_ex.cartridges._fused_manifesto_cuda import EXT
         return EXT.get() is not None, EXT.name
     if which == "confidence":
-        from spiky.lutorch_ex.cartridges.fused_confidence import EXT
+        from spiky.lutorch_ex.cartridges._fused_confidence_cuda import EXT
         return EXT.get() is not None, EXT.name
     if which == "quantised":
-        from spiky.lutorch_ex.cartridges import _pow2_int8
-        return _pow2_int8.ensure_registered(), _pow2_int8.EXT.name
+        from spiky.lutorch_ex.cartridges import _fused_quantised_cuda as fq
+        return fq.ensure_registered(), fq.EXT.name
     raise ValueError(f"unknown extension {which!r} (expected 'manifesto', 'confidence' or 'quantised')")
 
 

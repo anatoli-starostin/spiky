@@ -26,12 +26,12 @@ is a lutorch_ex extension of the reference (which was n=2-only).
 Implementations (the class is the implementation, there is no selector):
 * :class:`QuantisedConfidenceLUT` -- the reference: the torch definition (``_pow2``) only, every case, CPU and CUDA,
   compiled on CUDA. It loads no extension.
-* :class:`FusedQuantisedConfidenceLUT` -- the fused twin: one fused CUDA forward (``_pow2_int8.FusedQuantRead``:
-  addressing, the per-table integers and straight-through weights, the fake-quant gather, in one kernel after the
-  table exponents) and one hand-written CUDA backward that reads the forward's per-table integers back; read_top_n 1
-  and 2 are two instantiations of the same kernels (template parameter N, as in the deployed kernel). Cases the
-  kernel does not cover (single anchors, nap > 8, a CPU input, a non-float32 input or table) raise, naming the case, and
-  so does a missing extension.
+* :class:`FusedQuantisedConfidenceLUT` -- the fused twin: one fused CUDA forward
+  (``_fused_quantised_cuda.FusedQuantRead``: addressing, the per-table integers and straight-through weights, the
+  fake-quant gather, in one kernel after the table exponents) and one hand-written CUDA backward that reads the
+  forward's per-table integers back; read_top_n 1 and 2 are two instantiations of the same kernels (template parameter
+  N, as in the deployed kernel). Cases the kernel does not cover (single anchors, nap > 8, a CPU input, a non-float32
+  input or table) raise, naming the case, and so does a missing extension.
 * :class:`DeployedQuantisedConfidenceLUT` -- the inference-only int8 form, read_top_n 1 or 2 as exported: on CUDA ONE
   kernel (``csrc/pow2_int8_read.cu``, deploy_fwd: addressing, the integers, the int8 shift-add read), float32 input; on
   CPU the torch definition (``_pow2``), the same integers.
@@ -48,9 +48,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..lut_spec import LUTSpec
-from . import _fallback, _pow2, _pow2_int8   # _pow2_int8: FusedQuantisedConfidenceLUT only
-from ._cuda_ext import device_problem, not_covered, row_problem, row_threads
-from ._dtypes import _LOW_PRECISION, unsupported_dtype
+from . import _fused_quantised_cuda, _pow2   # _fused_quantised_cuda: the fused and deployed classes only
+from ._dtypes import _LOW_PRECISION
 from ._fused_ops import _global_cells
 from .confidence import ConfidenceLUT
 from .confidence_base import ConfidenceBase
@@ -310,12 +309,6 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
         return self._route(self._quant_grp_out(u, c, c_alt, u_abs_star, frozen_coef=frozen_coef), x)
 
 
-#: The quantised family's fused CUDA kernels (quant_fwd / quant_bwd, deploy_fwd) take float32 input and a float32 table
-#: and write float32 output only.
-_FUSED_DTYPES = (torch.float32,)
-_FUSED_OUTPUT = "the output is torch.float32"
-
-
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     """The fused twin of :class:`QuantisedConfidenceLUT`: one fused CUDA forward; see the module docstring.
 
@@ -324,10 +317,10 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     :class:`~spiky.lutorch_ex.cartridges._fallback.NativeUnavailableError` with its classified cause. Same parameters,
     state_dict and deployment export as the reference.
 
-    Forward (``_pow2_int8.FusedQuantRead``): the table exponents, then ONE kernel for the whole read -- addressing, the
-    p2 integers and straight-through weights in registers, the fake-quant gather and the fixed-order reduction (the
-    order is documented in ``csrc/pow2_int8_read.cu``). The margins never reach global memory. Backward: ONE
-    hand-written kernel that re-stages z per CTA for the margins, as FusedConfidenceLUT's does, and reads the
+    Forward (``_fused_quantised_cuda.FusedQuantRead``): the table exponents, then ONE kernel for the whole read --
+    addressing, the p2 integers and straight-through weights in registers, the fake-quant gather and the fixed-order
+    reduction (the order is documented in ``csrc/pow2_int8_read.cu``). The margins never reach global memory. Backward:
+    ONE hand-written kernel that re-stages z per CTA for the margins, as FusedConfidenceLUT's does, and reads the
     forward's per-table integers (one packed int32 per table) instead of recomputing them; its reduction orders are
     documented beside it."""
 
@@ -335,7 +328,7 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._init_quant(quant_mode, quant_overrides)
         # Build / register the op eagerly; never raises -- _require raises per call.
-        _pow2_int8.ensure_registered()
+        _fused_quantised_cuda.ensure_registered()
         # int16 copies of the anchors for the kernel (the int64 buffers stay the state_dict's source of truth).
         if spec.d_in > torch.iinfo(torch.int16).max:
             raise ValueError(f"FusedQuantisedConfidenceLUT needs d_in <= 32767, got {spec.d_in}")
@@ -354,37 +347,15 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         else:
             self._anc_b16 = self._zoff = self._zent = None
 
-    def _require(self, x: torch.Tensor) -> None:
-        """Raise unless the kernel can run this call: a RuntimeError naming every case it does not cover (single
-        anchors, nap > 8, a CPU input, an input or table other than float32, a d_out one CTA cannot cover), or the
-        classified NativeUnavailableError when only the extension is missing. The reference class is offered only for
-        the cases it runs: not for a bfloat16 / float16 input or table, which it does not take either."""
-        problems = []
-        if self.single:
-            problems.append("anchor_mode='single' (pairs only)")
-        if self.spec.nap > 8:
-            problems.append(f"nap={self.spec.nap} (max 8)")
-        problems += [p for p in (device_problem(x),) if p]
-        if x.dtype != torch.float32:
-            problems.append(unsupported_dtype("input", x.dtype, _FUSED_DTYPES, _FUSED_OUTPUT))
-        if self.weights.dtype != torch.float32:
-            problems.append(unsupported_dtype("table", self.weights.dtype, _FUSED_DTYPES))
-        problems += [p for p in (row_problem(self.spec.d_out, *row_threads(self.spec.d_out, (4, 2, 1))),) if p]
-        if problems:
-            lowp = x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
-            raise RuntimeError(not_covered(type(self).__name__, problems, None if lowp else "QuantisedConfidenceLUT"))
-        if not _pow2_int8.ensure_registered():
-            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT.name)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         self._check_input(x)
-        self._require(x)
+        _fused_quantised_cuda.require_cuda(self, x)
         return self._forward_impl(x)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z = (x if self.spec.h_in == self.spec.n_groups else x[:, self.in_head, :]).contiguous()
         dmask = self._table_dropout_mask(x.shape[0], x.device, x.dtype)
-        grp_out = _pow2_int8.FusedQuantRead.apply(
+        grp_out = _fused_quantised_cuda.FusedQuantRead.apply(
             z, self.weights, self.confidence_log_beta.float(), self.confidence_log_gamma.float(),
             self.log_read_tau.float() if self.read_top_n == 2 else None, self._anc_a16, self._anc_b16, self._zoff,
             self._zent, None if dmask is None else dmask.contiguous(), self._quant, self.read_top_n,
@@ -398,7 +369,7 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     float tensor; the per-(group,channel) output scale lives, pre-folded, in the ProjectionMHL decompress
     weight. The read width is the export's: ``meta["read_top_n"]`` (1 or 2), never a user choice.
 
-    On CUDA the whole read is ONE kernel (``_pow2_int8`` / ``csrc/pow2_int8_read.cu``, deploy_fwd, the
+    On CUDA the whole read is ONE kernel (``_fused_quantised_cuda`` / ``csrc/pow2_int8_read.cu``, deploy_fwd, the
     FusedQuantisedConfidenceLUT forward template specialised for the stored int8 rows and for the read width):
     the margins and integers in registers, int8 rows gathered and shifted, an exact int32 sum. It needs a float32
     input, nap <= 8 and d_in <= 32767; anything else raises, naming the case, and a missing extension raises
@@ -454,38 +425,17 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # inference
         # No float32 ``weights`` Parameter here (int8 ``packed`` instead), so the reference forward's low-precision
         # guard (which reads ``self.weights.dtype``) cannot run on it -- hence the override, rejecting bfloat16 /
-        # float16 on the input.
-        # On CUDA this is a fused CUDA cartridge: float32 in / out only (float64 is refused by _require_kernel); the CPU
-        # path runs the torch definition, which also takes float64. The message is true on both devices.
+        # float16 on the input. On CUDA this is a fused CUDA cartridge: float32 in / out only (float64 is refused by
+        # require_deploy_cuda); the CPU path runs the torch definition, which also takes float64. The message is true on
+        # both devices.
         if x.dtype in _LOW_PRECISION:
-            raise TypeError(f"{type(self).__name__}: " + unsupported_dtype(
-                "input", x.dtype, _FUSED_DTYPES, f"{_FUSED_OUTPUT}; on the CPU the torch definition also takes "
-                "torch.float64"))
+            raise TypeError(f"{type(self).__name__}: " + _fused_quantised_cuda.input_dtype_problem(
+                x.dtype, "on the CPU the torch definition also takes torch.float64"))
         if x.is_cuda:
             self._check_input(x)
-            ext = self._require_kernel(x)
+            ext = _fused_quantised_cuda.require_deploy_cuda(self, x)
             return self._forward_kernel(x, ext)
         return self._forward_impl(x)
-
-    def _require_kernel(self, x: torch.Tensor):
-        """The extension module, or raise: a RuntimeError naming every case the deploy kernel does not cover (an input
-        other than float32, nap > 8, d_in beyond int16 anchors, a d_out one CTA cannot cover at the kernel's widths
-        8 / 4 / 2 / 1), or the classified NativeUnavailableError when only the extension is missing. The deployed
-        class has no reference twin to offer."""
-        problems = []
-        if x.dtype != torch.float32:
-            problems.append(unsupported_dtype("input", x.dtype, _FUSED_DTYPES, _FUSED_OUTPUT))
-        if self.spec.nap > 8:
-            problems.append(f"nap={self.spec.nap} (max 8)")
-        if self.spec.d_in > torch.iinfo(torch.int16).max:
-            problems.append(f"d_in={self.spec.d_in} (max {torch.iinfo(torch.int16).max})")
-        problems += [p for p in (row_problem(self.spec.d_out, *row_threads(self.spec.d_out, (8, 4, 2, 1))),) if p]
-        if problems:
-            raise RuntimeError(not_covered(type(self).__name__, problems, None))
-        ext = _pow2_int8.EXT.get()
-        if ext is None:
-            _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT.name)
-        return ext
 
     def _forward_kernel(self, x: torch.Tensor, ext) -> torch.Tensor:
         cfg = self._quant
