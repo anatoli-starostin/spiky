@@ -198,10 +198,10 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     #: (benchmarks/) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
     _COMPILE_OPTIONS = {"realize_reads_threshold": 8, "realize_opcount_threshold": 100}
 
-    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
-        # Default read_top_n=2 (unlike ConfidenceLUT's 1): the two-cell read is the reference integer form. read_top_n=1
-        # trains, evaluates and exports too (FusedQuantisedConfidenceLUT covers both widths): to_deployment records
-        # meta["read_top_n"] and DeployedQuantisedConfidenceLUT reads one cell (deploy_fwd_kernel<VEC, 1>).
+    def __init__(self, spec, *, read_top_n: int, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
+        # read_top_n is required (no default), as for every confidence cartridge. Both widths train, evaluate and
+        # export (FusedQuantisedConfidenceLUT covers both too): to_deployment records meta["read_top_n"] and
+        # DeployedQuantisedConfidenceLUT reads that many cells (deploy_fwd_kernel<VEC, N>).
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._init_quant(quant_mode, quant_overrides)
 

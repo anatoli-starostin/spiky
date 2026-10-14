@@ -58,12 +58,12 @@ def test_default_is_unchanged_fp32_path():
 def test_bad_options_rejected(kw, match):
     spec = LUTSpec(h_in=2, h_out=2, tph=2, nap=3, d_in=8, d_out=8)
     with pytest.raises(ValueError, match=match):
-        ProjectionMHL(ConfidenceLUT(spec, seed=1), d_model=16, **kw)
+        ProjectionMHL(ConfidenceLUT(spec, read_top_n=1, seed=1), d_model=16, **kw)
 
 
 def test_cpu_forward_raises_clearly():
     spec = LUTSpec(h_in=2, h_out=2, tph=2, nap=3, d_in=8, d_out=8)
-    m = ProjectionMHL(ConfidenceLUT(spec, seed=1), d_model=16, fp8_projections=("decompress",))
+    m = ProjectionMHL(ConfidenceLUT(spec, read_top_n=1, seed=1), d_model=16, fp8_projections=("decompress",))
     with pytest.raises(RuntimeError, match="CUDA"):
         m(torch.randn(4, 16))
 

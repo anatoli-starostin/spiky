@@ -179,16 +179,13 @@ def test_tau_arguments_at_read_top_n_1_raise(cls, given):
 
 @pytest.mark.parametrize("cls", _confidence_classes()[:3], ids=lambda c: c.__name__)
 def test_bare_read_top_n_1_constructs_without_tau(cls):
-    """Neither τ argument given at read_top_n=1: constructs as always, silently, with no τ (also with read_top_n left at
-    its default where that default is 1: ConfidenceLUT and FusedConfidenceLUT; the quantised classes default to 2)."""
+    """Neither τ argument given at read_top_n=1: constructs as always, silently, with no τ (read_top_n itself has no
+    default: test_read_top_n_required.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
-    built = [cls(spec, seed=0, weight_init_std=1.0, read_top_n=1)]
-    if cls.__name__ in ("ConfidenceLUT", "FusedConfidenceLUT"):
-        built.append(cls(spec, seed=0, weight_init_std=1.0))
-    for m in built:
-        assert m.read_top_n == 1
-        assert not hasattr(m, "log_read_tau")
-        assert {n for n, _ in m.named_parameters()} == {"weights", "confidence_log_beta", "confidence_log_gamma"}
+    m = cls(spec, seed=0, weight_init_std=1.0, read_top_n=1)
+    assert m.read_top_n == 1
+    assert not hasattr(m, "log_read_tau")
+    assert {n for n, _ in m.named_parameters()} == {"weights", "confidence_log_beta", "confidence_log_gamma"}
 
 
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
@@ -213,4 +210,4 @@ def test_the_removed_read_flags_raise(flag):
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=4)
     for cls in (ConfidenceLUT, QuantisedConfidenceLUT):
         with pytest.raises(TypeError, match=flag):
-            cls(spec, seed=1, **{flag: True})
+            cls(spec, seed=1, read_top_n=1, **{flag: True})

@@ -44,8 +44,8 @@ class FusedConfidenceLUT(ConfidenceBase):
     :class:`CudaKnobs`; default from the environment).
     """
 
-    def __init__(self, spec, *, knobs: CudaKnobs | None = None, **kw):
-        super().__init__(spec, **kw)
+    def __init__(self, spec, *, read_top_n: int, knobs: CudaKnobs | None = None, **kw):
+        super().__init__(spec, read_top_n=read_top_n, **kw)
         self.knobs = knobs if knobs is not None else CudaKnobs()
         if spec.d_in > torch.iinfo(torch.int16).max:
             raise ValueError(f"FusedConfidenceLUT needs d_in <= 32767, got {spec.d_in}")

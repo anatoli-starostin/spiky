@@ -22,7 +22,8 @@ class ConfidenceBase(ManifestoLUT):
     """Gen-3 confidence-scored cartridge state; see the module docstring.
 
     Args (beyond the shared :class:`ManifestoLUT` ones):
-        read_top_n: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion).
+        read_top_n: required, no default: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion). Every
+            construction states the read width.
         beta_init / gamma_init: initial β, γ (stored log-parametrised; champion (β,γ)=(2,1)).
         read_tau_init: initial τ (default 0.5, the champion). Only valid at read_top_n=2.
         read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer. Only valid at
@@ -39,7 +40,7 @@ class ConfidenceBase(ManifestoLUT):
         self,
         spec,
         *,
-        read_top_n: int = 1,
+        read_top_n: int,
         beta_init: float = 2.0,
         gamma_init: float = 1.0,
         read_tau_init: Optional[float] = None,

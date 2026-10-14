@@ -213,4 +213,4 @@ def test_quant_config_and_wiring():
     assert {"confidence_log_beta", "confidence_log_gamma", "log_read_tau"} <= names
     assert not hasattr(m, "confidence_g")  # g dropped entirely
     with pytest.raises(ValueError):
-        QuantisedConfidenceLUT(spec, seed=0, weight_init_std=1.0, quant_mode="bogus")
+        QuantisedConfidenceLUT(spec, read_top_n=2, seed=0, weight_init_std=1.0, quant_mode="bogus")

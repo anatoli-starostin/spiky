@@ -48,7 +48,7 @@ def test_default_projection_dtype_is_none_and_unchanged():
 def test_invalid_projection_dtype_rejected(bad):
     spec = LUTSpec(h_in=2, h_out=2, tph=2, nap=3, d_in=8, d_out=8)
     with pytest.raises(ValueError, match="projection_dtype"):
-        ProjectionMHL(ConfidenceLUT(spec, seed=1), d_model=16, projection_dtype=bad)
+        ProjectionMHL(ConfidenceLUT(spec, read_top_n=1, seed=1), d_model=16, projection_dtype=bad)
 
 
 @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=needs_cuda)])

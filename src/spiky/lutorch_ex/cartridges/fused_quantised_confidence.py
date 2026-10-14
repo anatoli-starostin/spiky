@@ -26,7 +26,7 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     forward's per-table integers (one packed int32 per table) instead of recomputing them; its reduction orders are
     documented beside it."""
 
-    def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
+    def __init__(self, spec, *, read_top_n: int, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._init_quant(quant_mode, quant_overrides)
         # Build / register the op eagerly; never raises -- _require raises per call.

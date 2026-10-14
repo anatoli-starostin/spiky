@@ -160,14 +160,14 @@ def no_confidence_ext(monkeypatch):
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 def test_fused_confidence_without_extension_raises_with_cause(no_confidence_ext):
-    m = lx.FusedConfidenceLUT(_spec(), seed=0).cuda().train()
+    m = lx.FusedConfidenceLUT(_spec(), read_top_n=1, seed=0).cuda().train()
     with pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
         m(torch.randn(32, 4, 8, device="cuda"))
     assert "13.0" in str(e.value)
 
 
 def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
-    m = lx.FusedConfidenceLUT(_spec(), seed=0).train()
+    m = lx.FusedConfidenceLUT(_spec(), read_top_n=1, seed=0).train()
     with pytest.raises(RuntimeError, match=r"Construct ConfidenceLUT"):
         m(torch.randn(16, 4, 8))
 
@@ -178,7 +178,7 @@ def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
 def test_no_backend_argument(cls):
     """The class is the implementation; there is nothing to select."""
     with pytest.raises(TypeError, match="backend"):
-        cls(_spec(), seed=0, backend="cuda")
+        cls(_spec(), seed=0, backend="cuda", **({"read_top_n": 1} if "Confidence" in cls.__name__ else {}))
 
 
 # -- FusedQuantisedConfidenceLUT (the p2_scalars op) -----------------------------------------------------------------

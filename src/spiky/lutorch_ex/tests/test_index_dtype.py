@@ -186,10 +186,10 @@ def test_auto_widens_a_call_too_large_for_int32_positions(monkeypatch):
     spec = LUTSpec(**GEOM)                                         # G * tph * 2 = 128 entries per row
     monkeypatch.setattr(mb, "_INT32_MAX_ENTRIES", 128 * 10)
     x_small, x_big = torch.randn(10, spec.h_in, spec.d_in), torch.randn(11, spec.h_in, spec.d_in)
-    auto = lx.ConfidenceLUT(spec, seed=1)
+    auto = lx.ConfidenceLUT(spec, read_top_n=1, seed=1)
     assert auto._addresses(x_small)[2].dtype == torch.int32
     assert auto._addresses(x_big)[2].dtype == torch.int64
-    explicit = lx.ConfidenceLUT(spec, seed=1, index_dtype=torch.int32)
+    explicit = lx.ConfidenceLUT(spec, read_top_n=1, seed=1, index_dtype=torch.int32)
     assert explicit._addresses(x_big)[2].dtype == torch.int32
 
 
@@ -201,7 +201,7 @@ def test_narrow_or_bad_index_dtype_rejected(bad):
 
 def test_addressing_produces_the_requested_dtype():
     spec = LUTSpec(**GEOM)
-    m = lx.ConfidenceLUT(spec, seed=1, index_dtype=torch.int32)
+    m = lx.ConfidenceLUT(spec, read_top_n=1, seed=1, index_dtype=torch.int32)
     _, _, c, _, _, c_alt = m._addresses(torch.randn(8, spec.h_in, spec.d_in))
     assert c.dtype == torch.int32 and c_alt.dtype == torch.int32
     assert m.powers.dtype == torch.int64                         # the buffer (state_dict) is unchanged

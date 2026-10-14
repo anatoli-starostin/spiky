@@ -104,9 +104,9 @@ def test_no_fallback_off_cuda():
     """No fallback: a CPU input and a float64 input raise, naming the case and the reference class."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
     with pytest.raises(RuntimeError, match=r"the input is on cpu.*Construct ConfidenceLUT"):
-        FusedConfidenceLUT(spec, seed=0).eval()(torch.randn(5, 2, 8))
+        FusedConfidenceLUT(spec, read_top_n=1, seed=0).eval()(torch.randn(5, 2, 8))
     with pytest.raises(RuntimeError, match=r"input dtype torch.float64.*table dtype torch.float64"):
-        FusedConfidenceLUT(spec, seed=0).cuda().double().eval()(torch.randn(5, 2, 8, device="cuda",
+        FusedConfidenceLUT(spec, read_top_n=1, seed=0).cuda().double().eval()(torch.randn(5, 2, 8, device="cuda",
                                                                             dtype=torch.float64))
 
 
@@ -296,4 +296,4 @@ def test_d_out_one_cta_cannot_cover_is_not_a_cuda_case():
     spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=3, d_in=6, d_out=4100, anchor_mode="pairs")
     x = torch.randn(3, 1, 6, device="cuda")
     with torch.no_grad(), pytest.raises(RuntimeError, match=r"d_out=4100 needs 1056 threads.*Construct ConfidenceLUT"):
-        FusedConfidenceLUT(spec, seed=0).cuda().eval()(x)
+        FusedConfidenceLUT(spec, read_top_n=1, seed=0).cuda().eval()(x)

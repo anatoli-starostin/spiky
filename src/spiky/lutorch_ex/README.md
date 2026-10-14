@@ -211,7 +211,7 @@ Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 
 | argument | default | meaning |
 | --- | --- | --- |
-| `read_top_n` | `1` (`2` for `QuantisedConfidenceLUT`) | `1` = scored single cell, `2` = scored two-cell blend |
+| `read_top_n` | required | `1` = scored single cell, `2` = scored two-cell blend; omitting it raises `TypeError` |
 | `beta_init`, `gamma_init` | `2.0`, `1.0` | initial `β`, `γ` (must be `> 0`) |
 | `read_tau_init` | `0.5` | initial `τ`; only valid with `read_top_n=2` (at `read_top_n=1` it raises `ValueError`: no blend, no `τ`) |
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
@@ -232,9 +232,10 @@ of two forms of the same maths:
   adds, so it is not bit-reproducible run to run, like the rest of the CUDA training step.
 
 Quantised (`QuantisedConfidenceLUT`, in addition to the Confidence arguments): `quant_mode="p2_int8"`
-(the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). Its
-`read_top_n` defaults to `2`. `read_top_n=1` trains (also as `FusedQuantisedConfidenceLUT`), evaluates and exports
-too: the export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` reads one cell.
+(the only preset) and `quant_overrides=None`, see [below](#int8-quantisation-and-deployment). As for
+every confidence cartridge, `read_top_n` is required. Both widths train (also as `FusedQuantisedConfidenceLUT`),
+evaluate and export: the export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` reads that many
+cells.
 
 ### PyTorch's embedding_bag backward size limit
 
@@ -356,7 +357,7 @@ The wrapper puts a linear map on each side of the cartridge:
   reduce them. fp8 `"decompress"` alone leaves the addresses bit-identical.
 
 ```python
-ffn = ProjectionMHL(ConfidenceLUT(spec, seed=1), input_dim=384, output_dim=256)
+ffn = ProjectionMHL(ConfidenceLUT(spec, seed=1, read_top_n=1), input_dim=384, output_dim=256)
 print(ffn(torch.randn(10, 384)).shape)   # torch.Size([10, 256])
 ```
 
@@ -392,7 +393,7 @@ opt.step()
 
 ## int8 quantisation and deployment
 
-`QuantisedConfidenceLUT(spec, quant_mode="p2_int8", …)` is Gen-3 trained so that the deployed read needs
+`QuantisedConfidenceLUT(spec, read_top_n=2, quant_mode="p2_int8", …)` is Gen-3 trained so that the deployed read needs
 only int8 rows, additions and bit shifts. Training is **quant-aware**: every forward already computes
 with the rounded tables and weights. Both roundings are straight-through, so the gradient reaches the
 float tables and `β`, `γ`, `τ`.

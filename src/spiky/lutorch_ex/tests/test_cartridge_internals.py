@@ -83,10 +83,11 @@ def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):
     """A misspelt option (here table_dropout_rate) used to be swallowed by ManifestoLUT.__init__(**unused): the
     cartridge built fine with the option silently at its default (dropout off)."""
     spec = _lx.LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8)
+    kw = {"read_top_n": 1} if "Confidence" in cls.__name__ else {}     # required on the confidence family
     with _pytest.raises(TypeError, match=r"table_droput_rate"):
-        cls(spec, seed=0, table_droput_rate=0.5)
+        cls(spec, seed=0, table_droput_rate=0.5, **kw)
     with _pytest.raises(TypeError, match=r"\['also_bogus', 'bogus'\]"):
-        cls(spec, seed=0, bogus=1, also_bogus=2)
+        cls(spec, seed=0, bogus=1, also_bogus=2, **kw)
 
 
 # ---- the shared base has no runnable forward; no fused class inherits a reference forward -----------------------
@@ -103,7 +104,7 @@ def test_the_shared_bases_have_no_forward(base):
             return x
 
     with _pytest.raises(NotImplementedError, match="shared scaffolding base and has no forward"):
-        Bare(spec, seed=0)(torch.randn(3, 2, 8))
+        Bare(spec, seed=0, **({"read_top_n": 1} if base is ConfidenceBase else {}))(torch.randn(3, 2, 8))
 
 
 def test_no_fused_class_inherits_a_reference_forward():
