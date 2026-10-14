@@ -38,24 +38,26 @@ class LUTFFNConfig:
     weight_init_std: float = 1e-3  # table init std
     table_dropout_rate: float = 0.2
     tv_lambda: float = 10.0        # cell-TV penalty weight (applied in base_train's step loop)
+    fused: bool = True             # explicit FusedConfidenceLUT CUDA kernel (hand-fused twin of ConfidenceLUT; needs the lutorch_ex_fused_confidence ext + setuptools in the venv). False -> reference ConfidenceLUT (Inductor-compiled read, no ext). Bitwise-equal at eval; fused ~1.6x faster train fwd+bwd.
 
 
 class LUTFeedForward(nn.Module):
-    """A single transformer block's FFN as a ProjectionMHL(ConfidenceLUT) fp32 island."""
+    """A single transformer block's FFN as a ProjectionMHL(FusedConfidenceLUT) fp32 island (reference ConfidenceLUT when cfg.fused=False)."""
 
     _is_lut_ffn = True  # marker for GPT.setup_optimizer() param routing
 
     def __init__(self, d_model: int, cfg: LUTFFNConfig, device=None):
         super().__init__()
         # Lazy import: only pulled in when LUT-FFN is actually enabled, so dense runs never touch lutorch_ex.
-        from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
+        from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, FusedConfidenceLUT, ProjectionMHL
 
         spec = LUTSpec(h_in=cfg.h, h_out=cfg.h, tph=cfg.tph, nap=cfg.nap,
                        d_in=cfg.d, d_out=cfg.d, anchor_mode="pairs")
-        cart = ConfidenceLUT(spec, seed=cfg.seed, read_top_n=cfg.read_top_n,
-                             beta_init=cfg.beta_init, gamma_init=cfg.gamma_init,
-                             learnable_score=True, weight_init_std=cfg.weight_init_std,
-                             table_dropout_rate=cfg.table_dropout_rate)
+        Cart = FusedConfidenceLUT if cfg.fused else ConfidenceLUT   # [lut_nanochat] explicit fused cartridge (hand CUDA kernel) by default
+        cart = Cart(spec, seed=cfg.seed, read_top_n=cfg.read_top_n,
+                    beta_init=cfg.beta_init, gamma_init=cfg.gamma_init,
+                    learnable_score=True, weight_init_std=cfg.weight_init_std,
+                    table_dropout_rate=cfg.table_dropout_rate)
         self.mhl = ProjectionMHL(cart, d_model=d_model).float()  # fp32 island
 
         # Clean zero-init identity drop-in: ProjectionMHL zeros decompress.weight; also zero its bias so
