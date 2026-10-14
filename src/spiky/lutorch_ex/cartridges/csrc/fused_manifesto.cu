@@ -296,8 +296,16 @@ __device__ __forceinline__ void manifesto_bwd_body(const Params& p, const float*
     int16_t* sb = p.anc_b ? reinterpret_cast<int16_t*>(smem_raw + L.sb) : nullptr;
 
     const int tid = threadIdx.x, bd = blockDim.x;
-    const int g = blockIdx.x % p.G;
-    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
+    // Group-major CTA order, unconditionally (the forward kernels keep g = blockIdx.x % G). This backward is
+    // dominated by its gradient atomics: walking the groups put every group's gradient slice in flight at once,
+    // and on the H100 the atomic targets were evicted from L2 and written back again and again (75-604 M L2
+    // atomic sectors at 14.8 sectors / request, 1-8 GB of DRAM writes for a 50 MB gradient). With one group's
+    // CTAs consecutive, the CTAs in flight work on ~1-2 groups' ~3 MiB slices, which stay in L2. Measured faster
+    // on both the H100 and the RTX 5090, so it is not a knob.
+    const int64_t cta = static_cast<int64_t>(blockIdx.x);
+    const int64_t nb = (p.B + p.rows_per_cta - 1) / p.rows_per_cta;          // CTAs per group
+    const int g = static_cast<int>(cta / nb);
+    const int b0 = static_cast<int>((cta % nb) * p.rows_per_cta);
     const int an = p.tph * p.nap;
     for (int i = tid; i < an; i += bd) {
         sa[i] = p.anc_a[(size_t)g * an + i];
