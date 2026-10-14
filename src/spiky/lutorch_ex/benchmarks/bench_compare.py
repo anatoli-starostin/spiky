@@ -1,7 +1,6 @@
-"""Compare two performance snapshots of record (bench_snapshot JSON) and draw the comparison figures.
+"""Compare two performance snapshots (bench_snapshot JSON) and draw the comparison figures.
 
-    python -m spiky.lutorch_ex.benchmarks.bench_compare benchmarks/snapshot_159.json benchmarks/snapshot_162.json \
-        --out-dir benchmarks/figures_159_vs_162
+    python -m spiky.lutorch_ex.benchmarks.bench_compare before.json after.json --out-dir figures_before_vs_after
 
 reads two snapshot JSONs (nothing else: no PR text, no benchmark run) and writes five PNGs: interleaved before / after
 bars (before orange, after green) for median time and for peak memory, each split into two figures by phase (eval
