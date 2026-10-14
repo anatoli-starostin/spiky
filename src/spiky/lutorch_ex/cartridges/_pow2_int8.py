@@ -8,12 +8,12 @@ csrc/pow2_int8_read.cu provides `scalars` (the forward of the lutorch_ex::p2_sca
 csrc/pow2_scalars.cuh, for every table) and FusedQuantisedConfidenceLUT's read: `table_exponents`, `quant_fwd` (the
 fused forward) and `quant_bwd` (the fused backward), wrapped by FusedQuantRead.
 
-Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an architecture
-in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been validated on real
-hardware. Nothing in it is architecture-specific; the allowlist records validation, not a hardware requirement. Anything
-else -- no CUDA, an architecture not on the list, no nvcc, a failed build -- makes `load()` return None and records the
-classified cause (cartridges/_fallback.py), which FusedQuantisedConfidenceLUT raises with. There is no fallback and no
-switch: to run without the extension, construct QuantisedConfidenceLUT.
+Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an
+architecture in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been
+validated on real hardware. Nothing in it is architecture-specific; the allowlist records validation, not a hardware
+requirement. Anything else -- no CUDA, an architecture not on the list, no nvcc, a failed build -- makes `load()` return
+None and records the classified cause (cartridges/_fallback.py), which FusedQuantisedConfidenceLUT raises with. There is
+no fallback and no switch: to run without the extension, construct QuantisedConfidenceLUT.
 
 CUSTOM OP -- the per-table integers of the power-of-two read.
 
@@ -66,7 +66,7 @@ def load():
         _ext = _load(name=EXT_NAME, sources=[os.path.join(_CSRC, "pow2_int8_read.cu")],
                      extra_cuda_cflags=["-O3", "-std=c++20", "--fmad=false"], extra_cflags=["-O3", "-std=c++20"],
                      verbose=False)                          # cpp_extension targets the visible device's architecture
-    except Exception as e:                                   # no nvcc, compile error, ...: recorded, raised by the class
+    except Exception as e:                                   # no nvcc, compile error, ...: recorded; the class raises
         _ext = None
         _fallback.record_build_failure(EXT_NAME, e)
     return _ext
@@ -100,7 +100,8 @@ def ensure_registered() -> bool:
     @p2_scalars.register_fake
     def _(d, tau, g, beta, gamma, lo, hi, Q):
         lead = d.shape[:-1]
-        return (d.new_empty(*lead, 2), d.new_empty(*lead, 3, dtype=torch.uint8), d.new_empty(*lead, 2, dtype=torch.int8))
+        return (d.new_empty(*lead, 2), d.new_empty(*lead, 3, dtype=torch.uint8),
+                d.new_empty(*lead, 2, dtype=torch.int8))
 
     def setup_context(ctx, inputs, output):
         d, tau, g, beta, gamma, lo, hi, Q = inputs

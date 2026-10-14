@@ -10,9 +10,9 @@ magnitudes:
     y   = Σ_t s_t · W_t[c_t]                                  # read_top_n = 1  (ablation row 3.1)
 
 with ``β = exp(confidence_log_beta)``, ``γ = exp(confidence_log_gamma)`` learned per layer (there
-is no additive log-gain ``g``: frozen at 0, ``exp(0)=1``, it would do nothing). At ``read_top_n = 2`` (the Gen-3 champion, ablation row 3.2) the read is a
-two-cell τ-blend between the addressed cell ``c`` and its least-confident-bit neighbour ``c'``
-(``j* = argmin_j |u_j|``), still score-gated:
+is no additive log-gain ``g``: frozen at 0, ``exp(0)=1``, it would do nothing). At ``read_top_n = 2`` (the Gen-3
+champion, ablation row 3.2) the read is a two-cell τ-blend between the addressed cell ``c`` and its least-confident-bit
+neighbour ``c'`` (``j* = argmin_j |u_j|``), still score-gated:
 
     v   = σ(-2·|u_{j*}| / τ)  ∈ (0, ½]                        # τ = exp(log_read_tau), learned
     y   = Σ_t s_t · [ (1 - v) W_t[c_t] + v W_t[c_t'] ]
@@ -24,7 +24,8 @@ Gradients flow to the weight tables, ``β``, ``γ`` and (``n = 2``) ``τ``.
 
 Scope (locked): **scored-only** (no hard-forward mode / STE stitch / score rescale), **constant
 cells** only (``w_c ∈ R^{d_out}``), both anchor modes (inherited from the base). Precision:
-fp32 / fp64; bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward). (QuantisedConfidenceLUT keeps rejecting bf16 / fp16.)
+fp32 / fp64; bf16 / fp16 run as fp32 maths with one rounding per leaf (ReferenceForward). (QuantisedConfidenceLUT keeps
+rejecting bf16 / fp16.)
 
 One read, for train and eval and both n: ``y = Σ_k w_k · W[r_k]`` over the flat table rows ``r`` and weights
 ``w`` from :meth:`_cells_and_weights` (``w = s`` at n = 1; ``s(1-v)`` and ``s v`` over ``c`` and ``c'`` at n = 2).

@@ -195,11 +195,12 @@ def _bars(plt, cells, metric, phases, title, unit, lo, hi, caveat, names, path):
                             color=INK, fontstyle="italic")
                 continue
             if c["noise"] is not None and c["before"]:      # the cell's noise floor around the before value
-                ax.add_patch(plt.Rectangle((c["before"] * (1 - c["noise"]), yc - h - 0.02), c["before"] * 2 * c["noise"],
-                                           2 * h + 0.04, color=BAND, ec=MUTED, lw=0.4, zorder=0))
-            for val, col, off, oom, hatch in ((c["before"], BEFORE_C, h / 2, c["status"].startswith("OOM before"), None),
-                                              (c["after"], AFTER_C, -h / 2, c["status"].endswith("OOM after"),
-                                               "////" if noise else None)):
+                ax.add_patch(plt.Rectangle((c["before"] * (1 - c["noise"]), yc - h - 0.02),
+                                           c["before"] * 2 * c["noise"], 2 * h + 0.04,
+                                           color=BAND, ec=MUTED, lw=0.4, zorder=0))
+            bars = ((c["before"], BEFORE_C, h / 2, c["status"].startswith("OOM before"), None),
+                    (c["after"], AFTER_C, -h / 2, c["status"].endswith("OOM after"), "////" if noise else None))
+            for val, col, off, oom, hatch in bars:
                 if val is None:
                     ax.text(lo * 1.15, yc + off, "OOM" if oom else "—", va="center", ha="left", fontsize=7,
                             fontweight="bold", color=col)
@@ -301,7 +302,8 @@ def main(argv=None):
     ap.add_argument("--csv", action="store_true", help="also write comparison.csv (the joined cells)")
     ap.add_argument("--no-figures", action="store_true")
     ap.add_argument("--same-session", action="store_true",
-                    help="the two snapshots were measured in one session, interleaved cell by cell (the footnote says so)")
+                    help="the two snapshots were measured in one session, interleaved cell by cell "
+                         "(the footnote says so)")
     a = ap.parse_args(argv)
     cells, before_only, after_only, (rb, ra) = join(a.before, a.after)
     extra = new_cells(a.after, after_only)

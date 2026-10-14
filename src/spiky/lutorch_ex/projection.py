@@ -126,7 +126,8 @@ class ProjectionMHL(nn.Module):
             if p in fp8_projections and not on:
                 raise ValueError(f"fp8_projections includes {p!r} but {p}=False (there is no {p} GEMM)")
         if compress_fp8_out_dtype not in (torch.float32, torch.bfloat16):
-            raise ValueError(f"compress_fp8_out_dtype must be torch.float32 or torch.bfloat16, got {compress_fp8_out_dtype}")
+            raise ValueError(f"compress_fp8_out_dtype must be torch.float32 or torch.bfloat16, "
+                             f"got {compress_fp8_out_dtype}")
         self.fp8_projections = frozenset(fp8_projections)
         self.compress_fp8_out_dtype = compress_fp8_out_dtype
         if not compress and not decompress:

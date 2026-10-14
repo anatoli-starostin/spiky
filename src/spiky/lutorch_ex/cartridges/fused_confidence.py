@@ -3,11 +3,11 @@
 
 Same parameters, numerics, state_dict and interface as :class:`ConfidenceLUT` (read_top_n 1 and 2, pairs and single
 anchors, table dropout, learnable or frozen β / γ / τ); both build on
-:class:`~spiky.lutorch_ex.cartridges.confidence_base.ConfidenceBase`, neither inherits the other's forward. Instead of torch.compile + Inductor
-(3 forward and 9 backward kernels at the d24 geometry), one forward and one backward kernel each run the whole
-cartridge: addressing, confidence score, blend weight, score-weighted read, and on the backward the weight-gradient
-scatter, the score / blend / margin gradients into z, and the β / γ / τ gradients. The per-table address, score and
-margins never touch global memory; the backward recomputes them from z.
+:class:`~spiky.lutorch_ex.cartridges.confidence_base.ConfidenceBase`, neither inherits the other's forward. Instead of
+torch.compile + Inductor (3 forward and 9 backward kernels at the d24 geometry), one forward and one backward kernel
+each run the whole cartridge: addressing, confidence score, blend weight, score-weighted read, and on the backward the
+weight-gradient scatter, the score / blend / margin gradients into z, and the β / γ / τ gradients. The per-table
+address, score and margins never touch global memory; the backward recomputes them from z.
 
 Every launch decision Inductor makes heuristically is an explicit knob here (:class:`CudaKnobs`): threads per CTA
 (forward and backward separately), rows per CTA, the vector width of the table loads / gradient scatters, and
@@ -78,7 +78,8 @@ class _FusedConfidence(torch.autograd.Function):
         z, weights, log_beta, log_gamma, log_tau, anc_a, anc_b, keep = ctx.saved_tensors
         keep_scale, nap, n, knobs, vec, bwd_threads = ctx.cfg
         W2 = weights.reshape(-1, weights.shape[-1])
-        # The kernel reads go in fp32 (a bf16 go from the bf16-output mode is upcast: exact). gz comes back in z's dtype.
+        # The kernel reads go in fp32 (a bf16 go from the bf16-output mode is upcast: exact).
+        # gz comes back in z's dtype.
         gW, gz, gscal = fused_confidence_ext().confidence_bwd(
             go.float().contiguous(), z, anc_a, anc_b, W2, keep, keep_scale, log_beta, log_gamma, log_tau,
             nap, n, bwd_threads, knobs.rows_per_cta, vec, knobs.vec_atomics)
@@ -124,7 +125,8 @@ class FusedConfidenceLUT(ConfidenceBase):
         if self.spec.nap > 16:
             problems.append(f"nap={self.spec.nap} (max 16)")
         if need > _MAX_CTA_THREADS:
-            problems.append(f"d_out={self.spec.d_out} needs {need} threads per CTA at vec {vec} (limit {_MAX_CTA_THREADS})")
+            problems.append(f"d_out={self.spec.d_out} needs {need} threads per CTA at vec {vec} "
+                            f"(limit {_MAX_CTA_THREADS})")
         if problems:
             raise RuntimeError(f"{type(self).__name__}: not a case the fused kernels cover: {'; '.join(problems)}. "
                                f"Construct ConfidenceLUT (the reference class) for this case.")

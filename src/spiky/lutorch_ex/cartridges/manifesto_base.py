@@ -102,9 +102,9 @@ class ManifestoLUT(MultiHeadLUT):
     Scaffolding only: state (tables, anchors, the soft-sign temperatures), validation, the
     addressing and the neighbour weight (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
     runnable forward: a reference class gets its forward from
-    :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so a
-    fused class has nothing to fall back to. ``weight`` selects the neighbour-weight function; the temperature arguments
-    exist only with ``weight="softsign"``.
+    :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so
+    a fused class has nothing to fall back to. ``weight`` selects the neighbour-weight function; the temperature
+    arguments exist only with ``weight="softsign"``.
     """
     # Whether the cartridge has the neighbour-weight function (weight=, the soft-sign temperatures). False for the
     # confidence family, which scores its cells instead.

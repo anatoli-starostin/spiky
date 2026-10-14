@@ -82,10 +82,10 @@ class QuantisedScaffold:
         EXACT IN FP32, so the order of embedding_bag's sum does not matter (and FusedQuantisedConfidenceLUT's
         different, documented order gives the same bits). Per output (group g, channel c) every term is
         W_hat * 2^e * 2^k' or W_hat * 2^e * 2^(k' - q), with |W_hat| <= 128 (int8: [-128, 127]), k' in [-3, 4] and
-        q <= 3 (Q): an integer multiple of 2^(e - 6) of magnitude at most 128 * 2^10. A bag holds 2 tph = 128 terms at the
-        p2_int8 preset, so every partial sum is an integer multiple of 2^(e - 6) bounded by 128 * 128 * 2^10 = 2^24:
-        fp32 represents every integer up to 2^24 exactly, and no addition rounds. The argument FAILS (sums can round, and
-        two orders can then differ):
+        q <= 3 (Q): an integer multiple of 2^(e - 6) of magnitude at most 128 * 2^10. A bag holds 2 tph = 128 terms at
+        the p2_int8 preset, so every partial sum is an integer multiple of 2^(e - 6) bounded by 128 * 128 * 2^10 = 2^24:
+        fp32 represents every integer up to 2^24 exactly, and no addition rounds. The argument FAILS (sums can round,
+        and two orders can then differ):
         * tph > 64: 2 tph * 128 * 2^10 exceeds 2^24;
         * a read window wider than [-3, 4] (or a larger Q): more bits per term;
         * table dropout: the weights carry 1 / (1 - rate), not a power of two, so the products already round."""
@@ -139,8 +139,8 @@ class QuantisedScaffold:
         EXACTLY (power-of-two -> only the fp32 exponent field changes) into a copy of the ProjectionMHL
         decompress weight. The deployed cartridge then returns the RAW int32 accumulator (units 2^-6).
         read_top_n 1 or 2 (the export records it; the deployed class runs that read), h_out==n_groups only
-        (the per-(group,channel) scale maps 1:1 to decompress out_features; fan-in would need a pre-route scale). NOTE: this is a
-        deploy-only transform; the trained cartridge deliberately does NOT implement `decompress_scale`,
+        (the per-(group,channel) scale maps 1:1 to decompress out_features; fan-in would need a pre-route scale). NOTE:
+        this is a deploy-only transform; the trained cartridge deliberately does NOT implement `decompress_scale`,
         so ProjectionMHL never folds anything on the live (fake-quant, already-2^e-scaled) forward."""
         cfg = self._quant
         G, tph, K, d_out = self.weights.shape
@@ -150,8 +150,10 @@ class QuantisedScaffold:
                 "the per-(group,channel) output scale folds 1:1 into decompress out_features in that case.")
         Wflat = self.weights.reshape(G * tph, K, d_out)
         e = _pow2.head_chan_exponents(Wflat, G, cfg["bits"], cfg["offset"])                 # [G, d_out]
-        packed = _pow2.pack_tables(_pow2.quantise_tables(Wflat, e, cfg["bits"]), cfg["bits"]).contiguous()  # [n_tables,K,d_out] int8
-        decompress_scale = torch.pow(2.0, e.float() - _pow2.FIXED_POINT_SHIFT).reshape(-1).contiguous()     # [out_features]
+        # [n_tables, K, d_out] int8
+        packed = _pow2.pack_tables(_pow2.quantise_tables(Wflat, e, cfg["bits"]), cfg["bits"]).contiguous()
+        # [out_features]
+        decompress_scale = torch.pow(2.0, e.float() - _pow2.FIXED_POINT_SHIFT).reshape(-1).contiguous()
         tensors = {
             "packed": packed,
             "confidence_log_beta": self.confidence_log_beta.detach().clone(),
@@ -197,8 +199,8 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     #: registers and still emits the same in-order add chain (the eager maths, which layer 1 pins, is untouched).
     #: Measured at 32,768 vectors, fp32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
     #: reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90 (also at 1000). Train total unchanged.
-    #: Version-dependent: a torch upgrade can rename the options or change the heuristic; the snapshot of record
-    #: (benchmarks/bench_snapshot) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
+    #: Version-dependent: a torch upgrade can rename the options or change the heuristic; a bench_snapshot run
+    #: (benchmarks/) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
     _COMPILE_OPTIONS = {"realize_reads_threshold": 8, "realize_opcount_threshold": 100}
 
     def __init__(self, spec, *, quant_mode: str = "p2_int8", quant_overrides=None, read_top_n: int = 2, **kw):
@@ -316,10 +318,10 @@ _FUSED_OUTPUT = "the output is torch.float32"
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     """The fused twin of :class:`QuantisedConfidenceLUT`: one fused CUDA forward; see the module docstring.
 
-    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, a CUDA fp32 input and an fp32 table; anything else raises, naming the
-    case and the reference class, and a missing extension raises :class:`~spiky.lutorch_ex.cartridges._fallback.
-    NativeUnavailableError` with its classified cause. Same parameters, state_dict and deployment export as the
-    reference.
+    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, a CUDA fp32 input and an fp32 table; anything else raises,
+    naming the case and the reference class, and a missing extension raises
+    :class:`~spiky.lutorch_ex.cartridges._fallback.NativeUnavailableError` with its classified cause. Same parameters,
+    state_dict and deployment export as the reference.
 
     Forward (``_pow2_int8.FusedQuantRead``): the table exponents, then ONE kernel for the whole read -- addressing, the
     p2 integers and straight-through weights in registers, the fake-quant gather and the fixed-order reduction (the
@@ -373,8 +375,8 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
             # The reference class is offered for the cases it runs; not for a bf16 / fp16 input or table, which it does
             # not take either.
             lowp = x.dtype in _LOW_PRECISION or self.weights.dtype in _LOW_PRECISION
-            raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}."
-                               + ("" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."))
+            remedy = "" if lowp else " Construct QuantisedConfidenceLUT (the reference class) for this case."
+            raise RuntimeError(f"{type(self).__name__}: not a case the fused op covers: {'; '.join(problems)}.{remedy}")
         if not _pow2_int8.ensure_registered():
             _fallback.raise_unavailable(type(self).__name__, _pow2_int8.EXT_NAME)
 
@@ -432,7 +434,8 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         self.table_dropout_rate = 0.0
         self._compiled_train = None
         dev = torch.device(device) if device is not None else None
-        self.register_buffer("packed", tensors["packed"].to(dev) if dev else tensors["packed"])  # int8 [n_tables,K,d_out]
+        # int8 [n_tables, K, d_out]
+        self.register_buffer("packed", tensors["packed"].to(dev) if dev else tensors["packed"])
         names = ["anchor_a", "powers", "in_head", "out_head", "confidence_log_beta", "confidence_log_gamma"]
         if self.read_top_n == 2:
             names.append("log_read_tau")                 # the blend temperature (n = 1 has none)
@@ -492,7 +495,8 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
         cfg = self._quant
         z = (x if self.spec.h_in == self.spec.n_groups else x[:, self.in_head, :]).contiguous()
         grp_out = ext.deploy_fwd(z, self._anc_a16, self._anc_b16, self.packed.reshape(-1, self.spec.d_out),
-                                 self.confidence_log_beta.float().reshape(1), self.confidence_log_gamma.float().reshape(1),
+                                 self.confidence_log_beta.float().reshape(1),
+                                 self.confidence_log_gamma.float().reshape(1),
                                  self.log_read_tau.float().reshape(1) if self.read_top_n == 2 else None,
                                  self.read_top_n, cfg["lo"], cfg["hi"], cfg["Q"])
         return self._route(grp_out, x)   # RAW (units 2^-6); scale folded into decompress

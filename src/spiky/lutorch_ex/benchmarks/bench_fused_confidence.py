@@ -120,7 +120,8 @@ def main():
     ap.add_argument("--tokens", type=int, default=32768)
     ap.add_argument("--n", type=int, nargs="+", default=[1, 2])
     ap.add_argument("--sweep", action="store_true", help="sweep the launch knobs for an fp32 table")
-    ap.add_argument("--sweep-bf16", action="store_true", help="sweep the launch knobs (incl. vec_bf16) for a bf16 table")
+    ap.add_argument("--sweep-bf16", action="store_true",
+                    help="sweep the launch knobs (incl. vec_bf16) for a bf16 table")
     a = ap.parse_args()
     print(f"device {torch.cuda.get_device_name()}  torch {torch.__version__}  tokens {a.tokens}")
     x = torch.randn(a.tokens, 16, 48, device="cuda", requires_grad=True)

@@ -1,5 +1,5 @@
-"""Shared plumbing for the co-located CUDA extensions: where the sources live, the JIT build, and the launch knobs of the
-two hand-written kernel families (FusedManifesto* and FusedConfidenceLUT).
+"""Shared plumbing for the co-located CUDA extensions: where the sources live, the JIT build, and the launch knobs of
+the two hand-written kernel families (FusedManifesto* and FusedConfidenceLUT).
 
 * :func:`load_extension` is the one JIT build / load of the fused cartridges' extensions (fused_manifesto,
   fused_confidence; FusedQuantisedConfidenceLUT's p2_scalars extension has its own architecture-gated loader in
@@ -24,7 +24,7 @@ from . import _fallback
 
 #: Co-located CUDA sources.
 CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
-# A stable, persistent extension cache, so each nvcc compile is paid once across processes (unless the caller chose one).
+# A persistent extension cache, so each nvcc compile is paid once across processes (unless the caller chose one).
 os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
 
 
@@ -36,8 +36,8 @@ def load_extension(name: str, sources: Sequence[str]):
         return None
     try:
         from torch.utils.cpp_extension import load
-        # torch's default -std=c++17 does not compile its own headers here (ATen/core/List_inl.h). cpp_extension supplies
-        # the CUDA_HOME include paths and a compatible host compiler, and targets the visible device's architecture.
+        # torch's default -std=c++17 does not compile its own headers here (ATen/core/List_inl.h). cpp_extension
+        # supplies the CUDA_HOME include paths and a compatible host compiler, and targets the visible device's arch.
         std = os.environ.get("SPIKY_CXX_STD", "c++20")
         flags = [f"-std={std}", "-O3"]
         return load(name=name, sources=[os.path.join(CSRC, s) for s in sources], extra_cflags=flags,

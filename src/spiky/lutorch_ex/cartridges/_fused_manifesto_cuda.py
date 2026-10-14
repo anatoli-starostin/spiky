@@ -52,7 +52,8 @@ def _ineligible(module, x: torch.Tensor):
     may be None when ``what`` says it all)."""
     if not x.is_cuda:
         if not torch.cuda.is_available():
-            return "This machine has no CUDA device, which the fused kernel needs.", "torch.cuda.is_available() is False"
+            return ("This machine has no CUDA device, which the fused kernel needs.",
+                    "torch.cuda.is_available() is False")
         return "The input is on the CPU, but the fused kernel runs on CUDA only.", f"input device: {x.device}"
     if x.dtype not in _CUDA_INPUT_DTYPES:
         return f"The {unsupported_dtype('input', x.dtype, _CUDA_INPUT_DTYPES)}.", None
