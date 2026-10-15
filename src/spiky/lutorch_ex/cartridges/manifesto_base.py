@@ -110,6 +110,9 @@ class ManifestoLUT(MultiHeadLUT):
     # Whether the cartridge has the uncertainty function (uncertainty_func=, the soft-sign temperatures). False for the
     # confidence family, which scores its cells instead.
     _HAS_UNCERTAINTY_FUNC: bool = True
+    # Whether the cartridge has a trainable float table, the one the regularisers act on. False for the inference-only
+    # DeployedQuantisedConfidenceLUT; cell_tv_penalty skips such a cartridge.
+    _HAS_TRAINABLE_TABLE: bool = True
 
     def __init__(
         self,
@@ -363,11 +366,12 @@ def _cell_tv_eager(weights: torch.Tensor, nap: int) -> torch.Tensor:
 
 def cell_tv_penalty(module: nn.Module) -> torch.Tensor:
     """Model-level Hamming-1 cell-TV penalty: the MEAN of :meth:`ManifestoLUT.cell_tv` over every
-    ``ManifestoLUT`` cartridge inside ``module`` (equivalent to the reference model's
+    ``ManifestoLUT`` cartridge inside ``module`` that has a trainable table (an inference-only
+    DeployedQuantisedConfidenceLUT is skipped) (equivalent to the reference model's
     ``lut_tv_penalty()``, which averages ``cell_tv()`` over its LUT layers). Scale by lambda and add
     to the loss, matching the reference ergonomics: ``(lam * cell_tv_penalty(model)).backward()``.
     Returns a 0-dim zero (no grad) when the module has no such cartridge."""
-    tvs = [m.cell_tv() for m in module.modules() if isinstance(m, ManifestoLUT)]
+    tvs = [m.cell_tv() for m in module.modules() if isinstance(m, ManifestoLUT) and m._HAS_TRAINABLE_TABLE]
     if not tvs:
         return torch.zeros(())
     return torch.stack(tvs).mean()

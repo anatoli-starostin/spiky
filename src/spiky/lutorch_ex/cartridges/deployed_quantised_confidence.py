@@ -35,6 +35,8 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
     holds no cartridge-specific knowledge; it is reached only via the format-tag registry (see
     :meth:`QuantisedConfidenceLUT.from_deployment`)."""
 
+    _HAS_TRAINABLE_TABLE = False     # int8 buffers only: no regulariser applies (cell_tv_penalty skips it)
+
     def __init__(self, spec: LUTSpec, tensors: dict, meta: dict, device=None,
                  index_dtype: Optional[torch.dtype] = None):
         nn.Module.__init__(self)   # skip the float32-weight-allocating ManifestoLUT.__init__
@@ -73,6 +75,10 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
             self.register_buffer("_anc_a16", self.anchor_a.to(torch.int16).contiguous(), persistent=False)
             self.register_buffer("_anc_b16", None if self.single else self.anchor_b.to(torch.int16).contiguous(),
                                  persistent=False)
+
+    def cell_tv(self) -> torch.Tensor:
+        raise TypeError(f"{type(self).__name__} is inference-only: it holds int8 tables as buffers and no trainable "
+                        "table, so the cell-TV regulariser does not apply to it (cell_tv_penalty skips it)")
 
     def decompress_scale(self) -> Optional[torch.Tensor]:
         return None   # the pow2 output scale is already folded (statically) into the stored decompress weight

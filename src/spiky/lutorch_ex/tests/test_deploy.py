@@ -222,3 +222,20 @@ def test_legacy_cmp_eps_key_in_an_export():
         assert torch.equal(legacy(x), y)
     with pytest.raises(ValueError, match="cmp_eps"):
         DeployedQuantisedConfidenceLUT(spec, payload["tensors"], {**payload["meta"], "cmp_eps": 1e-3})
+
+
+def test_cell_tv_penalty_skips_a_deployed_cartridge(tmp_path):
+    """A loaded deployment holds int8 buffers and no trainable table: cell_tv_penalty over a model that mixes it with a
+    trainable cartridge averages the trainable one only, a deployment alone gives the 0-dim zero, and a direct
+    cell_tv() call on the deployed cartridge says it is inference-only (not a bare AttributeError)."""
+    from spiky.lutorch_ex import cell_tv_penalty
+    m = _trained_model()
+    path = str(tmp_path / "deploy.lxq")
+    export_deployment(m, path)
+    dep = load_deployment(path, _make_skeleton, device="cpu")
+    assert isinstance(dep.ff0.cartridge, DeployedQuantisedConfidenceLUT)
+    mixed = nn.ModuleDict({"deployed": dep, "trainable": m.ff0})
+    assert torch.equal(cell_tv_penalty(mixed), m.ff0.cartridge.cell_tv())
+    assert torch.equal(cell_tv_penalty(dep), torch.zeros(()))
+    with pytest.raises(TypeError, match="inference-only"):
+        dep.ff0.cartridge.cell_tv()
