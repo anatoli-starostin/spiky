@@ -394,10 +394,10 @@ The record also holds the same cells at 32,768 vectors (its `large` geometry); s
 | Confidence, int8, fused | `QuantisedConfidenceLUT`'s mathematics in CUDA kernels (the report does not describe the kernels) | `FusedQuantisedConfidenceLUT` | fp32 (CUDA) | fp32 | fp32 | fp32 | yes | 0.688 · 0.952 | 1.915 · 2.744 | 128.4 · 128.4 |
 | Confidence, int8, deployed | inference-only int8 read built from an export; read width from the export (report §3.5) | `DeployedQuantisedConfidenceLUT` | CUDA: fp32; CPU: fp32, fp64 | CUDA: fp32; CPU: input's | int8 (from the export) | int8 | yes (CUDA input); no (CPU input) | 0.353 · 0.476 | n/a | n/a |
 
-- Input and table dtypes are independent: every listed combination runs. The output is in the input's dtype, except
-  when one of input and table is float32 and the other float64: a float64 table gives a float64 output, and a
-  float64 input with a float32 table gives a float32 output for `ManifestoHardLUT`, `ConfidenceLUT` and
-  `QuantisedConfidenceLUT` and a float64 output for `ManifestoSoftLUT`.
+- Input and table dtypes are independent: every listed combination runs. With float32 / float64 input and table the
+  output is in the table's dtype (a float64 input with a float32 table gives float32, and the reverse float64). When the
+  input or the table is bfloat16 / float16 the cartridge computes in float32 and rounds the output once to the input's
+  dtype (see Precision above).
 - † `ManifestoHardLUT` and `ManifestoSoftLUT` train eagerly (their training forward is not compiled; their eval forward
   is). Their train numbers are the uncompiled PyTorch step.
 - n/a: `DeployedQuantisedConfidenceLUT` is inference-only; it has no train step.

@@ -42,7 +42,7 @@ class ManifestoSoftLUT(ReferenceForward, ManifestoLUT):
 
     def _pure_blend(self, c, c_alt, U):
         y_hard, y_alt = self._read_pair(c, c_alt)
-        return (y_hard + U.unsqueeze(-1) * (y_alt - y_hard)).sum(dim=2)
+        return (y_hard + U.to(y_hard.dtype).unsqueeze(-1) * (y_alt - y_hard)).sum(dim=2)   # in the table's dtype
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:
         z, u, c, j_star, u_abs_star, c_alt = self._addresses(x)
