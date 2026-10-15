@@ -1,11 +1,11 @@
-"""Shared scaffolding of the confidence family (spec amendment A): the Gen-3 parameters, nothing that runs.
+"""Shared scaffolding of the confidence family: its parameters, nothing that runs.
 
 :class:`ConfidenceBase` adds to :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT` (tables, anchors,
 addressing) the confidence score's learned temperatures ``beta`` / ``gamma`` and, at ``read_top_n = 2``, the blend
 temperature ``tau``, all stored log-parametrised. The reference
 (:class:`~spiky.lutorch_ex.cartridges.confidence.ConfidenceLUT`, and its quantised subclass) and the fused twin
 (:class:`~spiky.lutorch_ex.cartridges.fused_confidence.FusedConfidenceLUT`) both build on it; neither inherits the
-other's forward (amendment B). The maths is in each of them.
+other's forward. The maths is in each of them.
 """
 from __future__ import annotations
 
@@ -19,12 +19,13 @@ from .manifesto_base import ManifestoLUT
 
 
 class ConfidenceBase(ManifestoLUT):
-    """Gen-3 confidence-scored cartridge state; see the module docstring.
+    """Confidence-scored cartridge state; see the module docstring.
 
     Args (beyond the shared :class:`ManifestoLUT` ones):
-        read_top_n: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion).
-        beta_init / gamma_init: initial β, γ (stored log-parametrised; champion (β,γ)=(2,1)).
-        read_tau_init: initial τ (default 0.5, the champion). Only valid at read_top_n=2.
+        read_top_n: required, no default: 1 (single scored cell) or 2 (two-cell τ-blend). Every
+            construction states the read width.
+        beta_init / gamma_init: initial β, γ (stored log-parametrised; defaults (β,γ)=(2,1)).
+        read_tau_init: initial τ (default 0.5). Only valid at read_top_n=2.
         read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer. Only valid at
             read_top_n=2.
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.
@@ -33,13 +34,13 @@ class ConfidenceBase(ManifestoLUT):
     read_tau_init or read_tau_learnable with read_top_n=1 raises ValueError rather than being silently ignored.
     """
 
-    _WEIGHTED = False            # scored cells: no neighbour-weight function (weight= / soft-sign temperatures)
+    _HAS_UNCERTAINTY_FUNC = False    # scored cells: no uncertainty_func= and no soft-sign temperatures
 
     def __init__(
         self,
         spec,
         *,
-        read_top_n: int = 1,
+        read_top_n: int,
         beta_init: float = 2.0,
         gamma_init: float = 1.0,
         read_tau_init: Optional[float] = None,

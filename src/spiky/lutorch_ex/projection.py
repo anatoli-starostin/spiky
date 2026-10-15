@@ -46,7 +46,7 @@ PROJECTION_DTYPES = (None, torch.bfloat16, torch.float32)
 
 
 def _linear_in(x: torch.Tensor, linear: nn.Linear, dtype: torch.dtype, weight: Optional[torch.Tensor] = None):
-    """``linear(x)`` with the GEMM in ``dtype``, cast from the (fp32 master) parameters per call."""
+    """``linear(x)`` with the GEMM in ``dtype``, cast from the (float32 master) parameters per call."""
     w = linear.weight if weight is None else weight
     b = linear.bias.to(dtype) if linear.bias is not None else None
     return F.linear(x.to(dtype), w.to(dtype), b)
@@ -81,20 +81,20 @@ class ProjectionMHL(nn.Module):
         bias: bias on both projections.
         device: device (``"meta"`` builds an allocation-free skeleton).
         fp8_projections: which projections run their GEMM in fp8 (keyword-only; a subset of
-            ``("compress", "decompress")``; default ``()`` = none, the unchanged fp32 path). See
-            :mod:`spiky.lutorch_ex.fp8`: the fp32 master weights stay ``nn.Linear`` parameters (same
-            state_dict); only the GEMM operands are cast to fp8 per call, with an fp32 accumulator. The
+            ``("compress", "decompress")``; default ``()`` = none, the unchanged float32 path). See
+            :mod:`spiky.lutorch_ex.fp8`: the float32 master weights stay ``nn.Linear`` parameters (same
+            state_dict); only the GEMM operands are cast to fp8 per call, with a float32 accumulator. The
             cartridge (addressing, scoring, gather) is untouched. Needs a CUDA device that runs
             ``torch._scaled_mm``; anything else raises at forward.
-        compress_fp8_out_dtype: dtype the fp8 compress GEMM returns before it is handed (as fp32) to the
+        compress_fp8_out_dtype: dtype the fp8 compress GEMM returns before it is handed (as float32) to the
             cartridge's addressing - ``torch.float32`` (default) or ``torch.bfloat16``. Only used when
             ``"compress"`` is in ``fp8_projections``.
         projection_dtype: dtype of the compress / decompress GEMMs that are NOT in ``fp8_projections``
             (keyword-only): ``None`` (default) = the unchanged path, the ``nn.Linear`` in its own (parameter)
-            dtype; ``torch.bfloat16`` or ``torch.float32`` = the GEMM runs in that dtype from the fp32
+            dtype; ``torch.bfloat16`` or ``torch.float32`` = the GEMM runs in that dtype from the float32
             master weights (same state_dict). Composes with ``fp8_projections`` per projection: a projection
             listed there runs in fp8, the other in ``projection_dtype``. Either way the compress output is
-            cast back to fp32 (fp64 for fp64 input) before the cartridge, so addressing, scoring and the
+            cast back to float32 (float64 for float64 input) before the cartridge, so addressing, scoring and the
             gather stay full precision; the output is returned in the input's dtype.
     """
 
@@ -126,7 +126,8 @@ class ProjectionMHL(nn.Module):
             if p in fp8_projections and not on:
                 raise ValueError(f"fp8_projections includes {p!r} but {p}=False (there is no {p} GEMM)")
         if compress_fp8_out_dtype not in (torch.float32, torch.bfloat16):
-            raise ValueError(f"compress_fp8_out_dtype must be torch.float32 or torch.bfloat16, got {compress_fp8_out_dtype}")
+            raise ValueError(f"compress_fp8_out_dtype must be torch.float32 or torch.bfloat16, "
+                             f"got {compress_fp8_out_dtype}")
         self.fp8_projections = frozenset(fp8_projections)
         self.compress_fp8_out_dtype = compress_fp8_out_dtype
         if not compress and not decompress:
@@ -192,9 +193,10 @@ class ProjectionMHL(nn.Module):
     @property
     def d_model(self) -> int:
         """The common width of a square wrapper (``input_dim == output_dim``). A rectangular wrapper
-        has no single ``d_model``; ask for ``input_dim`` / ``output_dim`` instead."""
+        has no single ``d_model``; ask for ``input_dim`` / ``output_dim`` instead. That raises a TypeError, not an
+        AttributeError: nn.Module.__getattr__ would replace an AttributeError's message with its generic one."""
         if self.input_dim != self.output_dim:
-            raise AttributeError(
+            raise TypeError(
                 f"ProjectionMHL is rectangular (input_dim={self.input_dim}, output_dim={self.output_dim}); "
                 "it has no single d_model - use input_dim / output_dim"
             )
@@ -226,11 +228,12 @@ class ProjectionMHL(nn.Module):
             self._check_fp8(x)        # eager only: inside a compiled region _scaled_mm raises its own error
 
         if "compress" in self.fp8_projections:
-            # fp8 operands, fp32 accumulator; the result (fp32 or bf16-rounded) goes to the cartridge in x's dtype.
+            # fp8 operands, float32 accumulator; the result (float32 or bfloat16-rounded) goes to the cartridge in
+            # x's dtype.
             z = fp8_linear(x, self.compress, self.compress_fp8_out_dtype).to(x.dtype)
         elif self.projection_dtype is not None and self.has_compress:
             # GEMM in projection_dtype; cast back up BEFORE the cartridge so the addressing margins are compared in
-            # full precision (fp32, or fp64 for fp64 input).
+            # full precision (float32, or float64 for float64 input).
             full = torch.float64 if x.dtype == torch.float64 else torch.float32
             z = _linear_in(x, self.compress, self.projection_dtype).to(full)
         else:

@@ -67,8 +67,10 @@ def test_d_model_must_agree_with_explicit_dims():
 
 def test_rectangular_has_no_single_d_model():
     proj = _proj(input_dim=16, output_dim=24)
-    with pytest.raises(AttributeError):
+    # the explanation itself must surface, not nn.Module.__getattr__'s generic "has no attribute 'd_model'"
+    with pytest.raises(TypeError, match=r"rectangular \(input_dim=16, output_dim=24\).*use input_dim / output_dim"):
         proj.d_model
+    assert _proj(d_model=16).d_model == 16
     assert "input_dim=16" in repr(proj) and "output_dim=24" in repr(proj)
 
 

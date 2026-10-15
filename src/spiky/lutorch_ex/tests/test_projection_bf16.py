@@ -1,7 +1,7 @@
-"""ProjectionMHL projection_dtype: bf16 compress/decompress GEMMs from fp32 masters, cartridge stays fp32.
+"""ProjectionMHL projection_dtype: bfloat16 compress/decompress GEMMs from float32 masters, cartridge stays float32.
 
-The flip-rate bound is measured: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default init, bf16
-compress flips ~0.07% of sign bits / ~0.6% of cells vs an exact-fp32 compress (measured 2026-10-09).
+The flip-rate bound is measured: at GEOM_1536 (h=16, d=48, tph=64, nap=8) with the default init, bfloat16
+compress flips ~0.07% of sign bits / ~0.6% of cells vs an exact-float32 compress (measured 2026-10-09).
 """
 import pytest
 import torch
@@ -13,7 +13,7 @@ needs_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="bf16 GEMM
 
 
 def _pair(device, d_model=1536, **kw):
-    """(fp32 reference, twin with `kw`) sharing cartridge and weights; decompress nudged off its zero init."""
+    """(float32 reference, twin with `kw`) sharing cartridge and weights; decompress nudged off its zero init."""
     torch.manual_seed(0)
     cart = ConfidenceLUT(LUTSpec(**GEOM_1536), seed=1, read_top_n=1)
     ref = ProjectionMHL(cart, d_model=d_model).to(device)
@@ -48,7 +48,7 @@ def test_default_projection_dtype_is_none_and_unchanged():
 def test_invalid_projection_dtype_rejected(bad):
     spec = LUTSpec(h_in=2, h_out=2, tph=2, nap=3, d_in=8, d_out=8)
     with pytest.raises(ValueError, match="projection_dtype"):
-        ProjectionMHL(ConfidenceLUT(spec, seed=1), d_model=16, projection_dtype=bad)
+        ProjectionMHL(ConfidenceLUT(spec, read_top_n=1, seed=1), d_model=16, projection_dtype=bad)
 
 
 @pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=needs_cuda)])
@@ -56,7 +56,7 @@ def test_cartridge_gets_fp32_and_masters_stay_fp32(device):
     _, m = _pair(device, projection_dtype=torch.bfloat16)
     x = torch.randn(512, 1536, device=device, requires_grad=True)
     z = _cartridge_input(m, x.detach())
-    assert z.dtype == torch.float32                                    # addressing input is fp32, not bf16
+    assert z.dtype == torch.float32                                    # addressing input is float32, not bfloat16
     m.train()
     y = m(x)
     assert y.dtype == torch.float32                                    # returned in the input's dtype
@@ -76,7 +76,7 @@ def test_cartridge_gets_fp32_and_masters_stay_fp32(device):
 @needs_cuda
 def test_bf16_compress_flip_rate_within_measured_bound():
     ref, m = _pair("cuda", projection_dtype=torch.bfloat16)
-    x = torch.randn(4096, 1536, device="cuda").bfloat16().float()     # the island's input: a bf16 stream cast up
+    x = torch.randn(4096, 1536, device="cuda").bfloat16().float()     # the island's input: a bfloat16 stream cast up
     cart, spec = ref.cartridge, ref.cartridge.spec
     prev = torch.get_float32_matmul_precision()
     torch.set_float32_matmul_precision("highest")
@@ -100,5 +100,5 @@ def test_composes_with_fp8_decompress():
     ref, m = _pair("cuda", projection_dtype=torch.bfloat16, fp8_projections=("decompress",))
     _, m_bf = _pair("cuda", projection_dtype=torch.bfloat16)
     x = torch.randn(1024, 1536, device="cuda")
-    assert torch.equal(_cartridge_input(m, x), _cartridge_input(m_bf, x))   # compress ran in bf16 in both
+    assert torch.equal(_cartridge_input(m, x), _cartridge_input(m_bf, x))   # compress ran in bfloat16 in both
     assert "projection_dtype=torch.bfloat16" in m.extra_repr() and "fp8_projections=('decompress',)" in m.extra_repr()

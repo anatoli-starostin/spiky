@@ -1,10 +1,11 @@
-"""Shared structure for the Manifesto cartridge family (hard and soft variants, two weight functions).
+"""Shared structure for the Manifesto cartridge family (hard and soft variants, two uncertainty functions).
 
 The Manifesto cartridges read, per table, the addressed cell ``c_t`` and its least-confident-bit-flip neighbour
-``c_t'`` and blend them with a weight ``w`` on the neighbour, a function of the deciding margin ``|u_{j*}|``:
+``c_t'`` and blend them, the neighbour's share being the uncertainty ``U``, a function of the deciding margin
+``|u_{j*}|`` chosen by ``uncertainty_func``:
 
-* ``weight="rational"`` (Gen-1): ``w = U = 0.5 / (1 + |u_{j*}|)``, no parameters;
-* ``weight="softsign"`` (Gen-2): ``rho = |u_{j*}| / (T_soft + |u_{j*}|)``, ``w = sigmoid(-2 rho / T_select)``, with
+* ``uncertainty_func="rational"``: ``U = 0.5 / (1 + |u_{j*}|)``, no parameters;
+* ``uncertainty_func="softsign"``: ``rho = |u_{j*}| / (T_soft + |u_{j*}|)``, ``U = sigmoid(-2 rho / T_select)``, with
   two learned per-layer temperatures stored log-parametrised (``log_soft_score_temp``, ``log_select_temp``;
   initialised at 0.5).
 
@@ -12,7 +13,7 @@ Both are in ``(0, 1/2]``, ``1/2`` at ``u = 0`` and tending to 0 as the margin gr
 
 * :class:`~spiky.lutorch_ex.cartridges.manifesto_hard.ManifestoHardLUT` — hard value with a straight-through
   surrogate gradient (the gradient of the blend);
-* :class:`~spiky.lutorch_ex.cartridges.manifesto_soft.ManifestoSoftLUT` — the ``(1-w)`` / ``w`` two-cell blend as both
+* :class:`~spiky.lutorch_ex.cartridges.manifesto_soft.ManifestoSoftLUT` — the ``(1-U)`` / ``U`` two-cell blend as both
   value and gradient.
 
 Everything else lives here and is identical between them:
@@ -55,14 +56,12 @@ from ..lut_spec import LUTSpec
 from ._fused_ops import _global_cells
 from .uncertainty import rational_uncertainty
 
-# Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
-# CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
+# torch.compile on CUDA, where the library compiles at all: the reference classes' forward (ReferenceForward:
+# eval always, train only with _COMPILE_TRAIN) and cell_tv(); the CPU runs eager. LUTORCH_EX_NO_COMPILE=1 disables it.
 _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
 
-_LOW_PRECISION = (torch.bfloat16, torch.float16)
-
-#: The neighbour-weight functions (see the module docstring).
-WEIGHTS = ("rational", "softsign")
+#: The uncertainty functions (see the module docstring).
+UNCERTAINTY_FUNCS = ("rational", "softsign")
 
 # Cell-index dtypes (``index_dtype``, every cartridge). The index the reads consume is the FLAT row index into the
 # [n_groups * tph * 2**nap, d_out] table, up to n_groups * tph * 2**nap - 1 (262,143 at h=16, tph=64, nap=8), not the
@@ -94,23 +93,26 @@ def resolve_index_dtype(index_dtype: Optional[torch.dtype], spec) -> torch.dtype
 # embedding_bag forward device-asserts above 2**31 - 1 index entries with int32 (measured, torch 2.9.1), so an
 # auto-int32 cartridge reads in int64 for a call whose read could exceed it (B * n_groups * tph * 2 entries, 2 = the
 # most cells any read takes per table). The separate, much lower embedding_bag BACKWARD size limit is a documented
-# upstream constraint, not enforced here (README: "PyTorch's embedding_bag backward size limit").
+# upstream constraint, not enforced here (_fused_ops.py: "PyTorch's embedding_bag backward size limit").
 _INT32_MAX_ENTRIES = torch.iinfo(torch.int32).max
 
 
 class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
 
-    Scaffolding only (spec amendment A / B): state (tables, anchors, the soft-sign temperatures), validation, the
-    addressing and the neighbour weight (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
+    Scaffolding only: state (tables, anchors, the soft-sign temperatures), validation, the
+    addressing and the uncertainty (:meth:`_uncertainty`), shared by the reference and the fused classes. It has NO
     runnable forward: a reference class gets its forward from
-    :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so a
-    fused class has nothing to fall back to. ``weight`` selects the neighbour-weight function; the temperature arguments
-    exist only with ``weight="softsign"``.
+    :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so
+    a fused class has nothing to fall back to. ``uncertainty_func`` selects the uncertainty function; the temperature
+    arguments exist only with ``uncertainty_func="softsign"``.
     """
-    # Whether the cartridge has the neighbour-weight function (weight=, the soft-sign temperatures). False for the
+    # Whether the cartridge has the uncertainty function (uncertainty_func=, the soft-sign temperatures). False for the
     # confidence family, which scores its cells instead.
-    _WEIGHTED: bool = True
+    _HAS_UNCERTAINTY_FUNC: bool = True
+    # Whether the cartridge has a trainable float table, the one the regularisers act on. False for the inference-only
+    # DeployedQuantisedConfidenceLUT; cell_tv_penalty skips such a cartridge.
+    _HAS_TRAINABLE_TABLE: bool = True
 
     def __init__(
         self,
@@ -120,7 +122,7 @@ class ManifestoLUT(MultiHeadLUT):
         weight_init_std: float = 1e-3,
         table_dropout_rate: float = 0.0,
         index_dtype: Optional[torch.dtype] = None,
-        weight: str = "rational",
+        uncertainty_func: str = "rational",
         soft_score_temp: Optional[float] = None,
         select_temp: Optional[float] = None,
         learnable_temps: Optional[bool] = None,
@@ -128,20 +130,21 @@ class ManifestoLUT(MultiHeadLUT):
     ):
         # Every keyword is consumed by this class or a subclass on the way here; anything left is a typo or an option
         # this cartridge does not have (silently ignoring it once turned a misspelt table_dropout_rate into no dropout).
-        if not self._WEIGHTED:                 # ConfidenceLUT and its family score their cells; no neighbour weight
-            given = dict(weight=weight if weight != "rational" else None, soft_score_temp=soft_score_temp,
-                         select_temp=select_temp, learnable_temps=learnable_temps)
+        if not self._HAS_UNCERTAINTY_FUNC:     # ConfidenceLUT and its family score their cells; no uncertainty function
+            given = dict(uncertainty_func=uncertainty_func if uncertainty_func != "rational" else None,
+                         soft_score_temp=soft_score_temp, select_temp=select_temp, learnable_temps=learnable_temps)
             unknown.update({k: v for k, v in given.items() if v is not None})
         if unknown:
             raise TypeError(f"{type(self).__name__}: unexpected keyword argument(s) {sorted(unknown)}")
-        if weight not in WEIGHTS:
-            raise ValueError(f"{type(self).__name__}: weight must be one of {WEIGHTS}, got {weight!r}")
+        if uncertainty_func not in UNCERTAINTY_FUNCS:
+            raise ValueError(f"{type(self).__name__}: uncertainty_func must be one of {UNCERTAINTY_FUNCS}, "
+                             f"got {uncertainty_func!r}")
         temps = dict(soft_score_temp=soft_score_temp, select_temp=select_temp, learnable_temps=learnable_temps)
-        if weight == "rational" and any(v is not None for v in temps.values()):
+        if uncertainty_func == "rational" and any(v is not None for v in temps.values()):
             given = sorted(k for k, v in temps.items() if v is not None)
-            raise ValueError(f"{type(self).__name__}: {given} apply only to weight='softsign'")
+            raise ValueError(f"{type(self).__name__}: {given} apply only to uncertainty_func='softsign'")
         super().__init__(spec)
-        self.weight = weight
+        self.uncertainty_func = uncertainty_func
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
@@ -187,8 +190,8 @@ class ManifestoLUT(MultiHeadLUT):
                   for h in range(G)]
         self.weights = nn.Parameter(torch.stack(blocks, dim=0))   # [G, tph, K, d_out]
 
-        # weight="softsign": the two learned temperatures, log-parametrised so they stay positive.
-        if weight == "softsign":
+        # uncertainty_func="softsign": the two learned temperatures, log-parametrised so they stay positive.
+        if uncertainty_func == "softsign":
             ls = math.log(float(0.5 if soft_score_temp is None else soft_score_temp))
             lx = math.log(float(0.5 if select_temp is None else select_temp))
             if learnable_temps is None or learnable_temps:
@@ -201,6 +204,7 @@ class ManifestoLUT(MultiHeadLUT):
         # The reference forward's lazily-built torch.compile objects (ReferenceForward; unused by the fused classes).
         self._compiled = None          # eval forward
         self._compiled_train = None    # train forward (only when _COMPILE_TRAIN)
+        self._compiled_tv = None       # cell_tv (every cartridge, CUDA)
 
     def _read(self, idx: torch.Tensor) -> torch.Tensor:
         """Gather one cell row per table: ``W[g, t, idx[b,g,t]]`` -> ``[B, G, tph, d_out]``.
@@ -210,7 +214,7 @@ class ManifestoLUT(MultiHeadLUT):
         intermediate — so peak memory is O(B*G*tph*d_out), independent of K (was the OOM).
 
         Operates in the weight dtype as-is — this pure path carries no mixed-precision handling
-        (bf16/fp16 support lives in the fused cartridges). See the class docstring.
+        (bfloat16 / float16 support lives in the fused cartridges). See the class docstring.
         """
         G, tph, K = self.spec.n_groups, self.spec.tph, self.spec.n_cells
         W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
@@ -222,13 +226,14 @@ class ManifestoLUT(MultiHeadLUT):
         W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
         return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
-    def _blend_w(self, u_abs_star: torch.Tensor) -> torch.Tensor:
-        """The weight on the neighbour cell ``c'``, in ``(0, 1/2]``, from ``|u_{j*}|`` ``[B, G, tph]``.
+    def _uncertainty(self, u_abs_star: torch.Tensor) -> torch.Tensor:
+        """The uncertainty ``U`` (the neighbour cell ``c'``'s share of the blend), in ``(0, 1/2]``, from the deciding
+        margin's magnitude ``|u_{j*}|`` ``[B, G, tph]``.
 
         ``rational``: ``U = 0.5 / (1 + |u*|)``. ``softsign``: ``rho = |u*| / (T_s + |u*|)``,
-        ``w = sigmoid(-2 rho / T_sel)``; the temperatures are taken in the margin's dtype (the addressing
-        precision: fp32 for a bf16 fused cartridge), so the blend runs there."""
-        if self.weight == "rational":
+        ``U = sigmoid(-2 rho / T_sel)``; the temperatures are taken in the margin's dtype (the addressing
+        precision: float32 for a bfloat16 fused cartridge), so the blend runs there."""
+        if self.uncertainty_func == "rational":
             return rational_uncertainty(u_abs_star)
         t_s = self.log_soft_score_temp.to(u_abs_star.dtype).exp()
         t_sel = self.log_select_temp.to(u_abs_star.dtype).exp()
@@ -236,7 +241,8 @@ class ManifestoLUT(MultiHeadLUT):
         return torch.sigmoid(-2.0 * rho / t_sel)
 
     def _softsign_temps(self, dtype):
-        """``(T_soft, T_select)`` in ``dtype``, differentiable wrt the log-parametrised leaves (``weight="softsign"``):
+        """``(T_soft, T_select)`` in ``dtype``, differentiable wrt the log-parametrised leaves
+        (``uncertainty_func="softsign"``):
         for the fused CUDA backward, which owns the temperatures' gradient."""
         return self.log_soft_score_temp.to(dtype).exp(), self.log_select_temp.to(dtype).exp()
 
@@ -249,7 +255,8 @@ class ManifestoLUT(MultiHeadLUT):
 
     @abstractmethod
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover - abstract
-        """``[B, h_in, d_in]`` -> ``[B, h_out, d_out]``: the cartridge's read (compiled on CUDA by :meth:`forward`)."""
+        """``[B, h_in, d_in]`` -> ``[B, h_out, d_out]``: the cartridge's read (a reference class's forward compiles
+        it on CUDA, see ReferenceForward; a fused class calls it directly)."""
         raise NotImplementedError
 
     # -- shared regularisation / dropout (all cartridges inherit) ----------------------------
@@ -257,21 +264,26 @@ class ManifestoLUT(MultiHeadLUT):
     def cell_tv(self) -> torch.Tensor:
         """Hamming-1 adjacent-cell total-variation penalty on the cell table ``[G, tph, K, d_out]``.
 
-        View the ``K = 2**nap`` cells of each table as the vertices of an nap-cube
-        (``[G*tph, 2, 2, ..., 2, d_out]``) and sum ``(v_c - v_c')**2`` over every Hamming-1 pair
-        (each counted once, via a size-2 ``diff`` along each of the nap bit-axes), then divide by the
-        pair count ``n_tables * nap * 2**(nap-1)`` -- the mean over pairs (and tables) of
-        ``||v_c - v_c'||**2`` (d_out summed in, not averaged). Differentiable w.r.t. ``weights``; adds no nodes to the forward
-        (called only by the trainer when its TV lambda > 0)."""
-        G, tph, K, d_out = self.weights.shape
+        The mean over Hamming-1 cell pairs (and tables) of ``||v_c - v_c'||**2`` (d_out summed in, not averaged); the
+        formula is :func:`_cell_tv_eager`. Differentiable w.r.t. ``weights``; adds no nodes to the forward (called only
+        by the trainer when its TV lambda > 0).
+
+        The single dispatch point for the penalty, as :meth:`ReferenceForward._dispatch` is for the reference forward:
+        on CUDA it runs :func:`_cell_tv_eager` through a lazily built per-instance ``torch.compile`` (static shapes),
+        which fuses the nap per-axis passes and does not materialise the per-axis differences (eager holds nap of
+        them, 4x the table at nap=8, for the backward); on the CPU, or with ``LUTORCH_EX_NO_COMPILE=1``, the plain
+        eager formula. ``LUTORCH_EX_NO_COMPILE=1`` means "pure PyTorch, no acceleration" here."""
         nap = self.spec.nap
-        t = self.weights.reshape(G * tph, *([2] * nap), d_out)   # [T, 2,..,2, d_out] hypercube
-        tv = t.new_zeros(())
-        for ax in range(1, nap + 1):                             # one cube axis per bit
-            d = t.diff(dim=ax)
-            tv = tv + (d * d).sum()
-        n_pairs = (G * tph) * nap * (1 << (nap - 1))             # total Hamming-1 pairs
-        return tv / n_pairs
+        w = self.weights.reshape(-1, *self.weights.shape[2:])       # [n_tables, K, d_out]
+        if _COMPILE_ENABLED and w.is_cuda:
+            if self._compiled_tv is None:
+                # Static shapes, unlike the reference forward's dynamic=True: on symbolic shapes Inductor's per-axis
+                # reductions are ~4x slower (0.86 vs 0.21 ms of GPU time at h16 tph64 nap8 d48, float32, RTX 5090;
+                # commit 3ae1174c). A table never changes shape, so this costs one compile per (table shape, nap,
+                # dtype), shared by every instance.
+                self._compiled_tv = torch.compile(_cell_tv_eager, dynamic=False)
+            return self._compiled_tv(w, nap)
+        return _cell_tv_eager(w, nap)
 
     def to_deployment(self) -> dict:
         """SupportsDeploymentExport (deployment-compaction axis): base no-op pass-through. A cartridge
@@ -294,7 +306,7 @@ class ManifestoLUT(MultiHeadLUT):
         return (torch.rand(B, G, tph, device=device, dtype=dtype) < keep_prob).to(dtype) / keep_prob
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Abstract (spec amendment B): the shared base never runs a read. Construct a reference class
+        """Abstract: the shared base never runs a read. Construct a reference class
         (ManifestoHardLUT / ManifestoSoftLUT / ConfidenceLUT) or a fused one (Fused*)."""
         raise NotImplementedError(f"{type(self).__name__} is the shared scaffolding base and has no forward")
 
@@ -338,13 +350,30 @@ class ManifestoLUT(MultiHeadLUT):
 
 
 
+def _cell_tv_eager(weights: torch.Tensor, nap: int) -> torch.Tensor:
+    """The cell-TV formula in plain PyTorch (see :meth:`ManifestoLUT.cell_tv`), ``weights [n_tables, 2**nap, d_out]``.
+
+    View the ``K = 2**nap`` cells of each table as the vertices of an nap-cube (``[n_tables, 2, 2, ..., 2, d_out]``)
+    and sum ``(v_c - v_c')**2`` over every Hamming-1 pair (each counted once, via a size-2 ``diff`` along each of the
+    nap bit-axes), then divide by the pair count ``n_tables * nap * 2**(nap-1)``."""
+    n_tables, K, d_out = weights.shape
+    t = weights.reshape(n_tables, *([2] * nap), d_out)       # [T, 2,..,2, d_out] hypercube
+    tv = t.new_zeros(())
+    for ax in range(1, nap + 1):                             # one cube axis per bit
+        d = t.diff(dim=ax)
+        tv = tv + (d * d).sum()
+    n_pairs = n_tables * nap * (1 << (nap - 1))              # total Hamming-1 pairs
+    return tv / n_pairs
+
+
 def cell_tv_penalty(module: nn.Module) -> torch.Tensor:
     """Model-level Hamming-1 cell-TV penalty: the MEAN of :meth:`ManifestoLUT.cell_tv` over every
-    ``ManifestoLUT`` cartridge inside ``module`` (equivalent to the reference model's
+    ``ManifestoLUT`` cartridge inside ``module`` that has a trainable table (an inference-only
+    DeployedQuantisedConfidenceLUT is skipped) (equivalent to the reference model's
     ``lut_tv_penalty()``, which averages ``cell_tv()`` over its LUT layers). Scale by lambda and add
     to the loss, matching the reference ergonomics: ``(lam * cell_tv_penalty(model)).backward()``.
     Returns a 0-dim zero (no grad) when the module has no such cartridge."""
-    tvs = [m.cell_tv() for m in module.modules() if isinstance(m, ManifestoLUT)]
+    tvs = [m.cell_tv() for m in module.modules() if isinstance(m, ManifestoLUT) and m._HAS_TRAINABLE_TABLE]
     if not tvs:
         return torch.zeros(())
     return torch.stack(tvs).mean()

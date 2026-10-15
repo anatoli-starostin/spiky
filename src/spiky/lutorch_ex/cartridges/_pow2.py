@@ -1,18 +1,21 @@
-"""Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT (the reference class),
-its forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it; FusedQuantisedConfidenceLUT's
-p2_scalars op (``_pow2_int8``) computes the same integers and recomputes its backward with :func:`ste_cell_weights`
-(the agreement is tested in tests/test_fused_vs_reference.py).
+"""Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT (the reference
+class), its forward_int, DeployedQuantisedConfidenceLUT's integer read on the CPU, and export all use it.
+FusedQuantisedConfidenceLUT's CUDA kernels (quant_fwd / quant_bwd, ``_fused_quantised_cuda``) compute the same integers
+and the gradient of :func:`ste_cell_weights` by hand; the lutorch_ex::p2_scalars test op exposes those integers (the
+agreement is tested in tests/test_fused_vs_reference.py).
 
 It is pure PyTorch (no CUDA / no extension dependency) and holds the whole p2_int8 quantisation
 math — the power-of-two scale, the log-domain score exponent, the two-cell blend exponents, the
 straight-through weights and tables, and the int8 shift-add read. Keeping it a separate module
-keeps Gen-1/Gen-2/ConfidenceLUT untouched.
+keeps the Manifesto cartridges and ConfidenceLUT untouched.
 
 The formulas: log2 s is in the log domain, log2 S + (g + gamma*sum_i logsigmoid(beta u_i))/ln2 (g=0 in the
 frozen-g rows); q = clamp(floor(2 u*/(tau ln2) + 1/2), 0, J); c_q = log2(1+2^-q) for q<C else 0;
 round(xi) = floor(xi + 1/2) (half up). Integer read keeps the head sum in units of 2^-6 in int32,
 each table adding (W_hat[c1] << (k'+6)) + (W_hat[c2] << (k'+6-q)); int8 only.
 """
+from __future__ import annotations
+
 import math
 from typing import Dict, Optional
 
@@ -38,7 +41,7 @@ def resolve_quant_config(quant_mode: Optional[str], quant_overrides: Optional[di
             raise ValueError("quant_overrides given without quant_mode")
         return None
     if quant_mode not in PRESETS:
-        raise ValueError(f"quant_mode must be None or one of {sorted(PRESETS)}, got {quant_mode!r}")
+        raise ValueError(f"quant_mode must be one of {sorted(PRESETS)}, got {quant_mode!r}")
     cfg = dict(PRESETS[quant_mode])
     for k, v in (quant_overrides or {}).items():
         if k not in _OVERRIDABLE:
@@ -52,7 +55,8 @@ def resolve_quant_config(quant_mode: Optional[str], quant_overrides: Optional[di
     if not 1 <= cfg["L"] <= 8:
         raise ValueError(f"L must be in [1, 8], got {cfg['L']}")
     if not -3 <= cfg["kmax"] - cfg["L"] + 1 or not cfg["kmax"] <= 4:
-        raise ValueError(f"the window [kmax - L + 1, kmax] must lie inside [-3, 4], got kmax={cfg['kmax']}, L={cfg['L']}")
+        raise ValueError(f"the window [kmax - L + 1, kmax] must lie inside [-3, 4], "
+                         f"got kmax={cfg['kmax']}, L={cfg['L']}")
     cfg["mode"] = quant_mode
     cfg["lo"] = cfg["kmax"] - cfg["L"] + 1
     cfg["hi"] = cfg["kmax"]
@@ -91,14 +95,14 @@ def blend_exponents(m: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, g: tor
     clamped into the window [lo, hi]) and bool tensors skip (k' below the window), drop (second cell not read).
 
     Written in the CUDA kernel's operation order (csrc/pow2_scalars.cuh), one elementwise op at a time: the nap terms
-    of S and of the logsigmoid sum left-folded, and every division a true fp32 tensor division (a Python-scalar divisor
-    would make torch multiply by its reciprocal instead, and 2.0 / t is reciprocal(t) * 2). Each integer is a floor of
-    these fp32 values, so the same operations in the same order give the kernel's integers, at every nap.
+    of S and of the logsigmoid sum left-folded, and every division a true float32 tensor division (a Python-scalar
+    divisor would make torch multiply by its reciprocal instead, and 2.0 / t is reciprocal(t) * 2). Each integer is a
+    floor of these float32 values, so the same operations in the same order give the kernel's integers, at every nap.
     Trade-off, accepted on purpose: (1) the reference now partly encodes the kernel's operation order, so agreement
     between the two is a weaker form of independence than with torch's own reduction; (2) a left fold is less accurate
     than torch's pairwise reduction: relative error of S, mean 3.40e-8 vs 2.97e-8, max 2.7e-7 vs 1.6e-7 (measured at
-    the champion geometry); (3) the bit-agreement relies on the same libdevice log2 / log1p / exp in torch's build and in
-    the extension's nvcc build -- measured identical on this toolkit, not guaranteed across a CUDA or torch upgrade.
+    the champion geometry); (3) the bit-agreement relies on the same libdevice log2 / log1p / exp in torch's build and
+    in the extension's nvcc build -- measured identical on this toolkit, not guaranteed across a CUDA or torch upgrade.
     tests/test_fused_vs_reference.py therefore compares the fused class with this reference BIT FOR BIT, with no
     tolerance and no gate: an upgrade that changes libdevice shows up as a test failure rather than being silently
     absorbed by a tolerance."""
@@ -119,7 +123,7 @@ def single_exponent(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma:
     """The read_top_n = 1 integers: k' = round(log2 s) = floor(log2 S + (g + gamma ls)/ln2 + 1/2) (no blend, so no c_q),
     clamped into [lo, hi]; skip = k' below the window. m [..., NAP] -> float k, bool skip [...]. Written in the kernel's
     operation order (csrc/pow2_scalars.cuh, p2::single_scalars), as blend_exponents is for n = 2: the nap terms of S and
-    of the logsigmoid sum left-folded, the division by ln2 a true fp32 tensor division."""
+    of the logsigmoid sum left-folded, the division by ln2 a true float32 tensor division."""
     ln2 = torch.full((), LN2, dtype=m.dtype, device=m.device)
     S = _left_fold(m)
     ls = _left_fold(F.logsigmoid(beta * m))
@@ -130,8 +134,8 @@ def single_exponent(m: torch.Tensor, g: torch.Tensor, beta: torch.Tensor, gamma:
 def ste_blend_weights(score: torch.Tensor, mv: torch.Tensor, tau: torch.Tensor, q: torch.Tensor, k: torch.Tensor,
                       skip: torch.Tensor, drop: torch.Tensor) -> torch.Tensor:
     """Per-cell weights [..., 2] with value exactly (2^k', 2^(k'-q)) (0 when skipped / dropped) and the gradient of the
-    exact blend weights (s v, s (1 - v)) times the same ratios (note eq. 6). The ratio uses the clamped k' also for skipped
-    and dropped cells, so they keep a gradient and can come back (the prototype's semantics)."""
+    exact blend weights (s v, s (1 - v)) times the same ratios (note eq. 6). The ratio uses the clamped k' also for
+    skipped and dropped cells, so they keep a gradient and can come back (the prototype's semantics)."""
     x = 2.0 * mv / tau                                             # [..., 1]
     e = score.unsqueeze(-1) * torch.cat([torch.sigmoid(x), torch.sigmoid(-x)], dim=-1)   # [..., 2]: s v, s (1 - v)
     b = torch.pow(2.0, torch.stack([k, k - q], dim=-1)).to(e.dtype)                      # clamped values
@@ -174,7 +178,8 @@ def _scale(e: torch.Tensor, n_tables: int, dtype) -> torch.Tensor:
 
 @torch.no_grad()
 def quantise_tables(W: torch.Tensor, e: torch.Tensor, bits: int) -> torch.Tensor:
-    """W_hat = clamp(round(W / 2^e), -2^(b-1), 2^(b-1) - 1)  (note eq. 8), integers in W's float dtype, [n_tables, K, D]."""
+    """W_hat = clamp(round(W / 2^e), -2^(b-1), 2^(b-1) - 1)  (note eq. 8), integers in W's float dtype,
+    [n_tables, K, D]."""
     lo, hi = -(1 << (bits - 1)), (1 << (bits - 1)) - 1
     return torch.clamp(round_half_up(W / _scale(e, W.shape[0], W.dtype)), lo, hi)
 
@@ -192,7 +197,8 @@ def pack_tables(Wint: torch.Tensor, bits: int) -> torch.Tensor:
     """Integer tables [..., D] -> packed storage for `bits`. Dispatches to the per-width packer; only int8 exists."""
     if bits == 8:
         return pack_int8_rows(Wint)
-    raise NotImplementedError(f"no packer for bits={bits}: int{bits} is not implemented (add a packer beside pack_int8_rows)")
+    raise NotImplementedError(f"no packer for bits={bits}: int{bits} is not implemented "
+                              "(add a packer beside pack_int8_rows)")
 
 
 @torch.no_grad()
@@ -237,9 +243,9 @@ def int_single_read(packed: torch.Tensor, bits: int, D: int, flat_idx: torch.Ten
 
 
 def int8_accumulate(packed: torch.Tensor, flat_idx: torch.Tensor, group: torch.Tensor) -> torch.Tensor:
-    """int8 shift-add accumulation, one expression (the form torch.compile fuses into a single kernel that reads the int8
-    bytes, shifts and sums without materialising the gathered rows). packed int8 [n_tables * K, D]; flat_idx / group
-    [N, H, T, n] (n cells read per table: 2, or 1 for read_top_n = 1). Returns int32 [N, H, D]."""
+    """int8 shift-add accumulation, one expression (the form torch.compile fuses into a single kernel that reads the
+    int8 bytes, shifts and sums without materialising the gathered rows). packed int8 [n_tables * K, D]; flat_idx /
+    group [N, H, T, n] (n cells read per table: 2, or 1 for read_top_n = 1). Returns int32 [N, H, D]."""
     N, H, T, n = flat_idx.shape
     rows = packed[flat_idx.reshape(N * H, n * T)].to(torch.int32)                      # bytes gathered, widened
     g = group.reshape(N * H, n * T, 1)
@@ -252,7 +258,8 @@ def int8_accumulate(packed: torch.Tensor, flat_idx: torch.Tensor, group: torch.T
 def int8_blend_read(packed: torch.Tensor, D: int, flat_idx: torch.Tensor, group: torch.Tensor,
                     chunk_bags: Optional[int] = 4096) -> torch.Tensor:
     """int8 shift-add read over int8 rows [n_tables * K, D] (no unpack step). Each bag (token, head) sums its tables'
-    rows shifted left by their group's shift (two rows, k' + 6 and k' + 6 - q, for n = 2; one, k' + 6, for n = 1). Eager callers chunk the bags; compiled callers pass chunk_bags=None."""
+    rows shifted left by their group's shift (two rows, k' + 6 and k' + 6 - q, for n = 2; one, k' + 6, for n = 1). Eager
+    callers chunk the bags; compiled callers pass chunk_bags=None."""
     if packed.dtype != torch.int8 or packed.shape[-1] != D:
         raise ValueError(f"int8_blend_read needs int8 rows of width {D}, got {packed.dtype} {tuple(packed.shape)}")
     N = flat_idx.shape[0]

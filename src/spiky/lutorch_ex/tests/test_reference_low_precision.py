@@ -1,11 +1,11 @@
-"""The reference cartridges in bf16 / fp16 (spec amendment C): the same maths in fp32, exactly one rounding per leaf.
+"""The reference cartridges in bfloat16 / float16: the same maths in float32, exactly one rounding per leaf.
 
-For a low-precision table and/or input, the reference class must give exactly the fp32 run on the same
+For a low-precision table and/or input, the reference class must give exactly the float32 run on the same
 (low-precision-representable) values, rounded once: the output to the input dtype, the input gradient to the input
 dtype, and each parameter's gradient to that parameter's dtype. "Exactly" is bitwise: the low-precision forward runs
-the identical fp32 computation, so anything beyond the single final rounding (a bf16 intermediate, a bf16
-accumulator, a second rounding) breaks equality. Every reference class, both weights, both read_top_n, CPU and CUDA.
-On CUDA the gradient scatters use atomics, so the fp32 baseline is itself not reproducible run to run; the test runs
+the identical float32 computation, so anything beyond the single final rounding (a bfloat16 intermediate, a bfloat16
+accumulator, a second rounding) breaks equality. Every reference class, both uncertainty functions, both read_top_n, CPU and CUDA.
+On CUDA the gradient scatters use atomics, so the float32 baseline is itself not reproducible run to run; the test runs
 under ``torch.use_deterministic_algorithms`` there (as test_index_dtype.py does), which makes both runs bitwise
 comparable.
 """
@@ -15,7 +15,7 @@ import pytest
 import torch
 
 from spiky.lutorch_ex import ConfidenceLUT, LUTSpec, ManifestoHardLUT, ManifestoSoftLUT, ProjectionMHL
-from spiky.lutorch_ex.tests._weights import softsign
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign
 
 CLASSES = [ManifestoHardLUT, ManifestoSoftLUT, softsign(ManifestoHardLUT), softsign(ManifestoSoftLUT),
            ("ConfidenceLUT n=1", lambda s, **kw: ConfidenceLUT(s, read_top_n=1, **kw)),

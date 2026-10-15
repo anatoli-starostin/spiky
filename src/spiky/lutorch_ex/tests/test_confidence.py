@@ -1,9 +1,9 @@
-"""Gen-3 ConfidenceLUT (learned-margin confidence score, scored-only).
+"""ConfidenceLUT (learned-margin confidence score, scored-only).
 
-Covers: fp64 gradcheck of the scored backward (input, weights, β, γ, and τ for n=2); both anchor
+Covers: float64 gradcheck of the scored backward (input, weights, β, γ, and τ for n=2); both anchor
 modes; read_top_n ∈ {1,2}; gradients reach β/γ/τ; the address is detached (x gets gradient ONLY
-through the score / blend, no routing grad); bf16/fp16 runs (exactness: test_reference_low_precision.py); single-anchor
-canonical coverage; train == eval forward value; the removed read flags raise; shape/dtype invariants.
+through the score / blend, no routing grad); bfloat16 / float16 runs (exactness: test_reference_low_precision.py);
+single-anchor canonical coverage; train == eval forward value; the removed read flags raise; shape/dtype invariants.
 """
 import pytest
 import torch
@@ -21,7 +21,7 @@ def _normrel(a, b):
 @pytest.mark.parametrize("read_top_n", [1, 2])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_gradcheck_fp64(read_top_n, anchor_mode):
-    """fp64 gradcheck wrt input, weights, and the score/blend temperatures — the scored forward
+    """float64 gradcheck wrt input, weights, and the score/blend temperatures — the scored forward
     is value==gradient, so finite differences verify the analytic backward."""
     torch.set_default_dtype(torch.float64)
     try:
@@ -111,7 +111,7 @@ def test_input_grad_is_score_only_no_routing(read_top_n, anchor_mode):
 @pytest.mark.parametrize("read_top_n", [1, 2])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_accepts_low_precision(read_top_n, dtype):
-    """Spec amendment C: low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
+    """Low-precision params OR inputs run (float32 maths, one rounding; exactness is checked in
     test_reference_low_precision.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = ConfidenceLUT(spec, seed=0, weight_init_std=1.0, read_top_n=read_top_n).to(dtype)
@@ -179,16 +179,13 @@ def test_tau_arguments_at_read_top_n_1_raise(cls, given):
 
 @pytest.mark.parametrize("cls", _confidence_classes()[:3], ids=lambda c: c.__name__)
 def test_bare_read_top_n_1_constructs_without_tau(cls):
-    """Neither τ argument given at read_top_n=1: constructs as always, silently, with no τ (also with read_top_n left at
-    its default where that default is 1: ConfidenceLUT and FusedConfidenceLUT; the quantised classes default to 2)."""
+    """Neither τ argument given at read_top_n=1: constructs as always, silently, with no τ (read_top_n itself has no
+    default: test_read_top_n_required.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4)
-    built = [cls(spec, seed=0, weight_init_std=1.0, read_top_n=1)]
-    if cls.__name__ in ("ConfidenceLUT", "FusedConfidenceLUT"):
-        built.append(cls(spec, seed=0, weight_init_std=1.0))
-    for m in built:
-        assert m.read_top_n == 1
-        assert not hasattr(m, "log_read_tau")
-        assert {n for n, _ in m.named_parameters()} == {"weights", "confidence_log_beta", "confidence_log_gamma"}
+    m = cls(spec, seed=0, weight_init_std=1.0, read_top_n=1)
+    assert m.read_top_n == 1
+    assert not hasattr(m, "log_read_tau")
+    assert {n for n, _ in m.named_parameters()} == {"weights", "confidence_log_beta", "confidence_log_gamma"}
 
 
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
@@ -213,4 +210,4 @@ def test_the_removed_read_flags_raise(flag):
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=4)
     for cls in (ConfidenceLUT, QuantisedConfidenceLUT):
         with pytest.raises(TypeError, match=flag):
-            cls(spec, seed=1, **{flag: True})
+            cls(spec, seed=1, read_top_n=1, **{flag: True})

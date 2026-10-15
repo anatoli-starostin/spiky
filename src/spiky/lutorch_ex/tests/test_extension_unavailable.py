@@ -1,6 +1,6 @@
 """A fused class without its CUDA extension (cartridges/_fallback.py): each build-failure cause it claims to detect is
 detected from the evidence for it, and a fused class raises NativeUnavailableError naming the cause -- there is no
-fallback (spec rule 3). A case the kernels do not cover raises a RuntimeError naming the case and the reference class.
+fallback. A case the kernels do not cover raises a RuntimeError naming the case and the reference class.
 """
 import importlib.util
 
@@ -8,10 +8,11 @@ import pytest
 import torch
 
 import spiky.lutorch_ex as lx
-from spiky.lutorch_ex.cartridges import _fallback, _fused_manifesto_cuda, fused_confidence
+from spiky.lutorch_ex.cartridges import _fallback, _fused_confidence_cuda, _fused_manifesto_cuda
+from spiky.lutorch_ex.cartridges import _fused_quantised_cuda
 from spiky.lutorch_ex.cartridges._fallback import NativeUnavailableError, classify, record_build_failure
 from spiky.lutorch_ex.lut_spec import LUTSpec
-from spiky.lutorch_ex.tests._weights import softsign
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign
 
 CUDA = torch.cuda.is_available()
 
@@ -118,7 +119,7 @@ def _spec():
     return LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8, anchor_mode="pairs")
 
 
-#: Both fused Manifesto twins, with both weight functions.
+#: Both fused Manifesto twins, with both uncertainty functions.
 MANIFESTO = [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, softsign(lx.FusedManifestoHardLUT),
              softsign(lx.FusedManifestoSoftLUT)]
 
@@ -126,9 +127,9 @@ MANIFESTO = [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, softsign(lx.Fus
 @pytest.fixture
 def no_manifesto_ext(monkeypatch):
     """The fused_manifesto extension is unavailable, with a recorded cause (setuptools missing)."""
-    monkeypatch.setattr(_fused_manifesto_cuda, "_TRIED", True)
-    monkeypatch.setattr(_fused_manifesto_cuda, "_EXT", None)
-    record_build_failure(_fused_manifesto_cuda.EXT_NAME,
+    monkeypatch.setattr(_fused_manifesto_cuda.EXT, "tried", True)
+    monkeypatch.setattr(_fused_manifesto_cuda.EXT, "module", None)
+    record_build_failure(_fused_manifesto_cuda.EXT.name,
                          ModuleNotFoundError("No module named 'setuptools'", name="setuptools"))
 
 
@@ -141,6 +142,14 @@ def test_fused_manifesto_without_extension_raises_with_cause(cls, no_manifesto_e
             m(torch.randn(64, 4, 8, device="cuda"))
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls", MANIFESTO, ids=lambda c: c.__name__)
+def test_fused_manifesto_without_extension_raises_with_cause_in_eval(cls, no_manifesto_ext):
+    m = cls(_spec(), seed=0).cuda().eval()
+    with torch.no_grad(), pytest.raises(NativeUnavailableError, match=r"\[setuptools_missing\]"):
+        m(torch.randn(64, 4, 8, device="cuda"))
+
+
 @pytest.mark.parametrize("cls", MANIFESTO, ids=lambda c: c.__name__)
 def test_fused_manifesto_cpu_input_raises_naming_the_reference_class(cls):
     """No fallback on the CPU either: a CPU input is a case the kernels do not cover."""
@@ -151,21 +160,31 @@ def test_fused_manifesto_cpu_input_raises_naming_the_reference_class(cls):
 
 @pytest.fixture
 def no_confidence_ext(monkeypatch):
-    monkeypatch.setattr(fused_confidence, "fused_confidence_ext", lambda: None)
-    record_build_failure(fused_confidence.EXT_NAME, RuntimeError(
+    monkeypatch.setattr(_fused_confidence_cuda.EXT, "tried", True)
+    monkeypatch.setattr(_fused_confidence_cuda.EXT, "module", None)
+    record_build_failure(_fused_confidence_cuda.EXT.name, RuntimeError(
         "\nThe detected CUDA version (13.0) mismatches the version that was used to compile\nPyTorch (12.8)."))
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 def test_fused_confidence_without_extension_raises_with_cause(no_confidence_ext):
-    m = lx.FusedConfidenceLUT(_spec(), seed=0).cuda().train()
+    m = lx.FusedConfidenceLUT(_spec(), read_top_n=1, seed=0).cuda().train()
     with pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
         m(torch.randn(32, 4, 8, device="cuda"))
     assert "13.0" in str(e.value)
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("n,train", [(1, False), (2, True), (2, False)], ids=["n1-eval", "n2-train", "n2-eval"])
+def test_fused_confidence_without_extension_raises_with_cause_every_read_and_mode(n, train, no_confidence_ext):
+    m = lx.FusedConfidenceLUT(_spec(), read_top_n=n, seed=0).cuda().train(train)
+    with torch.set_grad_enabled(train), pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
+        m(torch.randn(32, 4, 8, device="cuda"))
+    assert "13.0" in str(e.value)
+
+
 def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
-    m = lx.FusedConfidenceLUT(_spec(), seed=0).train()
+    m = lx.FusedConfidenceLUT(_spec(), read_top_n=1, seed=0).train()
     with pytest.raises(RuntimeError, match=r"Construct ConfidenceLUT"):
         m(torch.randn(16, 4, 8))
 
@@ -174,20 +193,19 @@ def test_fused_confidence_cpu_input_raises_naming_the_reference_class():
                                  lx.FusedQuantisedConfidenceLUT],
                          ids=lambda c: c.__name__)
 def test_no_backend_argument(cls):
-    """Spec rule 3: the class is the implementation; there is nothing to select."""
+    """The class is the implementation; there is nothing to select."""
     with pytest.raises(TypeError, match="backend"):
-        cls(_spec(), seed=0, backend="cuda")
+        cls(_spec(), seed=0, backend="cuda", **({"read_top_n": 1} if "Confidence" in cls.__name__ else {}))
 
 
-# -- FusedQuantisedConfidenceLUT (the p2_scalars op) -----------------------------------------------------------------
+# -- FusedQuantisedConfidenceLUT (the pow2_int8_read extension) ------------------------------------------------------
 
 @pytest.fixture
 def no_quantised_ext(monkeypatch):
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    monkeypatch.setattr(_pow2_int8, "_registered", False)
-    monkeypatch.setattr(_pow2_int8, "_tried", True)
-    monkeypatch.setattr(_pow2_int8, "_ext", None)
-    record_build_failure(_pow2_int8.EXT_NAME, RuntimeError("Ninja is required to load C++ extensions"))
+    monkeypatch.setattr(_fused_quantised_cuda, "_registered", False)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "tried", True)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "module", None)
+    record_build_failure(_fused_quantised_cuda.EXT.name, RuntimeError("Ninja is required to load C++ extensions"))
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
@@ -198,34 +216,43 @@ def test_fused_quantised_without_extension_raises_with_cause(no_quantised_ext):
             m.train(train)(torch.randn(16, 4, 8, device="cuda"))
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_fused_quantised_n1_without_extension_raises_with_cause(no_quantised_ext):
+    m = lx.FusedQuantisedConfidenceLUT(_spec(), seed=0, read_top_n=1).cuda()
+    for train in (True, False):
+        with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
+            m.train(train)(torch.randn(16, 4, 8, device="cuda"))
+
+
 def test_fused_quantised_unvalidated_arch_is_a_classified_cause(monkeypatch):
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    monkeypatch.setattr(_pow2_int8, "_tried", False)
-    monkeypatch.setattr(_pow2_int8, "_ext", None)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "tried", False)
+    monkeypatch.setattr(_fused_quantised_cuda.EXT, "module", None)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a: (7, 5))
-    assert _pow2_int8.load() is None
-    assert _fallback.recorded(_pow2_int8.EXT_NAME).kind == "unvalidated_arch"
+    assert _fused_quantised_cuda.EXT.get() is None
+    assert _fallback.recorded(_fused_quantised_cuda.EXT.name).kind == "unvalidated_arch"
     with pytest.raises(NativeUnavailableError, match=r"(?s)\[unvalidated_arch\].*\(7, 5\)"):
-        _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _pow2_int8.EXT_NAME)
+        _fallback.raise_unavailable("FusedQuantisedConfidenceLUT", _fused_quantised_cuda.EXT.name)
 
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 @pytest.mark.parametrize("where", ["input", "table"])
 def test_fused_quantised_rejects_low_precision(where, dtype):
-    """FusedQuantisedConfidenceLUT is a fused CUDA cartridge, fp32 in / out only: a bf16 / fp16 input, or table, raises
-    RuntimeError naming it -- and does NOT point to the reference class, which does not take low precision either."""
+    """FusedQuantisedConfidenceLUT is a fused CUDA cartridge, float32 in / out only: a bfloat16 / float16 input, or
+    table, raises RuntimeError naming it -- and does NOT point to the reference class, which does not take low precision
+    either."""
     import re
     spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8)
     m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, read_top_n=2).cuda()
     x = torch.randn(8, 4, 8, device="cuda")
     if where == "input":
         x = x.to(dtype)
-        msg = rf"input dtype {re.escape(str(dtype))} \(the fused CUDA kernel takes fp32 input and writes fp32 output only\)"
+        msg = (rf"input dtype {re.escape(str(dtype))} is not supported by the fused kernel \(supported: torch\.float32; "
+               rf"the output is torch\.float32\)")
     else:
         m = m.to(dtype)
-        msg = rf"table dtype {re.escape(str(dtype))} \(the fused CUDA kernel reads an fp32 table only\)"
+        msg = rf"table dtype {re.escape(str(dtype))} is not supported by the fused kernel \(supported: torch\.float32\)"
     with pytest.raises(RuntimeError, match=msg) as e:
         m(x)
     assert "Construct QuantisedConfidenceLUT" not in str(e.value)
@@ -242,15 +269,17 @@ def test_fused_quantised_uncovered_cases_raise_naming_the_reference(case, kw, x)
     spec = LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8, anchor_mode=kw.pop("spec", {}).get("anchor_mode",
                                                                                                     "pairs"))
     m = lx.FusedQuantisedConfidenceLUT(spec, seed=0, **{"read_top_n": 2, **kw})
+    # A CPU input on a machine with no CUDA device at all is reported as that (device_problem).
+    if case == "the input is on cpu" and not CUDA:
+        case = "this machine has no CUDA device"
     with pytest.raises(RuntimeError, match=rf"(?s){case}.*Construct QuantisedConfidenceLUT"):
         m(x())
 
 
 def test_no_env_var_switch_left():
-    """LUTORCH_EX_NO_CUDA_EXT / SPIKY_P2_CUDA_DISABLE and the module switch are gone (spec rules 3 and 5)."""
+    """LUTORCH_EX_NO_CUDA_EXT / SPIKY_P2_CUDA_DISABLE and the module switch are gone."""
     import pathlib
-    from spiky.lutorch_ex.cartridges import _pow2_int8
-    assert not hasattr(_pow2_int8, "set_enabled") and not hasattr(_pow2_int8, "_enabled")
+    assert not hasattr(_fused_quantised_cuda, "set_enabled") and not hasattr(_fused_quantised_cuda, "_enabled")
     root = pathlib.Path(lx.__file__).parent / "cartridges"
     for src in root.glob("*.py"):
         text = src.read_text()
@@ -275,5 +304,37 @@ def test_deployed_without_extension_raises_with_cause(no_quantised_ext, n):
 
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 def test_deployed_cuda_fp64_input_raises_naming_the_case():
-    with pytest.raises(RuntimeError, match=r"input dtype torch.float64 on CUDA"):
+    with pytest.raises(RuntimeError, match=r"input dtype torch\.float64 is not supported by the fused kernel "
+                                           r"\(supported: torch\.float32; the output is torch\.float32\)"):
         _deployed()(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_deployed_too_wide_d_out_raises_naming_the_case():
+    """The host check uses the kernel's own vector width (8 at most): d_out 16384 needs 2048 threads at 8 bytes per load,
+    more than one CTA has, and must be refused by the class with its message, not by the kernel's internal check."""
+    spec = LUTSpec(h_in=1, h_out=1, tph=1, nap=1, d_in=2, d_out=16384)
+    p = lx.QuantisedConfidenceLUT(spec, seed=0, read_top_n=2).to_deployment()
+    d = lx.DeployedQuantisedConfidenceLUT(spec, p["tensors"], p["meta"], device="cuda")
+    with pytest.raises(RuntimeError, match=r"not a case the fused kernels cover: d_out=16384 needs 2048 threads per CTA "
+                                           r"at vec 8 \(limit 1024\)"):
+        d(torch.randn(4, 1, 2, device="cuda"))
+
+
+# -- one phrasing for a refused dtype, in every fused family -----------------------------------------------------------
+
+#: (class, kwargs, the input dtypes its kernels take) for every fused family.
+FUSED_FAMILIES = [
+    (lx.FusedManifestoHardLUT, {}, "torch.float32, torch.bfloat16, torch.float16"),
+    (lx.FusedConfidenceLUT, dict(read_top_n=2), "torch.float32, torch.bfloat16, torch.float16"),
+    (lx.FusedQuantisedConfidenceLUT, dict(read_top_n=2), "torch.float32"),
+]
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls,kw,supported", FUSED_FAMILIES, ids=lambda v: getattr(v, "__name__", ""))
+def test_every_fused_family_refuses_a_dtype_in_the_same_words(cls, kw, supported):
+    m = cls(_spec(), seed=0, **kw).cuda()
+    with pytest.raises(RuntimeError) as e:
+        m(torch.randn(16, 4, 8, device="cuda", dtype=torch.float64))
+    assert f"input dtype torch.float64 is not supported by the fused kernel (supported: {supported}" in str(e.value)

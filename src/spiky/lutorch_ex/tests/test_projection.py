@@ -43,7 +43,8 @@ def test_fresh_projection_outputs_exact_zero(cart_name, input_dim, output_dim, t
         from spiky.lutorch_ex.tests._requires_extension import requires_extension
         requires_extension("manifesto")
         dev = "cuda"
-    proj = ProjectionMHL(getattr(lx, cart_name)(spec, seed=3), input_dim=input_dim, output_dim=output_dim).to(dev)
+    kw = {"ConfidenceLUT": {"read_top_n": 1}, "QuantisedConfidenceLUT": {"read_top_n": 2}}.get(cart_name, {})
+    proj = ProjectionMHL(getattr(lx, cart_name)(spec, seed=3, **kw), input_dim=input_dim, output_dim=output_dim).to(dev)
     proj.train(train)
     b = proj.decompress.bias
     assert isinstance(b, torch.nn.Parameter) and b.requires_grad

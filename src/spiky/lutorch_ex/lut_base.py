@@ -21,9 +21,9 @@ routed, over ``n_groups = max(h_in, h_out)`` table groups; group ``g`` reads inp
   and *all* group contributions are summed into the single shared output ``y[:, 0, :]``.
 
 Semantics: what the value and the gradient are is the cartridge's business, and the families
-differ. A *hard* cartridge (ManifestoHardLUT and its fused twin, either weight) returns the
+differ. A *hard* cartridge (ManifestoHardLUT and its fused twin, either uncertainty_func) returns the
 hard lookup value at train and eval, and in training lets a surrogate gradient flow through a
-two-cell blend. A *soft* cartridge (ManifestoSoftLUT and its fused twin, either weight) returns
+two-cell blend. A *soft* cartridge (ManifestoSoftLUT and its fused twin, either uncertainty_func) returns
 that blend itself as the value, at train and eval. The confidence cartridges (ConfidenceLUT,
 QuantisedConfidenceLUT) return a score-weighted read -- one cell, or a two-cell blend -- at train
 and eval, and differentiate that value directly.

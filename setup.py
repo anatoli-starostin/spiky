@@ -18,6 +18,7 @@ if __name__ == '__main__':
             "spiky.spnet",
             "spiky.lutorch_ex",
             "spiky.lutorch_ex.cartridges",
+            "spiky.lutorch_ex.benchmarks",
             "spiky.lutorch_ex.tests",
         ],
         package_data={"spiky.lutorch_ex.cartridges": ["csrc/*.cu", "csrc/*.cuh", "csrc/*.cpp", "csrc/*.h"]},

@@ -58,7 +58,7 @@ def test_backward_flows_to_input_and_weights(h_in, h_out):
 
 
 def test_weight_gradient_is_hard_only():
-    """Gen-1 fidelity: only addressed cells c_t get weight gradient (single group)."""
+    """Hard read: only addressed cells c_t get weight gradient (single group)."""
     spec = LUTSpec(h_in=1, h_out=1, tph=1, nap=3, d_in=4, d_out=2)  # K = 8
     cart = ManifestoHardLUT(spec, seed=14, weight_init_std=1.0).train()
     x = torch.randn(16, 1, spec.d_in)

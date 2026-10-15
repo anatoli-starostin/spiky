@@ -2,7 +2,7 @@
 
 ``F.embedding_bag``'s backward is two PyTorch kernels, the table gradient (``_embedding_bag_dense_backward``) and the
 weight gradient (``_embedding_bag_per_sample_weights_backward``); at the champion shape the weight-gradient kernel
-dominates the read. :class:`_FusedScoredRead` replaces all three kernels, reading straight from the fp32 table (the
+dominates the read. :class:`_FusedScoredRead` replaces all three kernels, reading straight from the float32 table (the
 trained parameter; no copy):
 
 * forward: ``y[b] = sum_k w[b,k] * W[rows[b,k]]``, a gather, × weight, sum;
@@ -13,9 +13,9 @@ ConfidenceLUT calls this only inside ``torch.compile``, where Inductor fuses the
 re-gather and the weighted-row scatter into a few kernels. Uncompiled, those ops would materialise the gathered rows,
 so the eager form of the read is ``F.embedding_bag`` (see ``confidence.py``).
 
-The ``index_add_`` uses atomic fp32 adds: the table gradient agrees with embedding_bag's sorted reduction to fp32
+The ``index_add_`` uses atomic float32 adds: the table gradient agrees with embedding_bag's sorted reduction to float32
 re-association, not bit for bit, and is not bit-reproducible run to run (the CUDA training step already is not: it has
-other atomic scatters). It is not bound by embedding_bag's 32-bit launch limit (README).
+other atomic scatters). It is not bound by embedding_bag's 32-bit launch limit (_fused_ops.py).
 """
 from __future__ import annotations
 

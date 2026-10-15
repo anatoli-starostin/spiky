@@ -1,11 +1,12 @@
-"""Shared plumbing for the co-located CUDA extensions: where the sources live, the JIT build, and the launch knobs of the
-two hand-written kernel families (FusedManifesto* and FusedConfidenceLUT).
+"""Shared plumbing for the co-located CUDA extensions: where the sources live, the JIT build, and the launch knobs of
+the two knob-driven kernel families (FusedManifesto* and FusedConfidenceLUT).
 
-* :func:`load_extension` is the one JIT build / load of the fused cartridges' extensions (fused_manifesto,
-  fused_confidence; FusedQuantisedConfidenceLUT's p2_scalars extension has its own architecture-gated loader in
-  ``_pow2_int8``). It never raises:
-  when the extension is unavailable it records the classified cause (:mod:`._fallback`) and returns None, and the
-  fused cartridge that needs it raises with that cause.
+* :class:`Extension` is one extension's JIT build / load, once per process, for every fused family (fused_manifesto,
+  fused_confidence, and the quantised family's pow2_int8_read, which passes its architecture allowlist and its extra
+  nvcc flag). It never raises: when the extension is unavailable it records the classified cause (:mod:`._fallback`)
+  and returns None, and the fused cartridge that needs it raises with that cause.
+* :func:`not_covered`, :func:`device_problem`, :func:`row_threads` and :func:`row_problem` are the one phrasing of a
+  case a fused family's kernels do not cover (the dtype part is :func:`._dtypes.unsupported_dtype`).
 * :class:`KernelKnobs` is the launch configuration of the two kernel families. :class:`ManifestoCudaKnobs` and
   :class:`CudaKnobs` (FusedConfidenceLUT) are the same fields, defaulting from ``LUTORCH_EX_MANI_CUDA_*`` resp.
   ``LUTORCH_EX_CONF_CUDA_*``.
@@ -24,27 +25,90 @@ from . import _fallback
 
 #: Co-located CUDA sources.
 CSRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csrc")
-# A stable, persistent extension cache, so each nvcc compile is paid once across processes (unless the caller chose one).
+# A persistent extension cache, so each nvcc compile is paid once across processes (unless the caller chose one).
 os.environ.setdefault("TORCH_EXTENSIONS_DIR", os.path.expanduser("~/.cache/torch_extensions_lutorch_ex"))
 
 
-def load_extension(name: str, sources: Sequence[str]):
-    """JIT-build / load extension ``name`` from ``sources`` (file names under ``csrc/``); the module, or None after
-    recording the classified cause (no CUDA device, or a failed build). Never raises."""
+class Extension:
+    """One co-located CUDA extension, JIT-built / loaded on the first :meth:`get` of the process.
+
+    ``sources`` are file names under ``csrc/``; ``extra_cuda_cflags`` are added to the common ``-std=<SPIKY_CXX_STD,
+    default c++20> -O3``; ``validated_arches`` (compute capabilities), when given, enables the extension only on those
+    devices. :meth:`get` returns the module, or None after recording the classified cause -- no CUDA device, a device
+    outside ``validated_arches``, or a failed build. Never raises."""
+
+    def __init__(self, name: str, sources: Sequence[str], *, extra_cuda_cflags: Sequence[str] = (),
+                 validated_arches: Optional[tuple] = None):
+        self.name = name
+        self.sources = tuple(sources)
+        self.extra_cuda_cflags = tuple(extra_cuda_cflags)
+        self.validated_arches = validated_arches
+        self.module = None
+        self.tried = False
+
+    def get(self):
+        if not self.tried:
+            self.tried = True
+            self.module = self._build()
+        return self.module
+
+    def _build(self):
+        if not torch.cuda.is_available():
+            _fallback.record_build_failure(self.name)                       # -> no_cuda_device
+            return None
+        if self.validated_arches is not None:
+            cap = torch.cuda.get_device_capability()
+            if cap not in self.validated_arches:
+                _fallback.record_cause(self.name, _fallback.Cause(
+                    "unvalidated_arch", f"device compute capability {cap} is not in {self.validated_arches}"))
+                return None
+        try:
+            from torch.utils.cpp_extension import load
+            # torch's default -std=c++17 does not compile its own headers here (ATen/core/List_inl.h).
+            # cpp_extension supplies the CUDA_HOME include paths and a compatible host compiler, and targets the
+            # visible device's architecture.
+            std = os.environ.get("SPIKY_CXX_STD", "c++20")
+            flags = [f"-std={std}", "-O3"]
+            return load(name=self.name, sources=[os.path.join(CSRC, s) for s in self.sources], extra_cflags=flags,
+                        extra_cuda_cflags=flags + list(self.extra_cuda_cflags), verbose=False)
+        except Exception as e:                                           # no nvcc, compile error, ...: recorded
+            _fallback.record_build_failure(self.name, e)
+            return None
+
+    def reset(self) -> None:
+        """Forget the build (tests): the next :meth:`get` builds / loads again."""
+        self.module, self.tried = None, False
+
+
+def not_covered(cartridge: str, problems: Sequence[str], reference: Optional[str]) -> str:
+    """The one message for a case a fused family's kernels do not cover: ``"<cartridge>: not a case the fused kernels
+    cover: <problem>; <problem>."``, then ``" Construct <reference> (the reference class) for this case."`` when a
+    reference class runs it (None: none does, e.g. a low-precision quantised case)."""
+    msg = f"{cartridge}: not a case the fused kernels cover: {'; '.join(problems)}."
+    return msg + (f" Construct {reference} (the reference class) for this case." if reference else "")
+
+
+def device_problem(x: torch.Tensor) -> Optional[str]:
+    """The problem text for an input the CUDA kernels cannot take for its device, else None."""
+    if x.is_cuda:
+        return None
     if not torch.cuda.is_available():
-        _fallback.record_build_failure(name)
+        return "this machine has no CUDA device, which the kernels need"
+    return f"the input is on {x.device}, the kernels run on CUDA only"
+
+
+def row_threads(d_out: int, widths: Sequence[int]) -> tuple:
+    """``(vec, need)``: the widest vector width in ``widths`` dividing ``d_out``, and the threads one table row needs at
+    it (``d_out / vec``, rounded up to a warp). One CTA covers a row only if ``need <= _MAX_CTA_THREADS``."""
+    vec = next(v for v in widths if d_out % v == 0)
+    return vec, -(-(d_out // vec) // 32) * 32
+
+
+def row_problem(d_out: int, vec: int, need: int) -> Optional[str]:
+    """The problem text for a d_out one CTA cannot cover, else None."""
+    if need <= _MAX_CTA_THREADS:
         return None
-    try:
-        from torch.utils.cpp_extension import load
-        # torch's default -std=c++17 does not compile its own headers here (ATen/core/List_inl.h). cpp_extension supplies
-        # the CUDA_HOME include paths and a compatible host compiler, and targets the visible device's architecture.
-        std = os.environ.get("SPIKY_CXX_STD", "c++20")
-        flags = [f"-std={std}", "-O3"]
-        return load(name=name, sources=[os.path.join(CSRC, s) for s in sources], extra_cflags=flags,
-                    extra_cuda_cflags=flags, verbose=False)
-    except Exception as e:
-        _fallback.record_build_failure(name, e)
-        return None
+    return f"d_out={d_out} needs {need} threads per CTA at vec {vec} (limit {_MAX_CTA_THREADS})"
 
 
 _KNOB_DEFAULTS = (("fwd_threads", "FWD_THREADS", 64), ("bwd_threads", "BWD_THREADS", 64),
@@ -56,8 +120,9 @@ _KNOB_DEFAULTS = (("fwd_threads", "FWD_THREADS", 64), ("bwd_threads", "BWD_THREA
 class KernelKnobs:
     """Launch configuration of a hand-written kernel family (all explicit). A field left at None takes its default from
     ``LUTORCH_EX_<ENV>_CUDA_<FIELD>`` (``ENV`` set by the subclass), else the built-in default: 64 / 64 threads per CTA
-    (forward / backward), 4 rows per CTA, vector width 4 (fp32 table) and 4 (bf16 table: 8 is slower on the RTX 5090,
-    mostly in the backward), vector atomics on (sm_90+). Defaults = the sweep winners on the RTX 5090 and the H100."""
+    (forward / backward), 4 rows per CTA, vector width 4 (float32 table) and 4 (bfloat16 table: 8 is slower on the RTX
+    5090, mostly in the backward), vector atomics on (sm_90+). The float32-table defaults are the
+    sweep winners on the RTX 5090 and the H100 (0d8a66d5); vec_bf16 was swept on the RTX 5090 only (9472c8ef)."""
     ENV: ClassVar[str] = ""
     fwd_threads: Optional[int] = None
     bwd_threads: Optional[int] = None

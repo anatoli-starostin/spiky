@@ -27,15 +27,15 @@ DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 CARTRIDGES = [
     ("ManifestoHardLUT", {}),
     ("ManifestoSoftLUT", {}),
-    ("ManifestoHardLUT", dict(weight="softsign")),
-    ("ManifestoSoftLUT", dict(weight="softsign")),
+    ("ManifestoHardLUT", dict(uncertainty_func="softsign")),
+    ("ManifestoSoftLUT", dict(uncertainty_func="softsign")),
     ("ConfidenceLUT", dict(read_top_n=1)),
     ("ConfidenceLUT", dict(read_top_n=2)),
     ("QuantisedConfidenceLUT", dict(read_top_n=1)),
     ("QuantisedConfidenceLUT", dict(read_top_n=2)),
 ]
 FUSED = [("FusedManifestoHardLUT", {}), ("FusedManifestoSoftLUT", {}),
-         ("FusedManifestoHardLUT", dict(weight="softsign")), ("FusedManifestoSoftLUT", dict(weight="softsign")),
+         ("FusedManifestoHardLUT", dict(uncertainty_func="softsign")), ("FusedManifestoSoftLUT", dict(uncertainty_func="softsign")),
          ("FusedConfidenceLUT", dict(read_top_n=1)), ("FusedConfidenceLUT", dict(read_top_n=2)),
          ("FusedQuantisedConfidenceLUT", dict(read_top_n=2))]
 
@@ -112,7 +112,7 @@ def test_fused_close_within_baseline_noise(name, kw):
 def test_eval_int32_vs_int64(device, name, kw):
     # The eval forward is torch.compiled on CUDA, and the int64 and int32 models are two separate compilations. With
     # pointwise autotuning on, Inductor BENCHMARKS candidate kernel configs (block size, warps) for each and keeps the
-    # fastest, so timing noise can give the two sides different configs -> a different fp32 summation order -> a
+    # fastest, so timing noise can give the two sides different configs -> a different float32 summation order -> a
     # sub-ulp difference that has nothing to do with the index dtype, and differs from run to run. Autotuning off
     # makes the config choice deterministic and identical for both sides, so the comparison isolates the index dtype.
     import torch._inductor.config as inductor_config
@@ -135,7 +135,7 @@ def test_eval_int32_vs_int64(device, name, kw):
 @pytest.mark.parametrize("device", DEVICES)
 def test_deployed_int8_read_bit_identical(device):
     """The deploy-only packed-int8 object (n=2): int32 indices reach its int8 shift-add read too."""
-    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
+    from spiky.lutorch_ex.cartridges.deployed_quantised_confidence import DeployedQuantisedConfidenceLUT
     spec = LUTSpec(**GEOM)
     torch.manual_seed(0)
     q = lx.QuantisedConfidenceLUT(spec, seed=1, read_top_n=2).to(device)
@@ -150,7 +150,7 @@ def test_deployed_int8_read_bit_identical(device):
 
 
 def test_default_is_int32_everywhere_when_the_table_fits():
-    from spiky.lutorch_ex.cartridges.quantised_confidence import DeployedQuantisedConfidenceLUT
+    from spiky.lutorch_ex.cartridges.deployed_quantised_confidence import DeployedQuantisedConfidenceLUT
     spec = LUTSpec(**GEOM)
     for name, kw in CARTRIDGES:
         m = getattr(lx, name)(spec, seed=1, **kw)
@@ -186,10 +186,10 @@ def test_auto_widens_a_call_too_large_for_int32_positions(monkeypatch):
     spec = LUTSpec(**GEOM)                                         # G * tph * 2 = 128 entries per row
     monkeypatch.setattr(mb, "_INT32_MAX_ENTRIES", 128 * 10)
     x_small, x_big = torch.randn(10, spec.h_in, spec.d_in), torch.randn(11, spec.h_in, spec.d_in)
-    auto = lx.ConfidenceLUT(spec, seed=1)
+    auto = lx.ConfidenceLUT(spec, read_top_n=1, seed=1)
     assert auto._addresses(x_small)[2].dtype == torch.int32
     assert auto._addresses(x_big)[2].dtype == torch.int64
-    explicit = lx.ConfidenceLUT(spec, seed=1, index_dtype=torch.int32)
+    explicit = lx.ConfidenceLUT(spec, read_top_n=1, seed=1, index_dtype=torch.int32)
     assert explicit._addresses(x_big)[2].dtype == torch.int32
 
 
@@ -201,7 +201,7 @@ def test_narrow_or_bad_index_dtype_rejected(bad):
 
 def test_addressing_produces_the_requested_dtype():
     spec = LUTSpec(**GEOM)
-    m = lx.ConfidenceLUT(spec, seed=1, index_dtype=torch.int32)
+    m = lx.ConfidenceLUT(spec, read_top_n=1, seed=1, index_dtype=torch.int32)
     _, _, c, _, _, c_alt = m._addresses(torch.randn(8, spec.h_in, spec.d_in))
     assert c.dtype == torch.int32 and c_alt.dtype == torch.int32
     assert m.powers.dtype == torch.int64                         # the buffer (state_dict) is unchanged

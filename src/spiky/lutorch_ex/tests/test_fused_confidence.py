@@ -101,20 +101,21 @@ def test_fan_in_and_d24_geometry():
 
 
 def test_no_fallback_off_cuda():
-    """No fallback (spec rule 3): a CPU input and an fp64 input raise, naming the case and the reference class."""
+    """No fallback: a CPU input and a float64 input raise, naming the case and the reference class."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8, anchor_mode="pairs")
     with pytest.raises(RuntimeError, match=r"the input is on cpu.*Construct ConfidenceLUT"):
-        FusedConfidenceLUT(spec, seed=0).eval()(torch.randn(5, 2, 8))
+        FusedConfidenceLUT(spec, read_top_n=1, seed=0).eval()(torch.randn(5, 2, 8))
     with pytest.raises(RuntimeError, match=r"input dtype torch.float64.*table dtype torch.float64"):
-        FusedConfidenceLUT(spec, seed=0).cuda().double().eval()(torch.randn(5, 2, 8, device="cuda",
+        FusedConfidenceLUT(spec, read_top_n=1, seed=0).cuda().double().eval()(torch.randn(5, 2, 8, device="cuda",
                                                                             dtype=torch.float64))
 
 
-# -- bf16 tables ------------------------------------------------------------------------------------------------------
-# bf16 keeps 8 significant bits, so its unit roundoff is u = 2**-8 (3.9e-3). In the kernels every intermediate is
-# fp32; only the leaves are rounded once to bf16: the output (bf16 input), grad x, grad W, grad beta / gamma / tau.
-# One rounding gives a rel-norm error of about u / sqrt(3) (uniform rounding error); BF16_TOL = 2u bounds it with
-# margin. FP32_TOL is the existing fp32 tolerance.
+# -- bfloat16 tables
+#------------------------------------------------------------------------------------------------------
+# bfloat16 keeps 8 significant bits, so its unit roundoff is u = 2**-8 (3.9e-3). In the kernels every intermediate is
+# float32; only the leaves are rounded once to bfloat16: the output (bfloat16 input), grad x, grad W, grad beta / gamma
+# / tau. One rounding gives a rel-norm error of about u / sqrt(3) (uniform rounding error); BF16_TOL = 2u bounds it with
+# margin. FP32_TOL is the existing float32 tolerance.
 BF16_TOL = 2.0 * 2.0 ** -8
 FP32_TOL = 1e-4
 
@@ -131,8 +132,8 @@ def _model(n, dtype, anchor_mode="pairs", knobs=None, h=4, tph=16, nap=6, d=24, 
 
 
 def _dense_bf16(cud, x, go):
-    """The dense answer for a bf16 cartridge: ConfidenceLUT in fp32 on the same bf16-stored parameters and bf16 input,
-    every result then rounded to bf16 once (what the kernels' leaves get)."""
+    """The dense answer for a bfloat16 cartridge: ConfidenceLUT in float32 on the same bfloat16-stored parameters and
+    bfloat16 input, every result then rounded to bfloat16 once (what the kernels' leaves get)."""
     ref = ConfidenceLUT(cud.spec, seed=3, read_top_n=cud.read_top_n, table_dropout_rate=0.0).cuda().train()
     ref.load_state_dict({k: v.float() if v.is_floating_point() else v for k, v in cud.state_dict().items()})
     return {k: v.to(torch.bfloat16) for k, v in _fwd_bwd(ref, x.float(), go.float()).items()}
@@ -148,7 +149,8 @@ def _fwd_bwd(mod, x, go, eager_ref=False):
 
 
 def _fp64_reference(mod, x, go):
-    """ConfidenceLUT in fp64 on the SAME (already rounded) parameters and input: the exact answer for this storage."""
+    """ConfidenceLUT in float64 on the SAME (already rounded) parameters and input: the exact answer for this
+    storage."""
     ref = ConfidenceLUT(mod.spec, seed=3, read_top_n=mod.read_top_n, table_dropout_rate=0.0).cuda().double().train()
     ref.load_state_dict({k: v.double() if v.is_floating_point() else v for k, v in mod.state_dict().items()})
     return _fwd_bwd(ref, x.double(), go.double(), eager_ref=True)
@@ -158,7 +160,7 @@ def _fp64_reference(mod, x, go):
 @pytest.mark.parametrize("n", [1, 2])
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_accuracy_vs_fp64_per_dtype(dtype, n, anchor_mode):
-    """Cartridge, input and output in `dtype` vs fp64 on identical parameters and input."""
+    """Cartridge, input and output in `dtype` vs float64 on identical parameters and input."""
     torch.manual_seed(0)
     mod = _model(n, dtype, anchor_mode)
     x = torch.randn(96, 4, 24, device="cuda").to(dtype)
@@ -175,9 +177,9 @@ def test_accuracy_vs_fp64_per_dtype(dtype, n, anchor_mode):
 
 @pytest.mark.parametrize("n", [1, 2])
 def test_bf16_cuda_matches_dense_bf16(n):
-    """The kernels on a bf16 table against the dense ConfidenceLUT math in fp32 on the same bf16-stored parameters
-    (:func:`_dense_bf16`). Same storage, so the gap is accumulation order plus the final bf16 rounding of the outputs
-    -- it must not be larger than one bf16 rounding."""
+    """The kernels on a bfloat16 table against the dense ConfidenceLUT math in float32 on the same bfloat16-stored
+    parameters (:func:`_dense_bf16`). Same storage, so the gap is accumulation order plus the final bfloat16 rounding of
+    the outputs -- it must not be larger than one bfloat16 rounding."""
     torch.manual_seed(0)
     cud = _model(n, torch.bfloat16)
     x = torch.randn(96, 4, 24, device="cuda").to(torch.bfloat16)
@@ -193,10 +195,10 @@ def test_bf16_cuda_matches_dense_bf16(n):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_grad_w_accumulates_in_fp32_under_heavy_row_collision(dtype):
     """Every one of 2**17 tokens addresses the SAME cell of every table (identical inputs), so each touched grad-W row
-    is a sum of 131,072 positive contributions. An fp32 accumulator gets it to fp32-summation accuracy: the worst case
-    for N terms is N * 2**-24 (7.8e-3 here), typically far less, so the bound is 1e-3. Then one bf16 rounding for a
-    bf16 table. A bf16 accumulator stalls once the running sum is ~2**8 times a single contribution and ends up wrong
-    by most of its value -- far above either bound, so narrowing the accumulator makes this test fail."""
+    is a sum of 131,072 positive contributions. A float32 accumulator gets it to float32-summation accuracy: the worst
+    case for N terms is N * 2**-24 (7.8e-3 here), typically far less, so the bound is 1e-3. Then one bfloat16 rounding
+    for a bfloat16 table. A bfloat16 accumulator stalls once the running sum is ~2**8 times a single contribution and
+    ends up wrong by most of its value -- far above either bound, so narrowing the accumulator makes this test fail."""
     torch.manual_seed(0)
     spec_kw = dict(h=1, tph=4, nap=3, d=8)
     mod = _model(1, dtype, **spec_kw)
@@ -217,7 +219,7 @@ def test_grad_w_accumulates_in_fp32_under_heavy_row_collision(dtype):
 @pytest.mark.parametrize("vec", [1, 2, 4, 8])
 @pytest.mark.parametrize("n", [1, 2])
 def test_bf16_vector_widths_agree(vec, n):
-    """Every bf16 vector width (8 = one 16-byte load) gives the dense-bf16 result."""
+    """Every bfloat16 vector width (8 = one 16-byte load) gives the dense-bfloat16 result."""
     torch.manual_seed(0)
     cud = _model(n, torch.bfloat16, knobs=CudaKnobs(vec_bf16=vec, rows_per_cta=3))
     x = torch.randn(50, 4, 24, device="cuda").to(torch.bfloat16)
@@ -230,14 +232,16 @@ def test_bf16_vector_widths_agree(vec, n):
 
 
 
-# -- bf16 input read in-kernel, bf16 output stored in-kernel, identity in_head gather skipped -------------------------
+# -- bfloat16 input read in-kernel, bfloat16 output stored in-kernel, identity in_head gather skipped
+#-------------------------
 @pytest.mark.parametrize("table", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("pattern", [(4, 4), (4, 1), (1, 4)])          # per-head, fan-in, fan-out
 @pytest.mark.parametrize("n", [1, 2])
 def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
-    """A bf16 input goes to the kernels as is (upconverted when staged: exact). Per-head / fan-out store the bf16
-    output in-kernel; fan-in sums the groups in fp32 and casts. All must be bitwise the fp32 run on the same values
-    with its output rounded once, which is what the path did before (cast in, cast out). grad x comes back bf16."""
+    """A bfloat16 input goes to the kernels as is (upconverted when staged: exact). Per-head / fan-out store the
+    bfloat16 output in-kernel; fan-in sums the groups in float32 and casts. All must be bitwise the float32 run on the
+    same values with its output rounded once, which is what the path did before (cast in, cast out). grad x comes back
+    bfloat16."""
     h_in, h_out = pattern
     spec = LUTSpec(h_in=h_in, h_out=h_out, tph=16, nap=6, d_in=24, d_out=24, anchor_mode="pairs")
     m = FusedConfidenceLUT(spec, seed=3, read_top_n=n, weight_init_std=0.5, beta_init=1.7, gamma_init=0.8,
@@ -254,7 +258,7 @@ def test_bf16_input_is_bitwise_the_fp32_input_rounded_once(table, pattern, n):
     a, b = _fwd_bwd(m, xb, go), _fwd_bwd(m, xb.float(), go)
     assert a["grad x"].dtype == torch.bfloat16
     # The backward accumulates grad z with shared-memory atomics (not bit-reproducible run to run), so the gradients
-    # are compared to one bf16 rounding of the fp32 run.
+    # are compared to one bfloat16 rounding of the float32 run.
     for k in a:
         assert _rel(a[k], b[k].to(a[k].dtype)) < BF16_TOL, k
 
@@ -292,4 +296,4 @@ def test_d_out_one_cta_cannot_cover_is_not_a_cuda_case():
     spec = LUTSpec(h_in=1, h_out=1, tph=2, nap=3, d_in=6, d_out=4100, anchor_mode="pairs")
     x = torch.randn(3, 1, 6, device="cuda")
     with torch.no_grad(), pytest.raises(RuntimeError, match=r"d_out=4100 needs 1056 threads.*Construct ConfidenceLUT"):
-        FusedConfidenceLUT(spec, seed=0).cuda().eval()(x)
+        FusedConfidenceLUT(spec, read_top_n=1, seed=0).cuda().eval()(x)

@@ -1,7 +1,6 @@
-"""Compare two performance snapshots of record (bench_snapshot JSON) and draw the comparison figures.
+"""Compare two performance snapshots (bench_snapshot JSON) and draw the comparison figures.
 
-    python -m spiky.lutorch_ex.benchmarks.bench_compare benchmarks/snapshot_159.json benchmarks/snapshot_162.json \
-        --out-dir benchmarks/figures_159_vs_162
+    python -m spiky.lutorch_ex.benchmarks.bench_compare before.json after.json --out-dir figures_before_vs_after
 
 reads two snapshot JSONs (nothing else: no PR text, no benchmark run) and writes five PNGs: interleaved before / after
 bars (before orange, after green) for median time and for peak memory, each split into two figures by phase (eval
@@ -9,16 +8,13 @@ forward + train total; train forward + train backward), and a ratio strip with e
 log axis, the run-to-run band shaded). ``--csv`` also writes the joined table.
 
 How cells are joined and marked:
-- A cell is (class, vectors, dtype, phase, metric). A snapshot row with ``"default": false`` (an implementation choice a
-  later snapshot no longer has) is left out; ``RENAMES`` maps a class to its later name by role (#160 folded the
-  SoftSign* classes into Manifesto*(weight="softsign")), and the figures label it "new <- old".
+- A cell is (class, vectors, dtype, phase, metric).
 - Out of memory is an "OOM" stub in the bar's colour, never a zero-length or missing bar.
 - Each cell has its own noise floor (``noise_floor``), the run-to-run spread measured on this machine with identical
   code and clocks unlocked: a timing whose before value is under 0.5 ms (launch-bound) +-15%; any other timing at
-  8,192 vectors or fewer +-10%; any other timing +-6%; peak memory +-5%. A change within the cell's floor, or within a
-  snapshot's printed resolution (``provenance.decimals``: half a unit in the last place), is "within noise": the
-  bars draw the floor as a shaded band around the before value, hatch the after-bar, and label the ratio in grey with
-  the floor ("x1.03 . within +-10%"); a change beyond it gets the ratio in black.
+  8,192 vectors or fewer +-10%; any other timing +-6%; peak memory +-5%. A change within the cell's floor is
+  "within noise": the bars draw the floor as a shaded band around the before value, hatch the after-bar, and label
+  the ratio in grey with the floor ("x1.03 . within +-10%"); a change beyond it gets the ratio in black.
 - A row only the AFTER snapshot has (new functionality: nothing to compare it with) is drawn too, as the after bar
   alone, labelled "NEW" -- no ratio and no noise-floor judgement; it is listed, not plotted, on the ratio strip. A row
   only the BEFORE snapshot has is reported on stdout. Without after-only rows the figures are unchanged.
@@ -50,18 +46,15 @@ def noise_floor(metric: str, vectors: int, before: float) -> float:
     if before < 0.5:
         return 0.15                 # launch-bound cells
     return 0.10 if vectors <= 8192 else 0.06
-#: Earlier class name -> later class name, by role (the #160 Gen-2 fold).
-RENAMES = {
-    "SoftSignHardLUT": "ManifestoHardLUT weight=softsign",
-    "SoftSignSmoothLUT": "ManifestoSoftLUT weight=softsign",
-    "FusedSoftSignHardLUT": "FusedManifestoHardLUT weight=softsign",
-    "FusedSoftSignSmoothLUT": "FusedManifestoSoftLUT weight=softsign",
-}
+
+
 #: Row order of the figures: the reference Manifesto family, the fused families, Confidence, Quantised, Deployed.
-ORDER = ["ManifestoHardLUT", "ManifestoHardLUT weight=softsign", "ManifestoSoftLUT", "ManifestoSoftLUT weight=softsign",
-         "FusedManifestoHardLUT", "FusedManifestoHardLUT weight=softsign", "FusedManifestoSoftLUT",
-         "FusedManifestoSoftLUT weight=softsign", "ConfidenceLUT n=1", "ConfidenceLUT n=2", "FusedConfidenceLUT n=1",
-         "FusedConfidenceLUT n=2", "QuantisedConfidenceLUT n=1", "QuantisedConfidenceLUT n=2",
+ORDER = ["ManifestoHardLUT", "ManifestoHardLUT uncertainty_func=softsign",
+         "ManifestoSoftLUT", "ManifestoSoftLUT uncertainty_func=softsign",
+         "FusedManifestoHardLUT", "FusedManifestoHardLUT uncertainty_func=softsign",
+         "FusedManifestoSoftLUT", "FusedManifestoSoftLUT uncertainty_func=softsign",
+         "ConfidenceLUT n=1", "ConfidenceLUT n=2", "FusedConfidenceLUT n=1", "FusedConfidenceLUT n=2",
+         "QuantisedConfidenceLUT n=1", "QuantisedConfidenceLUT n=2",
          "FusedQuantisedConfidenceLUT n=1", "FusedQuantisedConfidenceLUT n=2",
          "DeployedQuantisedConfidenceLUT", "DeployedQuantisedConfidenceLUT n=1"]
 BEFORE_C, AFTER_C = "#E69F00", "#009E73"                  # orange / green (Okabe-Ito: CVD-distinct)
@@ -71,12 +64,8 @@ INK, INK2, MUTED, GRID, SURF, BAND = "#1f2328", "#57606a", "#8c959f", "#e6e8eb",
 
 def _load(path):
     rec = json.load(open(path))
-    res = 0.5 * 10.0 ** -rec["provenance"]["decimals"] if "provenance" in rec else 0.0
     rows = {}
     for r in rec["rows"]:
-        if not r.get("default", True):
-            continue
-        name = RENAMES.get(r["cartridge"], r["cartridge"])
         cells = {}
         for ph, _ in PHASES:
             p = r.get(ph)
@@ -84,26 +73,25 @@ def _load(path):
                 cells[ph] = p
             elif r.get("status") == "out of memory" and ph != "eval_forward":
                 cells[ph] = "OOM"
-        rows[(name, r["batch"], r["dtype"])] = (r["cartridge"], cells, r.get("status", ""))
-    return rec, rows, res
+        rows[(r["cartridge"], r["batch"], r["dtype"])] = (cells, r.get("status", ""))
+    return rec, rows
 
 
 def join(before_path, after_path):
     """(cells, before_only, after_only, recs): the comparable cells, and the rows only one snapshot has."""
-    rb, before, res_b = _load(before_path)
-    ra, after, res_a = _load(after_path)
-    res = max(res_b, res_a)
+    rb, before = _load(before_path)
+    ra, after = _load(after_path)
     cells = []
     for key in sorted(set(before) & set(after), key=lambda k: (ORDER.index(k[0]) if k[0] in ORDER else 99, k[1], k[2])):
-        old_name, bc, _ = before[key]
-        _, ac, _ = after[key]
+        bc, _ = before[key]
+        ac, _ = after[key]
         for ph, phl in PHASES:
             b, a = bc.get(ph), ac.get(ph)
             if b is None and a is None:
                 continue                                  # e.g. Deployed has no training phases
             for m, ml, _ in METRICS:
-                c = dict(cls=key[0], was=old_name if old_name != key[0] else "", vectors=key[1], dtype=key[2],
-                         phase=phl, metric=ml, before=None, after=None, ratio=None, noise=None, status="")
+                c = dict(cls=key[0], vectors=key[1], dtype=key[2], phase=phl, metric=ml, before=None, after=None,
+                         ratio=None, noise=None, status="")
                 if b == "OOM" or a == "OOM" or b is None or a is None:
                     c.update(before=None if b in ("OOM", None) else b[m], after=None if a in ("OOM", None) else a[m],
                              status=f"{'OOM' if b == 'OOM' else 'missing' if b is None else 'fits'} before, "
@@ -112,7 +100,7 @@ def join(before_path, after_path):
                     bv, av = b[m], a[m]
                     r = av / bv if bv > 0 else float("nan")
                     floor = noise_floor(ml, key[1], bv)
-                    noise = abs(r - 1) <= floor or abs(av - bv) <= res
+                    noise = abs(r - 1) <= floor
                     c.update(before=bv, after=av, ratio=r, noise=floor,
                              status="within noise" if noise else ("regression" if r > 1 else "improvement"))
                 cells.append(c)
@@ -122,16 +110,16 @@ def join(before_path, after_path):
 def new_cells(after_path, after_only):
     """Cells of the rows only the after snapshot has (new functionality), one per phase the row measured and metric:
     after value only, no ratio, no noise floor, status "new (after only)"."""
-    _, after, _ = _load(after_path)
+    _, after = _load(after_path)
     cells = []
     for key in sorted(after_only, key=lambda k: (ORDER.index(k[0]) if k[0] in ORDER else 99, k[1], k[2])):
-        _, ac, _ = after[key]
+        ac, _ = after[key]
         for ph, phl in PHASES:
             a = ac.get(ph)
             if a is None:
                 continue
             for m, ml, _ in METRICS:
-                cells.append(dict(cls=key[0], was="", vectors=key[1], dtype=key[2], phase=phl, metric=ml, before=None,
+                cells.append(dict(cls=key[0], vectors=key[1], dtype=key[2], phase=phl, metric=ml, before=None,
                                   after=None if a == "OOM" else a[m], ratio=None, noise=None,
                                   status="new (after only)" if a != "OOM" else "new (after only), OOM"))
     return cells
@@ -143,10 +131,14 @@ def _order(c):
 
 def _env(rec, path):
     e = rec["environment"]
-    dec = rec.get("provenance", {}).get("decimals")
     return (f"{os.path.basename(path)}: code {e['commit'][:8]}, {e.get('gpu', '?')}, torch {e.get('torch', '?')}, "
-            f"driver {e.get('driver', '?')}, clocks {'locked' if e.get('clocks_locked') else 'unlocked'}"
-            + (f", {dec}-decimal values" if dec is not None else ""))
+            f"driver {e.get('driver', '?')}, clocks {'locked' if e.get('clocks_locked') else 'unlocked'}")
+
+
+def _protocol(rec):
+    s = rec.get("settings", {})
+    return (f"{s.get('rounds', '?')} rotated rounds × {s.get('warmup', '?')} warm-up / "
+            f"{s.get('repeats', '?')} timed")
 
 
 def _plt():
@@ -164,9 +156,7 @@ def _plt():
 
 
 def _label(c):
-    s = c["cls"].replace("LUT", "").replace(" weight=softsign", "·softsign")
-    if c["was"]:
-        s += " ← " + c["was"].replace("LUT", "")
+    s = c["cls"].replace("LUT", "").replace(" uncertainty_func=softsign", "·softsign")
     v = f"{c['vectors'] // 1024}k" if c["vectors"] % 1024 == 0 else str(c["vectors"])
     return f"{s} · {c['dtype'].replace('float32', 'fp32').replace('bfloat16', 'bf16')} · {v}"
 
@@ -196,11 +186,12 @@ def _bars(plt, cells, metric, phases, title, unit, lo, hi, caveat, names, path):
                             color=INK, fontstyle="italic")
                 continue
             if c["noise"] is not None and c["before"]:      # the cell's noise floor around the before value
-                ax.add_patch(plt.Rectangle((c["before"] * (1 - c["noise"]), yc - h - 0.02), c["before"] * 2 * c["noise"],
-                                           2 * h + 0.04, color=BAND, ec=MUTED, lw=0.4, zorder=0))
-            for val, col, off, oom, hatch in ((c["before"], BEFORE_C, h / 2, c["status"].startswith("OOM before"), None),
-                                              (c["after"], AFTER_C, -h / 2, c["status"].endswith("OOM after"),
-                                               "////" if noise else None)):
+                ax.add_patch(plt.Rectangle((c["before"] * (1 - c["noise"]), yc - h - 0.02),
+                                           c["before"] * 2 * c["noise"], 2 * h + 0.04,
+                                           color=BAND, ec=MUTED, lw=0.4, zorder=0))
+            bars = ((c["before"], BEFORE_C, h / 2, c["status"].startswith("OOM before"), None),
+                    (c["after"], AFTER_C, -h / 2, c["status"].endswith("OOM after"), "////" if noise else None))
+            for val, col, off, oom, hatch in bars:
                 if val is None:
                     ax.text(lo * 1.15, yc + off, "OOM" if oom else "—", va="center", ha="left", fontsize=7,
                             fontweight="bold", color=col)
@@ -231,7 +222,7 @@ def _bars(plt, cells, metric, phases, title, unit, lo, hi, caveat, names, path):
                  x=0.01, ha="left", y=1 - 0.12 / H, fontsize=12, fontweight="bold")
     handles = [Patch(color=BEFORE_C, label=names[0]), Patch(color=AFTER_C, label=names[1]),
                Patch(facecolor=AFTER_C, hatch="////", edgecolor=SURF,
-                     label="after, within the cell's noise floor or the before value's resolution"),
+                     label="after, within the cell's noise floor"),
                Patch(facecolor=BAND, edgecolor=MUTED, lw=0.4,
                      label="the cell's noise floor around the before value (±15% < 0.5 ms; ±10% ≤ 8k; ±6%; "
                            "memory ±5%)"),
@@ -280,7 +271,7 @@ def _strip(plt, cells, title, caveat, path):
     ax.tick_params(axis="y", length=0)
     ax.legend(handles=[Line2D([], [], marker="o", ls="", color=IMPROVE, ms=6.5, label="improvement (beyond noise)"),
                        Line2D([], [], marker="o", ls="", color=REGRESS, ms=6.5, label="regression (beyond noise)"),
-                       Line2D([], [], marker="o", ls="", color=NOISE_C, ms=6.5, label="within noise / resolution"),
+                       Line2D([], [], marker="o", ls="", color=NOISE_C, ms=6.5, label="within noise"),
                        Patch(color=BAND, label=f"±{NOISE:.0%} band (each cell is judged by its own floor)")],
               loc="upper left", bbox_to_anchor=(0, 1.1), ncol=4, frameon=False, fontsize=8)
     ax.set_title(title, loc="left", pad=28, fontsize=12, fontweight="bold")
@@ -302,7 +293,8 @@ def main(argv=None):
     ap.add_argument("--csv", action="store_true", help="also write comparison.csv (the joined cells)")
     ap.add_argument("--no-figures", action="store_true")
     ap.add_argument("--same-session", action="store_true",
-                    help="the two snapshots were measured in one session, interleaved cell by cell (the footnote says so)")
+                    help="the two snapshots were measured in one session, interleaved cell by cell "
+                         "(the footnote says so)")
     a = ap.parse_args(argv)
     cells, before_only, after_only, (rb, ra) = join(a.before, a.after)
     extra = new_cells(a.after, after_only)
@@ -324,14 +316,15 @@ def main(argv=None):
     if a.no_figures:
         return
     plt = _plt()
+    pb, pa = _protocol(rb), _protocol(ra)
+    proto = pb if pb == pa else f"before {pb}, after {pa}"
     caveat = (f"Before = {_env(rb, a.before)}.\nAfter = {_env(ra, a.after)}.\n"
-              "Same benchmark and protocol (bench_snapshot.py: compiled, one fresh process per cell, Dynamo reset, "
-              "10 warm-up + 30 timed, median; peak above the pre-step allocation), "
+              "bench_snapshot.py (each class's defaults, one fresh process per cell, Dynamo reset, "
+              f"{proto}, L2 flushed, median; peak above the pre-step allocation), "
               + ("one session, interleaved cell by cell (same conditions)." if a.same_session
                  else "different sessions: not a controlled A/B.")
-              + "\nRenamed classes (new ← old) are compared by role. Hatched / grey = within the cell's noise floor "
-              "(±15% timings < 0.5 ms, ±10% timings at ≤ 8k vectors, ±6% other timings, ±5% memory) or the before "
-              "value's resolution.")
+              + "\nHatched / grey = within the cell's noise floor "
+              "(±15% timings < 0.5 ms, ±10% timings at ≤ 8k vectors, ±6% other timings, ±5% memory).")
     names = (f"before ({nb})", f"after ({na})")
     t = f"Time per step, {nb} vs {na} — every comparable cell"
     m = f"Peak memory, {nb} vs {na} — every comparable cell"

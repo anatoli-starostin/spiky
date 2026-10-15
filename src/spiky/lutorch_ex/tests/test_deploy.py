@@ -1,7 +1,7 @@
 """Deployment export/load (PR 1): exact pow2 decompress-fold, export->load->forward parity, and the
-guarantee that NO fp32 LUT table Parameter is allocated in the loaded inference model.
+guarantee that NO float32 LUT table Parameter is allocated in the loaded inference model.
 
-CPU + fp32: the int8 read (_pow2.int_blend_read) and the quant eval fake-quant path are both pure
+CPU + float32: the int8 read (_pow2.int_blend_read) and the quant eval fake-quant path are both pure
 torch, so this needs no CUDA / no JIT kernel."""
 import json
 
@@ -91,13 +91,13 @@ def test_no_fp32_lut_table_after_load(tmp_path):
     dep = load_deployment(path, _make_skeleton, device="cpu")
     for name, mod in dep.named_modules():
         if isinstance(mod, DeployedQuantisedConfidenceLUT):
-            # no fp32 `weights` Parameter anywhere in the deployed cartridge
+            # no float32 `weights` Parameter anywhere in the deployed cartridge
             assert "weights" not in dict(mod.named_parameters()), f"{name}: fp32 weights Parameter present"
             assert not any(p.is_floating_point() and p.numel() > mod.spec.d_out * 4 for p in mod.parameters()), \
                 f"{name}: unexpected large fp32 Parameter"
             assert mod.packed.dtype == torch.int8, f"{name}: packed table not int8"
             assert not torch.is_floating_point(mod.packed)
-    # the big tensor resident in each deployed FFN cartridge is the int8 packed table, not an fp32 table
+    # the big tensor resident in each deployed FFN cartridge is the int8 packed table, not a float32 table
     deployed = [mod for _, mod in dep.named_modules() if isinstance(mod, DeployedQuantisedConfidenceLUT)]
     assert len(deployed) == 2
 
@@ -222,3 +222,20 @@ def test_legacy_cmp_eps_key_in_an_export():
         assert torch.equal(legacy(x), y)
     with pytest.raises(ValueError, match="cmp_eps"):
         DeployedQuantisedConfidenceLUT(spec, payload["tensors"], {**payload["meta"], "cmp_eps": 1e-3})
+
+
+def test_cell_tv_penalty_skips_a_deployed_cartridge(tmp_path):
+    """A loaded deployment holds int8 buffers and no trainable table: cell_tv_penalty over a model that mixes it with a
+    trainable cartridge averages the trainable one only, a deployment alone gives the 0-dim zero, and a direct
+    cell_tv() call on the deployed cartridge says it is inference-only (not a bare AttributeError)."""
+    from spiky.lutorch_ex import cell_tv_penalty
+    m = _trained_model()
+    path = str(tmp_path / "deploy.lxq")
+    export_deployment(m, path)
+    dep = load_deployment(path, _make_skeleton, device="cpu")
+    assert isinstance(dep.ff0.cartridge, DeployedQuantisedConfidenceLUT)
+    mixed = nn.ModuleDict({"deployed": dep, "trainable": m.ff0})
+    assert torch.equal(cell_tv_penalty(mixed), m.ff0.cartridge.cell_tv())
+    assert torch.equal(cell_tv_penalty(dep), torch.zeros(()))
+    with pytest.raises(TypeError, match="inference-only"):
+        dep.ff0.cartridge.cell_tv()

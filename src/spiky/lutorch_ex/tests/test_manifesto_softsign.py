@@ -1,16 +1,16 @@
-"""The Manifesto reference cartridges with ``weight="softsign"`` (Gen-2): ManifestoHardLUT and ManifestoSoftLUT.
+"""The Manifesto reference cartridges with ``uncertainty_func="softsign"``: ManifestoHardLUT and ManifestoSoftLUT.
 
-Both read with ``F.embedding_bag`` on the train path, plain-autograd backward. Covered here: fp64 gradcheck of the 2-alternative soft
-backward (incl. the two learned temperatures) against reference finite differences; the hard
-cartridge's value == the hard read and its output-Jacobian == the smooth cartridge's; the bf16
-path vs an fp32 reference; every head pattern / anchor mode runs with finite grads; temperatures
+Both read with ``F.embedding_bag`` on the train path, plain-autograd backward. Covered here: float64 gradcheck of the
+2-alternative soft backward (incl. the two learned temperatures) against reference finite differences; the hard
+cartridge's value == the hard read and its output-Jacobian == the smooth cartridge's; the bfloat16
+path vs a float32 reference; every head pattern / anchor mode runs with finite grads; temperatures
 are learnable (and freezable).
 """
 import pytest
 import torch
 
 from spiky.lutorch_ex import LUTSpec, ManifestoHardLUT, ManifestoSoftLUT
-from spiky.lutorch_ex.tests._weights import softsign
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign
 
 CARTRIDGES = [softsign(ManifestoHardLUT), softsign(ManifestoSoftLUT)]
 PATTERNS = [(4, 4), (1, 4), (4, 1)]
@@ -23,12 +23,12 @@ def _normrel(a, b):
 
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_smooth_backward_gradcheck_fp64(anchor_mode):
-    """The smooth cartridge is value == gradient; fp64 gradcheck wrt input, weights, and both
+    """The smooth cartridge is value == gradient; float64 gradcheck wrt input, weights, and both
     learned temperatures verifies the 2-alternative backward analytically (reference math)."""
     torch.set_default_dtype(torch.float64)
     try:
         spec = LUTSpec(h_in=2, h_out=2, tph=3, nap=3, d_in=5, d_out=4, anchor_mode=anchor_mode)
-        m = ManifestoSoftLUT(spec, weight="softsign", seed=1, weight_init_std=1.0).train()
+        m = ManifestoSoftLUT(spec, uncertainty_func="softsign", seed=1, weight_init_std=1.0).train()
         x = torch.randn(6, 2, 5, dtype=torch.float64, requires_grad=True)
         assert torch.autograd.gradcheck(lambda xx: m(xx).pow(2).sum(), (x,), eps=1e-6, atol=1e-5)
         w0 = m.weights.detach().clone().requires_grad_(True)
@@ -51,7 +51,7 @@ def test_hard_value_is_hard_read(anchor_mode):
     """The softsign hard forward value is the plain hard read sum_t W[c_t] — identical to the rational
     ManifestoHard eval (same addressing)."""
     spec = LUTSpec(h_in=3, h_out=3, tph=4, nap=3, d_in=6, d_out=5, anchor_mode=anchor_mode)
-    ss = ManifestoHardLUT(spec, weight="softsign", seed=2, weight_init_std=1.0).eval()
+    ss = ManifestoHardLUT(spec, uncertainty_func="softsign", seed=2, weight_init_std=1.0).eval()
     mh = ManifestoHardLUT(spec, seed=2, weight_init_std=1.0).eval()
     x = torch.randn(32, 3, 6)
     with torch.no_grad():
@@ -61,11 +61,11 @@ def test_hard_value_is_hard_read(anchor_mode):
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_hard_output_jacobian_matches_smooth(anchor_mode):
     """The hard straight-through output-Jacobian (VJP with a fixed grad_output) equals the smooth
-    cartridge's — both route the input/temperature gradient through the same weight w — while the
+    cartridge's — both route the input/temperature gradient through the same uncertainty U — while the
     hard weight gradient is a 1-row scatter (touches fewer cells) vs the smooth 2-row."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5, anchor_mode=anchor_mode)
-    h = ManifestoHardLUT(spec, weight="softsign", seed=3, weight_init_std=1.0).train()
-    s = ManifestoSoftLUT(spec, weight="softsign", seed=3, weight_init_std=1.0).train()
+    h = ManifestoHardLUT(spec, uncertainty_func="softsign", seed=3, weight_init_std=1.0).train()
+    s = ManifestoSoftLUT(spec, uncertainty_func="softsign", seed=3, weight_init_std=1.0).train()
     s.load_state_dict(h.state_dict())
     x = torch.randn(16, 2, 6)
     xh = x.clone().requires_grad_(True); xs = x.clone().requires_grad_(True)
@@ -103,7 +103,7 @@ def test_forward_backward_runs(Cls, anchor_mode, h_in, h_out, device):
 @pytest.mark.parametrize("Cls", CARTRIDGES)
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
 def test_accepts_low_precision(Cls, dtype):
-    """Spec amendment C: low-precision params OR inputs run (fp32 maths, one rounding; exactness is checked in
+    """Low-precision params OR inputs run (float32 maths, one rounding; exactness is checked in
     test_reference_low_precision.py)."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5)
     m = Cls(spec, seed=0, weight_init_std=1.0).to(dtype)

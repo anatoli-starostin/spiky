@@ -69,8 +69,8 @@ def test_compile_not_used_on_cpu():
 import pytest as _pytest  # noqa: E402
 
 import spiky.lutorch_ex as _lx  # noqa: E402
-_FusedConfidenceLUT = _lx.FusedConfidenceLUT  # the public export (spec amendment E)  # noqa: E305
-from spiky.lutorch_ex.tests._weights import softsign  # noqa: E402
+_FusedConfidenceLUT = _lx.FusedConfidenceLUT  # the public export  # noqa: E305
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign  # noqa: E402
 
 
 @_pytest.mark.parametrize("cls", [
@@ -83,13 +83,14 @@ def test_a_misspelt_keyword_raises_instead_of_being_ignored(cls):
     """A misspelt option (here table_dropout_rate) used to be swallowed by ManifestoLUT.__init__(**unused): the
     cartridge built fine with the option silently at its default (dropout off)."""
     spec = _lx.LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=8, d_out=8)
+    kw = {"read_top_n": 1} if "Confidence" in cls.__name__ else {}     # required on the confidence family
     with _pytest.raises(TypeError, match=r"table_droput_rate"):
-        cls(spec, seed=0, table_droput_rate=0.5)
+        cls(spec, seed=0, table_droput_rate=0.5, **kw)
     with _pytest.raises(TypeError, match=r"\['also_bogus', 'bogus'\]"):
-        cls(spec, seed=0, bogus=1, also_bogus=2)
+        cls(spec, seed=0, bogus=1, also_bogus=2, **kw)
 
 
-# ---- spec amendment B: the shared base has no runnable forward; no fused class inherits a reference forward ----------
+# ---- the shared base has no runnable forward; no fused class inherits a reference forward -----------------------
 from spiky.lutorch_ex.cartridges.confidence_base import ConfidenceBase  # noqa: E402
 from spiky.lutorch_ex.cartridges.manifesto_base import ManifestoLUT  # noqa: E402
 from spiky.lutorch_ex.cartridges.reference_base import ReferenceForward  # noqa: E402
@@ -103,7 +104,7 @@ def test_the_shared_bases_have_no_forward(base):
             return x
 
     with _pytest.raises(NotImplementedError, match="shared scaffolding base and has no forward"):
-        Bare(spec, seed=0)(torch.randn(3, 2, 8))
+        Bare(spec, seed=0, **({"read_top_n": 1} if base is ConfidenceBase else {}))(torch.randn(3, 2, 8))
 
 
 def test_no_fused_class_inherits_a_reference_forward():
@@ -115,7 +116,7 @@ def test_no_fused_class_inherits_a_reference_forward():
 
 
 def test_every_fused_class_is_exported():
-    """Spec amendment E: the class names are the public API, so every fused class is importable from lutorch_ex."""
+    """The class names are the public API, so every fused class is importable from lutorch_ex."""
     for name in ("FusedManifestoHardLUT", "FusedManifestoSoftLUT", "FusedConfidenceLUT",
                  "FusedQuantisedConfidenceLUT"):
         assert name in _lx.__all__ and getattr(_lx, name).__name__ == name

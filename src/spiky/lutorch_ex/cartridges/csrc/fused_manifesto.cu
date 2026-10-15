@@ -1,33 +1,33 @@
 // FusedManifestoHardLUT / FusedManifestoSoftLUT: hand-written CUDA forward + backward for the Manifesto read, both
-// weight functions, built the way fused_confidence.cu is (one forward and one backward kernel, nothing per-table in
+// uncertainty functions, built the way fused_confidence.cu is (one forward and one backward kernel, nothing per-table in
 // global memory).
 //
 // The Manifesto math (manifesto_base.py, manifesto_hard.py, manifesto_soft.py), per (b, g, t), with the table-dropout
 // factor m (the [B, G, tph] mask ManifestoLUT._table_dropout_mask returns, 0 or 1/keep_prob; 1 without dropout):
 //   margins u_j = z[a_j] - z[b_j] (single anchors: z[a_j]); address c = MSB-first [u_j > 0]; j* = first argmin |u_j|;
-//   neighbour c' = c with bit j* flipped; the neighbour weight w of mu = |u_j*|:
-//     rational (temps == nullptr)          w = 0.5 / (1 + mu),                         -dw/dmu = 0.5 / (1 + mu)^2;
-//     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), w = sigmoid(-2 rho / T_sel),
-//                                          -dw/dmu = w (1-w) 2 T_s / (T_sel (T_s + mu)^2),
-//                                          dw/dT_s = w (1-w) 2 mu / (T_sel (T_s + mu)^2), dw/dT_sel = w (1-w) 2 rho / T_sel^2.
+//   neighbour c' = c with bit j* flipped; the uncertainty U of mu = |u_j*|, the deciding margin's magnitude:
+//     rational (temps == nullptr)          U = 0.5 / (1 + mu),                         -dU/dmu = 0.5 / (1 + mu)^2;
+//     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), U = sigmoid(-2 rho / T_sel),
+//                                          -dU/dmu = U (1-U) 2 T_s / (T_sel (T_s + mu)^2),
+//                                          dU/dT_s = U (1-U) 2 mu / (T_sel (T_s + mu)^2), dU/dT_sel = U (1-U) 2 rho / T_sel^2.
 //   HARD  value  m W[c];                grad W[c] += m go;                  (no table gradient for c')
-//   SOFT  value  m ((1-w) W[c] + w W[c']); grad W[c] += m (1-w) go, grad W[c'] += m w go.
-//   Both: d value~ / d u_j* = m (W[c] - W[c']) . go * sign(u_j*) (-dw/dmu), scattered +to a_j*, -to b_j* (single
-//   anchors: +to a_j* only); softsign also d value~ / d T = m (W[c'] - W[c]) . go * dw/dT, summed over every
+//   SOFT  value  m ((1-U) W[c] + U W[c']); grad W[c] += m (1-U) go, grad W[c'] += m U go.
+//   Both: d value~ / d u_j* = m (W[c] - W[c']) . go * sign(u_j*) (-dU/dmu), scattered +to a_j*, -to b_j* (single
+//   anchors: +to a_j* only); softsign also d value~ / d T = m (W[c'] - W[c]) . go * dU/dT, summed over every
 //   (b, g, t). For HARD this is the straight-through surrogate (the gradient of the blend whose value is replaced by
 //   the hard read); for SOFT it is the exact derivative of the blend.
 //
 // One CTA owns one group g and `rows_per_cta` consecutive samples b of it. Per (b, g) row:
-//   phase A  (thread per table)  margins from the z row in shared memory, c, j*, c', w, the read weights;
-//   phase B  (stripe x chunk)    forward: the weighted read sum_t w W[c] (+ w' W[c']); backward: the weight-gradient
+//   phase A  (thread per table)  margins from the z row in shared memory, c, j*, c', U, the read weights;
+//   phase B  (stripe x chunk)    forward: the weighted read sum_t w1 W[c] (+ w2 W[c']); backward: the weight-gradient
 //                                scatter and the dot products W[c] . go, W[c'] . go, VEC elements per load;
 //   phase C                      forward: reduce the stripes into the output row; backward: the margin gradient of
 //                                each table's j* pair into the z row (shared memory), written once, and (softsign)
 //                                the two temperature gradients, summed in shared memory and added once per CTA.
 // The backward recomputes the addressing from z instead of saving anything per table.
 //
-// Table dtype T: fp32 or bf16 (upconverted in registers). Every reduction, the output and the weight-gradient buffer
-// are fp32 (the caller casts the gradient to the table dtype once).
+// Table dtype T: float32 or bfloat16 (upconverted in registers). Every reduction, the output and the weight-gradient
+// buffer are float32 (the caller casts the gradient to the table dtype once).
 #include <torch/extension.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -44,14 +44,14 @@ constexpr int HARD = 0;
 constexpr int SOFT = 1;
 
 struct Params {
-    const float* z;          // [B, G, d_in], fp32 input (nullptr when the input is bf16)
-    const __nv_bfloat16* zb; // the same, bf16 input, upconverted when staged (nullptr when fp32)
+    const float* z;          // [B, G, d_in], float32 input (nullptr when the input is bfloat16)
+    const __nv_bfloat16* zb; // the same, bfloat16 input, upconverted when staged (nullptr when float32)
     const int16_t* anc_a;    // [G, tph, nap]
     const int16_t* anc_b;    // [G, tph, nap], nullptr in single-anchor mode
-    const float* W;          // [G * tph * K, d_out], fp32 table (nullptr when the table is bf16)
-    const __nv_bfloat16* Wb; // the same, bf16 table (nullptr when the table is fp32)
+    const float* W;          // [G * tph * K, d_out], float32 table (nullptr when the table is bfloat16)
+    const __nv_bfloat16* Wb; // the same, bfloat16 table (nullptr when the table is float32)
     const float* mask;       // [B, G, tph] table-dropout factor (ManifestoLUT._table_dropout_mask), nullptr = none
-    const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational weight
+    const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational uncertainty
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
 };
 
@@ -71,11 +71,11 @@ struct Smem {
         cas = o;  o = align16(o + sizeof(int) * tph);
         rc = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));
         ra = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));
-        cf = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));    // m sign(u*) (-dw/dmu): the margin-gradient coefficient
+        cf = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));    // m sign(u*) (-dU/dmu): the margin-gradient coefficient
         ia = o;   o = align16(o + (bwd ? sizeof(int) * tph : 0));      // anchor coordinates of the j* pair
         ib = o;   o = align16(o + (bwd ? sizeof(int) * tph : 0));
-        t1 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dw/dT_s
-        t2 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dw/dT_sel
+        t1 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dU/dT_s
+        t2 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dU/dT_sel
         gt = o;   o = align16(o + (bwd && ss ? sizeof(float) * 2 : 0));      // softsign: this CTA's [dT_s, dT_sel]
         part = o; o = align16(o + (bwd ? 0 : sizeof(float) * nstripe * d_out));
         sa = o;   o = align16(o + sizeof(int16_t) * tph * nap);
@@ -115,8 +115,8 @@ __device__ inline void load_vec(const __nv_bfloat16* p, float (&v)[VEC]) {
     }
 }
 
-// The input row is staged once per row into fp32 shared memory; a bf16 input is upconverted there (no fp32 copy of
-// the input in global memory). The branch is uniform across the CTA.
+// The input row is staged once per row into float32 shared memory; a bfloat16 input is upconverted there (no float32
+// copy of the input in global memory). The branch is uniform across the CTA.
 __device__ inline float load_z(const Params& p, size_t i) {
     return p.zb ? __bfloat162float(p.zb[i]) : p.z[i];
 }
@@ -166,31 +166,31 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
     const int base = (g * p.tph + t) << nap;
     cs[t] = base + c;
     cas[t] = base + (c ^ (1 << (nap - 1 - jstar)));
-    float w, ndw;                                          // the neighbour weight and -dw/dmu (see the header)
+    float U, ndU;                                          // the uncertainty and -dU/dmu (see the header)
     float ts = 0.f, tl = 1.f, den = 1.f, rho = 0.f, s = 0.f;
     if constexpr (SS) {
         ts = p.temps[0];
         tl = p.temps[1];
         den = ts + mstar;
         rho = mstar / den;
-        w = 1.f / (1.f + expf(2.f * rho / tl));            // sigmoid(-2 rho / T_sel)
-        s = w * (1.f - w);
-        ndw = s * 2.f * ts / (tl * den * den);
+        U = 1.f / (1.f + expf(2.f * rho / tl));            // sigmoid(-2 rho / T_sel)
+        s = U * (1.f - U);
+        ndU = s * 2.f * ts / (tl * den * den);
     } else {
         const float q = 1.f + mstar;
-        w = 0.5f / q;
-        ndw = 0.5f / (q * q);
+        U = 0.5f / q;
+        ndU = 0.5f / (q * q);
     }
     if constexpr (MODE == SOFT) {
-        w1[t] = mk * (1.f - w);
-        w2[t] = mk * w;
+        w1[t] = mk * (1.f - U);
+        w2[t] = mk * U;
     } else {
         w1[t] = mk;
         w2[t] = 0.f;
     }
     if (cf) {
         const float sgn = float((ustar > 0.f) - (ustar < 0.f));   // d|u|/du = sign(u), 0 at 0
-        if constexpr (SS) cf[t] = mk * sgn * ndw;
+        if constexpr (SS) cf[t] = mk * sgn * ndU;
         else { const float q = 1.f + mstar; cf[t] = mk * 0.5f * sgn / (q * q); }   // the rational order, unchanged
         const int i = t * nap + jstar;
         ia[t] = sa[i];
@@ -261,7 +261,7 @@ __device__ __forceinline__ void manifesto_fwd_body(const Params& p, float* __res
         for (int i = tid; i < p.d_out; i += bd) {
             float y = 0.f;
             for (int s = 0; s < nstripe; ++s) y += part[s * p.d_out + i];
-            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bf16-output mode: one RNE rounding at the store
+            if (outb) outb[row * p.d_out + i] = __float2bfloat16(y);   // bfloat16-output mode: one RNE rounding
             else out[row * p.d_out + i] = y;
         }
         __syncthreads();                                  // part / zs reused by the next row
@@ -296,8 +296,16 @@ __device__ __forceinline__ void manifesto_bwd_body(const Params& p, const float*
     int16_t* sb = p.anc_b ? reinterpret_cast<int16_t*>(smem_raw + L.sb) : nullptr;
 
     const int tid = threadIdx.x, bd = blockDim.x;
-    const int g = blockIdx.x % p.G;
-    const int b0 = static_cast<int>((static_cast<int64_t>(blockIdx.x) / p.G) * p.rows_per_cta);
+    // Group-major CTA order, unconditionally (the forward kernels keep g = blockIdx.x % G). This backward is
+    // dominated by its gradient atomics: walking the groups put every group's gradient slice in flight at once,
+    // and on the H100 the atomic targets were evicted from L2 and written back again and again (75-604 M L2
+    // atomic sectors at 14.8 sectors / request, 1-8 GB of DRAM writes for a 50 MB gradient). With one group's
+    // CTAs consecutive, the CTAs in flight work on ~1-2 groups' ~3 MiB slices, which stay in L2. Measured faster
+    // on both the H100 and the RTX 5090, so it is not a knob.
+    const int64_t cta = static_cast<int64_t>(blockIdx.x);
+    const int64_t nb = (p.B + p.rows_per_cta - 1) / p.rows_per_cta;          // CTAs per group
+    const int g = static_cast<int>(cta / nb);
+    const int b0 = static_cast<int>((cta % nb) * p.rows_per_cta);
     const int an = p.tph * p.nap;
     for (int i = tid; i < an; i += bd) {
         sa[i] = p.anc_a[(size_t)g * an + i];
@@ -363,7 +371,7 @@ __device__ __forceinline__ void manifesto_bwd_body(const Params& p, const float*
             }
         }
         __syncthreads();
-        for (int i = tid; i < p.d_in; i += bd) {           // bf16 input: grad z stored in bf16, one RNE rounding
+        for (int i = tid; i < p.d_in; i += bd) {           // bfloat16 input: grad z stored as bfloat16 (one RNE)
             if (gzb) gzb[row * p.d_in + i] = __float2bfloat16(gzs[i]);
             else gz[row * p.d_in + i] = gzs[i];
         }
@@ -474,7 +482,8 @@ torch::Tensor manifesto_fwd(torch::Tensor z, torch::Tensor anc_a, c10::optional<
     const c10::cuda::CUDAGuard guard(z.device());
     Params p = make_params(z, anc_a, anc_b, W, mask, temps, nap, rows_per_cta);
     check_launch(threads, vec, p.d_out, W.scalar_type() == torch::kBFloat16);
-    // fp32 output, or bf16 when the caller asks (only for a bf16 input whose groups map 1:1 onto output heads).
+    // float32 output, or bfloat16 when the caller asks (only for a bfloat16 input whose groups map 1:1 onto output
+    // heads).
     TORCH_CHECK(!out_bf16 || z.scalar_type() == torch::kBFloat16, "out_bf16 needs a bf16 input");
     auto out = torch::empty({p.B, p.G, p.d_out}, z.options().dtype(out_bf16 ? torch::kBFloat16 : torch::kFloat32));
     if (p.B == 0) return out;
