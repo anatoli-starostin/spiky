@@ -6,7 +6,6 @@
 %   1 one table, 2 lookup variants, 3 heads and the multi-head LUT, 4 the wrapper,
 %   5 training (gradients and regularizers), 6 the int8 lookup and decode, 7 experiments.
 % Vocabulary (software side): table, lookup variant (a ``cartridge'' in the code), head, multi-head LUT, wrapper, layer.
-% The hardware vocabulary (LUT Core) appears only in the bridging paragraph at the end of Section 3.
 % Code identifiers (nap, tph, compress, decompress, cell_tv, read_top_n, export_deployment, ...) are unchanged.
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
@@ -468,25 +467,6 @@ Equation~\eqref{eq:head}, is a sum of table rows selected by that token alone, a
 involved. The heads of this report are therefore not attention heads. Where both kinds appear, the
 report writes ``attention heads'' for the latter.
 
-\textbf{Heads in software, LUT Cores in hardware.} This report uses a software vocabulary: table,
-variant, head, multi-head LUT. The hardware vocabulary of the Systolic LAC white paper~\citep{lac} is
-different. Its unit is the \term{LUT Core}. A LUT Core consists of an index stage, which forms the
-addresses, and a lookup-and-accumulate array (LAC), which fetches the rows and adds them. The two
-vocabularies are kept separate on purpose, because the placement of heads on a chip is a separate
-decision. The correspondence between them is nevertheless simple. A head with \code{tph} tables,
-\code{nap} probes per table, and rows of width $d_\text{out}$ corresponds to one LUT Core with
-$n_t=\code{tph}$ tables, $n_c=\code{nap}$ bits per index, and $n=d_\text{out}$ values per row. The eight
-heads of Section~\ref{sec:ml} could be implemented as eight such LUT Cores, or as one LUT Core with 512
-tables.
-
-The variants of Section~\ref{sec:variants} also correspond to cases in that paper. A hard lookup is the
-plain lookup-and-accumulate operation of that paper, with one row per table and no multiplier. A single
-row with a coefficient (generation 3 with $n=1$) is the case that the paper calls a coefficient per
-table. Two rows with coefficients are the case that it calls weighted retrieval, which costs one more
-memory read and one more multiply-add per table. The two projections of Section~\ref{sec:projection} are
-dense matrix products. One of them is placed in front of the index stage, and the other is placed behind
-the LAC. Neither of them is part of the lookup-and-accumulate operation itself.
-
 % ======================================================================================================
 \section{The ProjectionLUT wrapper: input and output projections}
 \label{sec:projection}
@@ -766,10 +746,6 @@ three inner levels of Figure~\ref{fig:levels}.
   accumulator. Only one floating-point operation remains: the shared exponent is applied once, after the
   sum over the tables, as the factor $2^{e-6}$ for each output component.
 \end{enumerate}
-The Systolic LAC paper~\citep{lac} describes the same arrangement for hardware. It calls integer values
-that share one exponent per output component a block floating-point format. It also notes that a
-coefficient that is a power of two needs only a shifter (a circuit that moves the bits of a number to the
-left or to the right), whereas a general coefficient needs a multiplier.
 
 The scheme has a few limits. The exponents $q$ and $k'$ are computed from the margins in floating point.
 Only the table lookup and the sum use integer arithmetic. The exponent $q$ is limited to at most $64$,
@@ -1029,8 +1005,6 @@ generation (Table~\ref{tab:results}).
 \bibitem{manifesto} E.~M.~Izhikevich. ``Spiking Manifesto.'' arXiv:2512.11843, v2, December 2025.
 \bibitem{lookupffn} Z.~Zeng, M.~Davies, P.~Pulijala, K.~Sankaralingam, V.~Singh. ``LookupFFN: Making
   Transformers Compute-lite for CPU Inference.'' ICML 2024.
-\bibitem{lac} E.~M.~Izhikevich. ``Systolic LAC: Lookup-and-accumulate architectures for inference.''
-  White paper, DeepSpike Inc., 2026.
 \end{thebibliography}
 
 \end{document}
