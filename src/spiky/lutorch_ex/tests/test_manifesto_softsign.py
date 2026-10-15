@@ -61,7 +61,7 @@ def test_hard_value_is_hard_read(anchor_mode):
 @pytest.mark.parametrize("anchor_mode", ["pairs", "single"])
 def test_hard_output_jacobian_matches_smooth(anchor_mode):
     """The hard straight-through output-Jacobian (VJP with a fixed grad_output) equals the smooth
-    cartridge's — both route the input/temperature gradient through the same uncertainty w — while the
+    cartridge's — both route the input/temperature gradient through the same uncertainty U — while the
     hard weight gradient is a 1-row scatter (touches fewer cells) vs the smooth 2-row."""
     spec = LUTSpec(h_in=2, h_out=2, tph=4, nap=3, d_in=6, d_out=5, anchor_mode=anchor_mode)
     h = ManifestoHardLUT(spec, uncertainty_func="softsign", seed=3, weight_init_std=1.0).train()

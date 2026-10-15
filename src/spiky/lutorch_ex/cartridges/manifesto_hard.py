@@ -3,14 +3,14 @@
 
 "Hard forward, two-alternative soft backward."
 
-All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell read, the uncertainty ``w``)
+All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell read, the uncertainty ``U``)
 lives in :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`.
 
 The math
 ========
 Per group ``g`` and table ``t`` the base computes the hard cell ``c_t`` (MSB-first sign-bit address over the table's
 ``nap`` margins ``u_j = z[a_j] - z[b_j]``), its least-confident-bit-flip neighbour ``c_t'`` (``j* = argmin_j |u_j|``),
-the deciding margin ``u_{j*}`` and the uncertainty ``w_t = w(|u_{j*}|)`` (``uncertainty_func="rational"``:
+the deciding margin ``u_{j*}`` and the uncertainty ``U_t = U(|u_{j*}|)`` (``uncertainty_func="rational"``:
 ``0.5/(1 + |u_{j*}|)``; ``uncertainty_func="softsign"``: the learned-temperature sigmoid).
 
 Hard forward.
@@ -19,7 +19,7 @@ Hard forward.
 
 Two-alternative soft backward.
     The forward **value** is exactly the hard read, but gradients flow as if the output were the blend
-    ``y~ = sum_t [(1 - w_t) W_t[c_t] + w_t W_t[c_t']]``. The index set ``c_t, c_t', j*`` is stop-gradient.
+    ``y~ = sum_t [(1 - U_t) W_t[c_t] + U_t W_t[c_t']]``. The index set ``c_t, c_t', j*`` is stop-gradient.
 
 Gradient asymmetry (by design).
     The **weight-table** gradient is hard: only the addressed cell ``c_t`` receives gradient (coefficient 1); the
@@ -29,8 +29,8 @@ Gradient asymmetry (by design).
     weight gradient too.)
 
 Read path: in training, ``F.embedding_bag`` (the per-table gather and the tph sum in one kernel) for the hard value,
-and a second one over the detached table with per-sample weights ``(-w, +w)`` on ``(c, c')`` for the surrogate (no
-``[B, G, tph, d_out]`` rows are materialised); backward is plain autograd through ``w``. torch.compile
+and a second one over the detached table with per-sample weights ``(-U, +U)`` on ``(c, c')`` for the surrogate (no
+``[B, G, tph, d_out]`` rows are materialised); backward is plain autograd through ``U``. torch.compile
 wraps the eval read on CUDA only (ReferenceForward). bfloat16 / float16 run as float32 maths with one rounding per leaf.
 """
 from __future__ import annotations
@@ -50,11 +50,11 @@ class ManifestoHardLUT(ReferenceForward, ManifestoLUT):
         if not self.training:
             grp_out = self._read(c).sum(dim=2)                   # hard eval: one cell per table
         else:
-            w = self._blend_w(u_abs_star)
+            U = self._uncertainty(u_abs_star)
             dmask = self._table_dropout_mask(x.shape[0], self.weights.device, self.weights.dtype)
             y_c = fused_hard_read(self.weights, c, drop_mask=dmask)  # value = sum_t keep_t W[c_t]
-            # sum_t keep_t w_t (W[c_t'] - W[c_t]) over the detached table (no weight grad from the surrogate), one
+            # sum_t keep_t U_t (W[c_t'] - W[c_t]) over the detached table (no weight grad from the surrogate), one
             # embedding_bag: no [B, G, tph, d_out] gathers (they ran out of memory at 32,768 vectors).
-            surr = fused_surrogate_read(self.weights, c, c_alt, w, drop_mask=dmask)
-            grp_out = y_c + (surr - surr.detach())               # value == y_c; grad via w into the input (and temps)
+            surr = fused_surrogate_read(self.weights, c, c_alt, U, drop_mask=dmask)
+            grp_out = y_c + (surr - surr.detach())               # value == y_c; grad via U into the input (and temps)
         return self._route(grp_out, x)

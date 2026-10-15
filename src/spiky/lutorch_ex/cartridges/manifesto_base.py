@@ -1,11 +1,11 @@
 """Shared structure for the Manifesto cartridge family (hard and soft variants, two uncertainty functions).
 
 The Manifesto cartridges read, per table, the addressed cell ``c_t`` and its least-confident-bit-flip neighbour
-``c_t'`` and blend them, the neighbour's share being the uncertainty ``w``, a function of the deciding margin
+``c_t'`` and blend them, the neighbour's share being the uncertainty ``U``, a function of the deciding margin
 ``|u_{j*}|`` chosen by ``uncertainty_func``:
 
-* ``uncertainty_func="rational"``: ``w = U = 0.5 / (1 + |u_{j*}|)``, no parameters;
-* ``uncertainty_func="softsign"``: ``rho = |u_{j*}| / (T_soft + |u_{j*}|)``, ``w = sigmoid(-2 rho / T_select)``, with
+* ``uncertainty_func="rational"``: ``U = 0.5 / (1 + |u_{j*}|)``, no parameters;
+* ``uncertainty_func="softsign"``: ``rho = |u_{j*}| / (T_soft + |u_{j*}|)``, ``U = sigmoid(-2 rho / T_select)``, with
   two learned per-layer temperatures stored log-parametrised (``log_soft_score_temp``, ``log_select_temp``;
   initialised at 0.5).
 
@@ -13,7 +13,7 @@ Both are in ``(0, 1/2]``, ``1/2`` at ``u = 0`` and tending to 0 as the margin gr
 
 * :class:`~spiky.lutorch_ex.cartridges.manifesto_hard.ManifestoHardLUT` — hard value with a straight-through
   surrogate gradient (the gradient of the blend);
-* :class:`~spiky.lutorch_ex.cartridges.manifesto_soft.ManifestoSoftLUT` — the ``(1-w)`` / ``w`` two-cell blend as both
+* :class:`~spiky.lutorch_ex.cartridges.manifesto_soft.ManifestoSoftLUT` — the ``(1-U)`` / ``U`` two-cell blend as both
   value and gradient.
 
 Everything else lives here and is identical between them:
@@ -101,7 +101,7 @@ class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
 
     Scaffolding only: state (tables, anchors, the soft-sign temperatures), validation, the
-    addressing and the uncertainty (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
+    addressing and the uncertainty (:meth:`_uncertainty`), shared by the reference and the fused classes. It has NO
     runnable forward: a reference class gets its forward from
     :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so
     a fused class has nothing to fall back to. ``uncertainty_func`` selects the uncertainty function; the temperature
@@ -226,12 +226,12 @@ class ManifestoLUT(MultiHeadLUT):
         W2 = self.weights.reshape(G * tph * K, self.spec.d_out)
         return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
-    def _blend_w(self, u_abs_star: torch.Tensor) -> torch.Tensor:
-        """The uncertainty ``w`` (the neighbour cell ``c'``'s share of the blend), in ``(0, 1/2]``, from ``|u_{j*}|``
-        ``[B, G, tph]``.
+    def _uncertainty(self, u_abs_star: torch.Tensor) -> torch.Tensor:
+        """The uncertainty ``U`` (the neighbour cell ``c'``'s share of the blend), in ``(0, 1/2]``, from the deciding
+        margin's magnitude ``|u_{j*}|`` ``[B, G, tph]``.
 
         ``rational``: ``U = 0.5 / (1 + |u*|)``. ``softsign``: ``rho = |u*| / (T_s + |u*|)``,
-        ``w = sigmoid(-2 rho / T_sel)``; the temperatures are taken in the margin's dtype (the addressing
+        ``U = sigmoid(-2 rho / T_sel)``; the temperatures are taken in the margin's dtype (the addressing
         precision: float32 for a bfloat16 fused cartridge), so the blend runs there."""
         if self.uncertainty_func == "rational":
             return rational_uncertainty(u_abs_star)

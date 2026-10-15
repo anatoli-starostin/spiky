@@ -81,18 +81,18 @@ def fused_blend_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor
     return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
 
-def fused_surrogate_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor, w: torch.Tensor,
+def fused_surrogate_read(weights: torch.Tensor, c: torch.Tensor, c_alt: torch.Tensor, U: torch.Tensor,
                          drop_mask=None) -> torch.Tensor:
-    """The hard cartridge's surrogate s[b,g] = sum_t w_t (W[g,t,c_alt] - W[g,t,c]) via one embedding_bag over the
-    DETACHED table, per_sample_weights (-w, +w) on (c, c_alt): no weight gradient, and the gradient to w
+    """The hard cartridge's surrogate s[b,g] = sum_t U_t (W[g,t,c_alt] - W[g,t,c]) via one embedding_bag over the
+    DETACHED table, per_sample_weights (-U, +U) on (c, c_alt): no weight gradient, and the gradient to U
     (embedding_bag's per-sample-weight backward, dot(go, W[idx])) without materialising the [B, G, tph, d_out] cell rows
-    -- the two gathers it replaces took ~6 GiB each at 32,768 vectors. drop_mask [B,G,tph] (optional) multiplies w
+    -- the two gathers it replaces took ~6 GiB each at 32,768 vectors. drop_mask [B,G,tph] (optional) multiplies U
     (dropped tables give no surrogate gradient). -> [B,G,d_out] in the accumulation dtype."""
     G, tph, K, d_out = weights.shape
     B = c.shape[0]
     acc = _acc_dtype(weights.dtype)
     W2 = weights.detach().reshape(G * tph * K, d_out).to(acc)
     idx = torch.cat([_global_cells(c, G, tph, K), _global_cells(c_alt, G, tph, K)], dim=2).reshape(B * G, 2 * tph)
-    ww = w if drop_mask is None else w * drop_mask
-    psw = torch.cat([-ww, ww], dim=2).reshape(B * G, 2 * tph).to(acc)
+    Um = U if drop_mask is None else U * drop_mask
+    psw = torch.cat([-Um, Um], dim=2).reshape(B * G, 2 * tph).to(acc)
     return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)

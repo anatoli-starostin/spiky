@@ -1,6 +1,6 @@
 """FusedManifestoHardLUT — the fused twin of ManifestoHardLUT, for both uncertainty functions.
 
-Same Manifesto maths (hard sign-addressed read; two-alternative soft backward through the uncertainty ``w``,
+Same Manifesto maths (hard sign-addressed read; two-alternative soft backward through the uncertainty ``U``,
 ``uncertainty_func="rational"`` or ``"softsign"``), computed by the hand-written CUDA kernels
 (``csrc/fused_manifesto.cu``: one forward and one backward kernel, nothing per table in global memory, the soft-sign
 temperatures' gradients included).

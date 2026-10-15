@@ -5,21 +5,21 @@
 // The Manifesto math (manifesto_base.py, manifesto_hard.py, manifesto_soft.py), per (b, g, t), with the table-dropout
 // factor m (the [B, G, tph] mask ManifestoLUT._table_dropout_mask returns, 0 or 1/keep_prob; 1 without dropout):
 //   margins u_j = z[a_j] - z[b_j] (single anchors: z[a_j]); address c = MSB-first [u_j > 0]; j* = first argmin |u_j|;
-//   neighbour c' = c with bit j* flipped; the uncertainty w of mu = |u_j*|:
-//     rational (temps == nullptr)          w = 0.5 / (1 + mu),                         -dw/dmu = 0.5 / (1 + mu)^2;
-//     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), w = sigmoid(-2 rho / T_sel),
-//                                          -dw/dmu = w (1-w) 2 T_s / (T_sel (T_s + mu)^2),
-//                                          dw/dT_s = w (1-w) 2 mu / (T_sel (T_s + mu)^2), dw/dT_sel = w (1-w) 2 rho / T_sel^2.
+//   neighbour c' = c with bit j* flipped; the uncertainty U of mu = |u_j*|, the deciding margin's magnitude:
+//     rational (temps == nullptr)          U = 0.5 / (1 + mu),                         -dU/dmu = 0.5 / (1 + mu)^2;
+//     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), U = sigmoid(-2 rho / T_sel),
+//                                          -dU/dmu = U (1-U) 2 T_s / (T_sel (T_s + mu)^2),
+//                                          dU/dT_s = U (1-U) 2 mu / (T_sel (T_s + mu)^2), dU/dT_sel = U (1-U) 2 rho / T_sel^2.
 //   HARD  value  m W[c];                grad W[c] += m go;                  (no table gradient for c')
-//   SOFT  value  m ((1-w) W[c] + w W[c']); grad W[c] += m (1-w) go, grad W[c'] += m w go.
-//   Both: d value~ / d u_j* = m (W[c] - W[c']) . go * sign(u_j*) (-dw/dmu), scattered +to a_j*, -to b_j* (single
-//   anchors: +to a_j* only); softsign also d value~ / d T = m (W[c'] - W[c]) . go * dw/dT, summed over every
+//   SOFT  value  m ((1-U) W[c] + U W[c']); grad W[c] += m (1-U) go, grad W[c'] += m U go.
+//   Both: d value~ / d u_j* = m (W[c] - W[c']) . go * sign(u_j*) (-dU/dmu), scattered +to a_j*, -to b_j* (single
+//   anchors: +to a_j* only); softsign also d value~ / d T = m (W[c'] - W[c]) . go * dU/dT, summed over every
 //   (b, g, t). For HARD this is the straight-through surrogate (the gradient of the blend whose value is replaced by
 //   the hard read); for SOFT it is the exact derivative of the blend.
 //
 // One CTA owns one group g and `rows_per_cta` consecutive samples b of it. Per (b, g) row:
-//   phase A  (thread per table)  margins from the z row in shared memory, c, j*, c', w, the read weights;
-//   phase B  (stripe x chunk)    forward: the weighted read sum_t w W[c] (+ w' W[c']); backward: the weight-gradient
+//   phase A  (thread per table)  margins from the z row in shared memory, c, j*, c', U, the read weights;
+//   phase B  (stripe x chunk)    forward: the weighted read sum_t w1 W[c] (+ w2 W[c']); backward: the weight-gradient
 //                                scatter and the dot products W[c] . go, W[c'] . go, VEC elements per load;
 //   phase C                      forward: reduce the stripes into the output row; backward: the margin gradient of
 //                                each table's j* pair into the z row (shared memory), written once, and (softsign)
@@ -71,11 +71,11 @@ struct Smem {
         cas = o;  o = align16(o + sizeof(int) * tph);
         rc = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));
         ra = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));
-        cf = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));    // m sign(u*) (-dw/dmu): the margin-gradient coefficient
+        cf = o;   o = align16(o + (bwd ? sizeof(float) * tph : 0));    // m sign(u*) (-dU/dmu): the margin-gradient coefficient
         ia = o;   o = align16(o + (bwd ? sizeof(int) * tph : 0));      // anchor coordinates of the j* pair
         ib = o;   o = align16(o + (bwd ? sizeof(int) * tph : 0));
-        t1 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dw/dT_s
-        t2 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dw/dT_sel
+        t1 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dU/dT_s
+        t2 = o;   o = align16(o + (bwd && ss ? sizeof(float) * tph : 0));    // softsign: m dU/dT_sel
         gt = o;   o = align16(o + (bwd && ss ? sizeof(float) * 2 : 0));      // softsign: this CTA's [dT_s, dT_sel]
         part = o; o = align16(o + (bwd ? 0 : sizeof(float) * nstripe * d_out));
         sa = o;   o = align16(o + sizeof(int16_t) * tph * nap);
@@ -166,31 +166,31 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
     const int base = (g * p.tph + t) << nap;
     cs[t] = base + c;
     cas[t] = base + (c ^ (1 << (nap - 1 - jstar)));
-    float w, ndw;                                          // the uncertainty and -dw/dmu (see the header)
+    float U, ndU;                                          // the uncertainty and -dU/dmu (see the header)
     float ts = 0.f, tl = 1.f, den = 1.f, rho = 0.f, s = 0.f;
     if constexpr (SS) {
         ts = p.temps[0];
         tl = p.temps[1];
         den = ts + mstar;
         rho = mstar / den;
-        w = 1.f / (1.f + expf(2.f * rho / tl));            // sigmoid(-2 rho / T_sel)
-        s = w * (1.f - w);
-        ndw = s * 2.f * ts / (tl * den * den);
+        U = 1.f / (1.f + expf(2.f * rho / tl));            // sigmoid(-2 rho / T_sel)
+        s = U * (1.f - U);
+        ndU = s * 2.f * ts / (tl * den * den);
     } else {
         const float q = 1.f + mstar;
-        w = 0.5f / q;
-        ndw = 0.5f / (q * q);
+        U = 0.5f / q;
+        ndU = 0.5f / (q * q);
     }
     if constexpr (MODE == SOFT) {
-        w1[t] = mk * (1.f - w);
-        w2[t] = mk * w;
+        w1[t] = mk * (1.f - U);
+        w2[t] = mk * U;
     } else {
         w1[t] = mk;
         w2[t] = 0.f;
     }
     if (cf) {
         const float sgn = float((ustar > 0.f) - (ustar < 0.f));   // d|u|/du = sign(u), 0 at 0
-        if constexpr (SS) cf[t] = mk * sgn * ndw;
+        if constexpr (SS) cf[t] = mk * sgn * ndU;
         else { const float q = 1.f + mstar; cf[t] = mk * 0.5f * sgn / (q * q); }   // the rational order, unchanged
         const int i = t * nap + jstar;
         ia[t] = sa[i];

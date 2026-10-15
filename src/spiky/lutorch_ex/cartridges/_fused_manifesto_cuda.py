@@ -3,17 +3,18 @@ forward + backward kernels (``csrc/fused_manifesto.cu``), built the way FusedCon
 not cover, or a missing extension, raises; the reference classes (ManifestoHardLUT / ManifestoSoftLUT) cover the rest.
 
 One forward and one backward kernel per step run the whole cartridge: addressing (margins, MSB-first address,
-least-confident bit, neighbour), the uncertainty w (``uncertainty_func="rational"``: 0.5 / (1 + |u*|); ``"softsign"``:
-the learned-temperature sigmoid, the two temperatures passed in as a device tensor), the (weighted) read summed over the
-group's tables, and on the backward the weight-gradient scatter (vector float32 atomics), the j*-pair margin gradient
-into z and, for ``softsign``, the two temperatures' gradients (summed per CTA, then one atomic add each).
+least-confident bit, neighbour), the uncertainty U of the deciding margin u* (``uncertainty_func="rational"``:
+0.5 / (1 + |u*|); ``"softsign"``: the learned-temperature sigmoid, the two temperatures passed in as a device
+tensor), the (weighted) read summed over the group's tables, and on the backward the weight-gradient scatter (vector
+float32 atomics), the j*-pair margin gradient into z and, for ``softsign``, the two temperatures' gradients (summed per
+CTA, then one atomic add each).
 Nothing per table goes through global memory (no ``[B, G*tph, d_out]`` expanded gradient, no materialised addressing
 tensors); the backward recomputes the addressing from z.
 
 Hard and Soft share the kernels and differ only in the read weights (see the .cu header for the math):
   HARD  value  m W[c]                 table grad on c only        (straight-through: the input / temperature
-                                                                   gradient is that of the (1-w)/w blend)
-  SOFT  value  m ((1-w) W[c] + w W[c'])  table grad on c and c'   (the exact derivative of the blend)
+                                                                   gradient is that of the (1-U)/U blend)
+  SOFT  value  m ((1-U) W[c] + U W[c'])  table grad on c and c'   (the exact derivative of the blend)
 with the table-dropout factor m.
 """
 from __future__ import annotations

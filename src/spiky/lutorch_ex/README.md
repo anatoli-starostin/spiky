@@ -119,7 +119,7 @@ Manifesto (`ManifestoHardLUT`, `ManifestoSoftLUT`, `FusedManifestoHardLUT`, `Fus
 
 | argument | default | meaning |
 | --- | --- | --- |
-| `uncertainty_func` | `"rational"` | the neighbour's share `w` of the blend: `"rational"` (fixed, no parameters) or `"softsign"` (two learned temperatures); report §3.2, §3.3 |
+| `uncertainty_func` | `"rational"` | the neighbour's share `U` of the blend: `"rational"` (fixed, no parameters) or `"softsign"` (two learned temperatures); report §3.2, §3.3 |
 | `soft_score_temp` | `0.5` | `uncertainty_func="softsign"` only: initial `T_soft` |
 | `select_temp` | `0.5` | `uncertainty_func="softsign"` only: initial `T_sel` |
 | `learnable_temps` | `True` | `uncertainty_func="softsign"` only: `False` stores both temperatures as frozen buffers |

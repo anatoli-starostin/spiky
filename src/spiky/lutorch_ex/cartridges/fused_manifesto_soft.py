@@ -1,6 +1,6 @@
 """FusedManifestoSoftLUT — the fused twin of ManifestoSoftLUT, for both uncertainty functions.
 
-Same ``(1-w)`` / ``w`` two-cell blend (``uncertainty_func="rational"`` or ``"softsign"``) as value and gradient,
+Same ``(1-U)`` / ``U`` two-cell blend (``uncertainty_func="rational"`` or ``"softsign"``) as value and gradient,
 computed by the hand-written CUDA kernels (``csrc/fused_manifesto.cu``: one forward and one backward kernel, nothing
 per table in global memory, the soft-sign temperatures' gradients included). Those kernels are its only
 implementation: a case they do not cover (a CPU input, a float64 input, a float16 or float64 table, nap > 16, d_in
