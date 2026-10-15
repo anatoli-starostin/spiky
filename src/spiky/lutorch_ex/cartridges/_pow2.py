@@ -41,7 +41,7 @@ def resolve_quant_config(quant_mode: Optional[str], quant_overrides: Optional[di
             raise ValueError("quant_overrides given without quant_mode")
         return None
     if quant_mode not in PRESETS:
-        raise ValueError(f"quant_mode must be None or one of {sorted(PRESETS)}, got {quant_mode!r}")
+        raise ValueError(f"quant_mode must be one of {sorted(PRESETS)}, got {quant_mode!r}")
     cfg = dict(PRESETS[quant_mode])
     for k, v in (quant_overrides or {}).items():
         if k not in _OVERRIDABLE:

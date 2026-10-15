@@ -130,6 +130,3 @@ class DeployedQuantisedConfidenceLUT(QuantisedConfidenceLUT):
             k, skip = _pow2.single_exponent(m, g0, beta, gamma, cfg)
             acc = _pow2.int_single_read(packed, cfg["bits"], d_out, gc.reshape(B, G, tph, 1), k, skip)
         return self._route(acc.to(x.dtype), x)   # RAW (units 2^-6); scale folded into decompress
-
-
-# Register the load-side rebuilder under its format tag (leaf registry -> no import cycle with deploy).

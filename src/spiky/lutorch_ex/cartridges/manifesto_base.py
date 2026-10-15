@@ -56,8 +56,8 @@ from ..lut_spec import LUTSpec
 from ._fused_ops import _global_cells
 from .uncertainty import rational_uncertainty
 
-# Compile the hot forward on CUDA by default (the convention for all cartridges); eager on
-# CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
+# torch.compile on CUDA, where the library compiles at all: the reference classes' forward (ReferenceForward:
+# eval always, train only with _COMPILE_TRAIN) and cell_tv(); the CPU runs eager. LUTORCH_EX_NO_COMPILE=1 disables it.
 _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
 
 #: The uncertainty functions (see the module docstring).
@@ -255,7 +255,8 @@ class ManifestoLUT(MultiHeadLUT):
 
     @abstractmethod
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover - abstract
-        """``[B, h_in, d_in]`` -> ``[B, h_out, d_out]``: the cartridge's read (compiled on CUDA by :meth:`forward`)."""
+        """``[B, h_in, d_in]`` -> ``[B, h_out, d_out]``: the cartridge's read (a reference class's forward compiles
+        it on CUDA, see ReferenceForward; a fused class calls it directly)."""
         raise NotImplementedError
 
     # -- shared regularisation / dropout (all cartridges inherit) ----------------------------

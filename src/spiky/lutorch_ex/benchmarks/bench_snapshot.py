@@ -11,9 +11,10 @@ cell.
 Methodology:
 - Every cell is built with a fixed seed (``seed=1`` tables, ``torch.manual_seed(0)`` inputs). Eval forward runs in
   eval mode under ``no_grad``; train forward / backward / total run in train mode, ``y.backward(go)``.
-- Each class runs with its defaults, i.e. what a user gets. A class has exactly one implementation (the class name
-  says which): the fused classes their CUDA kernels (a case those do not cover is an error cell), the reference
-  classes plain PyTorch, compiled on CUDA.
+- Each class runs with its defaults, i.e. what a user gets. The fused classes run their CUDA kernels (a case those do
+  not cover is an error cell); the reference classes run plain PyTorch, compiled on CUDA in eval, and in training
+  only ConfidenceLUT / QuantisedConfidenceLUT (the Manifesto references train eager); DeployedQuantisedConfidenceLUT
+  runs its deploy kernel.
 - Every cell runs in its own fresh Python process (``--no-isolate`` runs them all in this one). ``--rounds R`` runs
   the whole matrix R times, the cell order rotated by one each round, and reports per cell the median of the R round
   medians with their range (``round_min_ms`` / ``round_max_ms``); the per-round rows are kept in the JSON.

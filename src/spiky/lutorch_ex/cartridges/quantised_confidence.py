@@ -20,8 +20,8 @@ shift-add read (``forward_int``, units 2^-6) is provided for inference / cross-c
 the fake-quant value to round-off.
 
 Scope: constant cells only, both anchor modes (inherited), read_top_n ∈ {1,2}, no hard forward, no
-trainable anchors. float32 / float64 only (bfloat16 raises via the base). p2_int8 is the only preset; n=1 quant
-is a lutorch_ex extension of the reference (which was n=2-only).
+trainable anchors. float32 / float64 only (bfloat16 / float16 raise TypeError via ReferenceForward). p2_int8 is
+the only preset; n=1 quant is a lutorch_ex extension of the reference (which was n=2-only).
 
 Implementations (the class is the implementation, there is no selector):
 * :class:`QuantisedConfidenceLUT` -- the reference: the torch definition (``_pow2``) only, every case, CPU and CUDA,
@@ -196,7 +196,8 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     #: Measured at 32,768 vectors, float32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
     #: reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90 (also at 1000). Train total unchanged.
     #: Version-dependent: a torch upgrade can rename the options or change the heuristic; a bench_snapshot run
-    #: (benchmarks/) is the regression detector. DeployedQuantisedConfidenceLUT compiles its own forward without it.
+    #: (benchmarks/) is the regression detector. DeployedQuantisedConfidenceLUT is never compiled: on CUDA it runs the
+    #: deploy_fwd kernel, on the CPU the eager torch definition.
     _COMPILE_OPTIONS = {"realize_reads_threshold": 8, "realize_opcount_threshold": 100}
 
     def __init__(self, spec, *, read_top_n: int, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
