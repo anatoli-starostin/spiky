@@ -1,6 +1,7 @@
 % lutorch_ex library report.
 % Build: latexmk -pdf -interaction=nonstopmode -halt-on-error lutorch_ex_report_izhikevich_2026-10-09.tex
-% fig_curves.pdf is Figure 4, plotted from the run histories; the code is src/spiky/lutorch_ex/.
+% fig_curves_v2.pdf is Figure 4, made by fig_curves_v2.py from fig_curves_v2.csv (the val_bpb histories of
+% the nine runs); the code is src/spiky/lutorch_ex/.
 %
 % The report goes from the smallest element to the full system (Figure 1):
 %   1 one table, 2 lookup variants, 3 heads and the multi-head LUT, 4 the wrapper,
@@ -56,10 +57,10 @@
 transformer layer with lookup tables (LUTs). An FFN multiplies its input by two weight matrices. The
 replacement performs a simpler operation. It turns the input into a small number of sign bits, uses those
 bits as addresses into many small learnable tables, and adds up the rows that the addresses select. The
-lookup itself needs no matrix multiplication. In a sweep of seven configurations trained for 48{,}000
+lookup itself needs no matrix multiplication. In a sweep of eight lookup variants trained for 48{,}000
 steps, with one seed per configuration, the best lookup variant of the library reaches a slightly lower
-validation loss than the dense FFN ($1.106$ against $1.115$ bits per byte). The 8-bit version of this
-lookup variant is worse by only $0.001$ bits per byte.
+validation loss than the dense FFN ($1.0865$ against $1.0894$ bits per byte). Its 8-bit version reaches
+$1.0899$ bits per byte, the same as the dense FFN within the variation between runs.
 
 \section*{How the report is organized}
 
@@ -794,21 +795,22 @@ dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()
 \end{lstlisting}
 
 % ======================================================================================================
-\section{Experiments: a sweep of seven configurations}
+\section{Experiments: eight lookup variants and the dense FFN}
 \label{sec:ml}
 
 This section describes the outermost box of Figure~\ref{fig:levels}, the full model. It answers two
-questions. How well do the lookup variants learn, compared with each other and with the dense FFN that they
-replace? And how fast do they run?
+questions. How well do the lookup variants learn, compared with each other and with the dense FFN that
+they replace? And how fast do they run?
 
 \subsection{Setup}
 
 The test model is a six-layer GPT. In every layer, the FFN is replaced by a \code{ProjectionMHL} wrapper
-that contains the lookup variant under test. Seven configurations were trained, and they differ only in the
-lookup variant. Table~\ref{tab:setup} lists the settings that all seven share. The configuration files, the full
-histories of the metrics, and a summary of every run (including the training time in hours and the peak
-memory) are available on the branch at
-\url{https://github.com/anatoli-starostin/spiky/tree/feature/lutorch_ex_report/experiments/lutorch_ex}.
+that contains the lookup variant under test. Eight configurations were trained, and they differ only in
+the lookup variant. Each of them uses the fused class of its lookup variant. A ninth run, the baseline,
+keeps the dense FFN. Table~\ref{tab:setup} lists the settings. The configuration files, the training
+scripts, and a summary of every run (including the training time and the peak memory) are available on the
+branch at
+\url{https://github.com/anatoli-starostin/spiky/tree/research/lutorch_ex_fused_ablations/experiments/lutorch_ex_fused}.
 
 \begin{table}[htb]
 \centering\small
@@ -818,21 +820,23 @@ memory) are available on the branch at
 \toprule
 item & value \\
 \midrule
-model & six-layer GPT, $d_\text{model}=384$, 6 attention heads, $68.2$M parameters \\
+model & six-layer GPT (pre-norm blocks, rotary position embeddings, untied output layer), $d_\text{model}=384$, 6 attention heads; $68.2$M parameters with the multi-head LUTs, $35.8$M with the dense FFN \\
+dense FFN & $384\!\to\!1536\!\to\!384$ with GELU, no bias, no dropout \\
 wrapper & square: $D_\text{in}=D_\text{out}=d_\text{model}=384$ \\
 multi-head LUT & $h_\text{in}=h_\text{out}=8$ heads, \code{tph}$=64$, \code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, anchor pairs \\
-initialization & seed 1; the library defaults: tables uniform in $[-10^{-3},10^{-3}]$ per head, output projection zero \\
-regularizers & row total variation with $\lambda=10$, and table dropout with $p=0.2$ (Section~\ref{sec:reg}) \\
-optimizer & AdamW, learning rate $3\times10^{-4}$, weight decay $0.1$ (none on the tables) \\
+initialization & seed 1; tables uniform in $[-10^{-3},10^{-3}]$ per head, input projection $\mathcal{N}(0,0.02)$, output projection zero \\
+regularizers & multi-head LUTs only: row total variation with $\lambda=10$, and table dropout with $p=0.2$ (Section~\ref{sec:reg}) \\
+optimizer & AdamW, learning rate $3\times10^{-4}$, $\beta=(0.9,0.95)$, weight decay $0.1$ (none on the tables and on the parameters with fewer than two dimensions), gradient clipping at $1.0$ \\
 schedule & 48{,}000 steps; cosine schedule, $10\%$ warm-up, floor at $0.1\times$ the peak rate \\
-batch & sequences of 512 tokens; 24{,}576 tokens per step (device batch 12, gradient accumulation 4) \\
-precision & the backbone in bf16 (16-bit floating point), the multi-head LUTs in fp32 \\
-validation & every 500 steps \\
-data & the \emph{NanoChat} setup: the ClimbMix text corpus as prepared by nanochat's data script \\
+batch & sequences of 512 tokens; 24{,}576 tokens per step (LUT runs: device batch 12, gradient accumulation 4; dense run: device batch 48), $1.18$ billion tokens in all \\
+precision & fp32 throughout \\
+validation & every 500 steps, on a fixed held-out set of 4{,}788 sequences \\
+data & the \emph{NanoChat} setup: the ClimbMix text corpus as prepared by nanochat's data script, 170 shards; the runs read less than one pass of it \\
 tokenizer & nanochat's RustBPE tokenizer, with a vocabulary of 32{,}768 entries trained by nanochat on the same corpus; the text is streamed and tokenized on the fly into sequences of 512 tokens, aligned to the beginning-of-sequence (BOS) token \\
+library & \code{lutorch\_ex} of 12--14 October 2026, in which \code{uncertainty\_func} was still called \code{weight}; the mathematics is the one described here \\
 \bottomrule
 \end{tabular}
-\caption{The settings that are common to the seven runs of the sweep.}
+\caption{The settings of the nine runs.}
 \label{tab:setup}
 \end{table}
 
@@ -847,167 +851,165 @@ tokenizers. A lower value is better.
 \begin{table}[!htb]
 \centering\small
 \setlength{\tabcolsep}{5pt}
-\begin{tabular}{@{}L{53mm}L{43mm}rrr@{}}
+\begin{tabular}{@{}L{60mm}L{40mm}rrr@{}}
 \toprule
-FFN replacement & lookup & params & best \code{val\_bpb} & $\Delta$ vs.\ dense \\
+FFN replacement & lookup & params & \code{val\_bpb} & $\Delta$ vs.\ dense \\
 \midrule
-dense FFN, $384\!\to\!1536\!\to\!384$, GELU & none & 35.8M & 1.11509 & \\
+dense FFN, $384\!\to\!1536\!\to\!384$, GELU & none & 35.8M & 1.08936 & \\
 \midrule
-\code{ConfidenceLUT} $n=2$        & scored weighted retrieval & 68.2M & \textbf{1.10606} & $-0.0090$ \\
-\code{QuantisedConfidenceLUT} $n=2$ & the same, in int8 & 68.2M & 1.10724 & $-0.0079$ \\
-\code{ConfidenceLUT} $n=1$        & scored single row & 68.2M & 1.11737 & $+0.0023$ \\
-\code{QuantisedConfidenceLUT} $n=1$ & the same, in int8 & 68.2M & 1.11982 & $+0.0047$ \\
-\code{FusedSoftSignSmoothLUT}       & weighted retrieval with $w$ & 68.2M & 1.12941 & $+0.0143$ \\
-\code{FusedManifestoSoftLUT}        & weighted retrieval with $U$ & 68.2M & 1.13949 & $+0.0244$ \\
-\code{FusedManifestoHardLUT}        & hard lookup & 68.2M & 1.15152 & $+0.0364$ \\
-\code{FusedSoftSignHardLUT}         & hard lookup & 68.2M & 1.15647 & $+0.0414$ \\
+\code{FusedConfidenceLUT} $n=2$           & scored weighted retrieval & 68.2M & \textbf{1.08653} & $-0.0028$ \\
+\code{FusedQuantisedConfidenceLUT} $n=2$  & the same, in int8 & 68.2M & 1.08986 & $+0.0005$ \\
+\code{FusedConfidenceLUT} $n=1$           & scored single row & 68.2M & 1.09698 & $+0.0076$ \\
+\code{FusedQuantisedConfidenceLUT} $n=1$  & the same, in int8 & 68.2M & 1.09928 & $+0.0099$ \\
+\code{FusedManifestoSoftLUT}, soft-sign   & weighted retrieval with $U$ & 68.2M & 1.10954 & $+0.0202$ \\
+\code{FusedManifestoSoftLUT}, rational    & weighted retrieval with $U$ & 68.2M & 1.11863 & $+0.0293$ \\
+\code{FusedManifestoHardLUT}, rational    & hard lookup & 68.2M & 1.13242 & $+0.0431$ \\
+\code{FusedManifestoHardLUT}, soft-sign   & hard lookup & 68.2M & 1.13780 & $+0.0484$ \\
 \bottomrule
 \end{tabular}
-\caption{The sweep at 48{,}000 steps, one seed, against the dense FFN baseline. The baseline has the same
-backbone (6 layers, $d_\text{model}=384$, 6 attention heads), data, tokenizer, schedule, batches of
-24{,}576 tokens and seed, with a dense $384\!\to\!1536\!\to\!384$ GELU network as the FFN (run
-\code{exp\_n\_0177\_vanilla48k\_corrected} on branch \code{research/ffn\_replacement\_fix}). The int8
-lookup variants use int8 rows and power-of-two coefficients (Section~\ref{sec:quant}). The table also lists
-\code{QuantisedConfidenceLUT} with $n=1$, which is not one of the seven runs of the sweep and does not
-appear in Figure~\ref{fig:curves}.}
+\caption{The nine runs at 48{,}000 steps, one seed each. Every run improves until its last evaluation, so
+\code{val\_bpb} is both the final and the best value. ``Soft-sign'' and ``rational'' are the values of
+\code{uncertainty\_func}. The baseline has the same backbone (6 layers, $d_\text{model}=384$, 6 attention
+heads), data, tokenizer, schedule, batches of 24{,}576 tokens and seed, with a dense
+$384\!\to\!1536\!\to\!384$ GELU network as the FFN and no regularizer (run \code{00\_vanilla}). The int8
+lookup variants are trained with int8 rows and power-of-two coefficients (Section~\ref{sec:quant}). Each
+fused class has the mathematics of its reference class.}
 \label{tab:results}
 \end{table}
 
 \begin{figure}[!htb]
 \centering
-\includegraphics[width=\linewidth]{fig_curves.pdf}
-\caption{Validation loss in bits per byte for the seven runs. Left: the full run. Right: the second half,
-with the best value of each run. Color marks the generation (red Confidence, blue SoftSign, green
-Manifesto). Dotted lines are the lookup variants that use one row per table (the two hard lookups, and
-Confidence with $n=1$). The dashed line is the int8 lookup variant.}
+\includegraphics[width=\linewidth]{fig_curves_v2.pdf}
+\caption{Validation loss in bits per byte for the nine runs. Left: the full run. Right: the second half,
+with the final value of each run. Color marks the family (red confidence, blue Manifesto with the
+soft-sign uncertainty function, green Manifesto with the rational one, black the dense FFN). Solid lines
+retrieve two rows per table, and dotted lines one row (the two hard lookups, and confidence with $n=1$).
+The dashed and the dash-dotted lines are the int8 lookup variants with $n=2$ and $n=1$.}
 \label{fig:curves}
 \end{figure}
 
 Table~\ref{tab:results} and Figure~\ref{fig:curves} show five results. Each configuration was run once.
-When the two configurations with $n=2$ were run a second time, their best values changed by $0.0007$ to
-$0.0014$ bpb. This shows how much a result can vary from one run to the next.
+\code{FusedConfidenceLUT} with $n=1$ was also run with seeds 2 and 3, which gave $1.09682$ and $1.09460$
+bpb. The standard deviation of the three runs, $0.0013$ bpb, shows how much a result can vary from one run
+to the next.
 \begin{enumerate}\itemsep0pt
-\item \textbf{A weighted retrieval is better than a hard lookup.} In the two generations that offer both
-  forms, the weighted retrieval has the lower loss: by $0.012$ bpb for Manifesto, and by $0.027$ bpb for
-  SoftSign.
-\item \textbf{Two rows are better than one.} Within generation 3, the form that also retrieves the
-  neighbor row ($n=2$) is better than the form with a single scored row ($n=1$), by $0.011$ bpb. Both
-  forms multiply their rows by the score. This result therefore compares one row with two rows, and it
-  does not compare a hard lookup with a weighted retrieval. The same result holds after quantization: the
-  quantized lookup variant with $n=1$ is worse than the quantized lookup variant with $n=2$ by $0.013$ bpb, which is
-  about ten times the variation from run to run.
-\item \textbf{The confidence score improves the result.} Generations 1 and 2 weight the two rows
-  according to the uncertainty of one bit only. Generation 3 adds the confidence score, and it does
-  better: \code{ConfidenceLUT} with $n=2$ is ahead of the best SoftSign run by $0.023$ bpb, and ahead of
-  the best Manifesto run by $0.033$ bpb. The order of the seven runs does not change after step 7{,}500.
-\item \textbf{Quantization costs very little.} With int8 rows and power-of-two coefficients, the loss
-  increases by $0.0012$ bpb at $n=2$, and the tables need only a quarter of the memory. At $n=1$, the
-  loss increases by $0.0025$ bpb.
-\item \textbf{The best lookup variants are better than the dense FFN.} The two scored lookup variants with two rows
-  have a lower loss than the dense FFN, by $0.009$ and $0.008$ bpb. The scored lookup variant with a single row
-  is worse than the dense FFN by $0.002$ bpb, and its int8 counterpart is worse by $0.005$ bpb.
-  Generations 1 and 2 are worse by $0.014$ to $0.041$ bpb. The LUT models have $1.9$ times as many
-  parameters as the dense model. For each token, however, a multi-head LUT uses only two rows of 48
+\item \textbf{A weighted retrieval is better than a hard lookup.} With both uncertainty functions, the
+  weighted retrieval has the lower loss: by $0.014$ bpb with the rational one, and by $0.028$ bpb with the
+  soft-sign one. The learnable soft-sign function helps the weighted retrieval (by $0.009$ bpb), but not
+  the hard lookup, which it makes worse by $0.005$ bpb.
+\item \textbf{Two rows are better than one.} Among the confidence lookup variants, the form that also
+  retrieves the neighbor row ($n=2$) is better than the form with a single scored row ($n=1$), by $0.010$
+  bpb. Both forms multiply their rows by the score. This result therefore compares one row with two rows,
+  and it does not compare a hard lookup with a weighted retrieval. The same result holds after
+  quantization, by $0.009$ bpb. Both differences are seven to eight times the variation from run to run.
+\item \textbf{The confidence score improves the result.} The Manifesto lookup variants weight the two rows
+  according to the uncertainty of one bit only. The confidence lookup variants add the confidence score,
+  and they do better: \code{FusedConfidenceLUT} with $n=2$ is ahead of the best Manifesto run (the weighted
+  retrieval with the soft-sign function) by $0.023$ bpb, and even the single scored row ($n=1$) is ahead
+  of it by $0.013$ bpb. The order of the eight lookup variants does not change after step 6{,}500.
+\item \textbf{Quantization costs little.} With int8 rows and power-of-two coefficients, the loss
+  increases by $0.0033$ bpb at $n=2$ and by $0.0023$ bpb at $n=1$, and the tables need only a quarter of
+  the memory.
+\item \textbf{Only the best lookup variant is better than the dense FFN.} \code{FusedConfidenceLUT} with
+  $n=2$ has a lower loss than the dense FFN, by $0.003$ bpb, which is about twice the variation from run
+  to run. Its curve crosses below the curve of the dense FFN only after step 38{,}500. Its int8
+  counterpart ends $0.0005$ bpb above the dense FFN, which is within the variation from run to run. The
+  other lookup variants are worse by $0.008$ to $0.048$ bpb. The LUT models have $1.9$ times as many
+  parameters as the dense model. For each token, however, a multi-head LUT uses only one or two rows of 48
   values from each table.
 \end{enumerate}
 
-\subsection{Benchmarks: CPU, RTX 5090, H100}
+\subsection{Benchmarks: RTX 5090 and H100}
 \label{sec:bench}
 
+Table~\ref{tab:bench} gives the timings of a single multi-head LUT, measured without the model around it,
+for the classes that the sweep trained: the eight fused classes, and \code{DeployedQuantisedConfidenceLUT},
+the int8 form that is used for decode. Two reference classes are added for comparison. The numbers are
+taken from the benchmark records in the repository, \code{src/spiky/lutorch\_ex/benchmarks/results\_2026-10-15/}
+(\code{rtx5090.md} and \code{h100.md}). They were measured on an RTX 5090 and on an H100 with the same code
+and the same settings, using the benchmark module of the library,
+\code{spiky.lutorch\_ex.benchmarks.bench\_snapshot}. The records use 16 heads, twice as many as the model
+of the sweep, and 8{,}192 input vectors.
 
-Table~\ref{tab:bench} gives the timings of a single multi-head LUT, measured without the model around
-it, at the sizes used in the sweep. The table covers eight configurations: the seven configurations of
-the sweep, and \code{QuantisedConfidenceLUT} with $n=1$. Four of the eight are the fused versions of
-generations 1 and 2. The other four belong to generation 3, which has no separate fused version. The
-lookup of generation 3 uses the \code{embedding\_bag} operation of PyTorch (an operation that fetches
-several rows and adds them in one call) together with a compiled forward pass, and this implementation
-is already the fast one.
-
-Generations 1 and 2 also exist as \emph{reference} lookup variants, which are written in plain PyTorch
-(\code{ManifestoHardLUT} and the other classes without the prefix \code{Fused}). The reference lookup variants
-are written to be easy to understand, and the fused versions are tested against them to confirm that
-both give the same results. The reference lookup variants are not optimized for speed, and the sweep did not
-use them for training, so the table does not include them. The CPU and RTX 5090 columns were measured
-for this report with the benchmark module of the library, \code{spiky.lutorch\_ex.bench}
-(\code{src/spiky/lutorch\_ex/bench.py}). A small script called this module for every configuration, at
-the sizes of the sweep.
+The reference classes are written in plain PyTorch, to be easy to understand, and the fused classes are
+tested against them. The Manifesto reference classes are not in the table: their training step runs
+without compilation, so it is not comparable with the others. The fused classes run only on CUDA, and the
+records contain no CPU timings.
 
 \begin{table}[!htb]
 \centering\footnotesize
 \setlength{\tabcolsep}{3.6pt}
-\begin{tabular}{@{}l r rrr rrr@{}}
+\begin{tabular}{@{}l rr rr r@{}}
 \toprule
-& CPU (measured) & \multicolumn{3}{c}{RTX 5090 (measured)} & \multicolumn{3}{c}{H100 (recorded, PR \#138)} \\
-\cmidrule(lr){2-2}\cmidrule(lr){3-5}\cmidrule(l){6-8}
-lookup variant & step ms & decode ms & step ms & peak GB & decode ms & step ms & peak GB \\
+& \multicolumn{2}{c}{RTX 5090} & \multicolumn{2}{c}{H100} & \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+lookup variant & decode ms & step ms & decode ms & step ms & peak MiB \\
 \midrule
-\code{FusedManifestoHardLUT}        & 62.9 & 1.04 & 20.2 & 3.8 & 1.61 & 21.3 & 4.0 \\
-\code{FusedManifestoSoftLUT}        & 92.3 & 3.50 & 22.5 & 2.3 & 3.84 & 23.6 & 2.5 \\
-\code{FusedSoftSignHardLUT}         & 68.8 & 1.03 & 24.6 & 4.2 & 1.61 & 23.8 & 4.2 \\
-\code{FusedSoftSignSmoothLUT}       & 60.8 & 2.13 & 28.8 & 2.9 & 4.10 & 28.4 & 3.0 \\
-\code{ConfidenceLUT} $n=1$        & 35.8 & 1.51 & 11.5 & 1.1 & 2.40 & 12.9 & 1.2 \\
-\code{ConfidenceLUT} $n=2$        & 66.7 & 4.59 & 21.5 & 1.9 & 4.17 & 24.7 & 2.1 \\
-\code{QuantisedConfidenceLUT} $n=2$ & 83.4 & 4.12 & 23.9 & 1.8 & 4.23 & 24.5 & 2.0 \\
-\code{QuantisedConfidenceLUT} $n=1$ & 52.7 & 2.04 & 11.8 & 1.1 & n/a & n/a & n/a \\
+\code{FusedManifestoHardLUT}, rational           & 0.281 & 1.545 & 0.447 & 2.072 & 96.0 \\
+\code{FusedManifestoHardLUT}, soft-sign          & 0.297 & 1.929 & 0.619 & 3.012 & 96.0 \\
+\code{FusedManifestoSoftLUT}, rational           & 0.492 & 2.086 & 0.650 & 2.380 & 96.0 \\
+\code{FusedManifestoSoftLUT}, soft-sign          & 0.509 & 2.321 & 0.706 & 3.066 & 96.0 \\
+\code{FusedConfidenceLUT} $n=1$                  & 0.293 & 1.517 & 0.402 & 1.987 & 96.4 \\
+\code{FusedConfidenceLUT} $n=2$                  & 0.507 & 2.414 & 0.722 & 3.103 & 96.4 \\
+\code{FusedQuantisedConfidenceLUT} $n=1$         & 0.335 & 1.474 & 0.688 & 1.915 & 128.4 \\
+\code{FusedQuantisedConfidenceLUT} $n=2$         & 0.565 & 2.497 & 0.952 & 2.744 & 128.4 \\
+\code{DeployedQuantisedConfidenceLUT} $n=1$      & 0.242 & --    & 0.353 & --    & -- \\
+\code{DeployedQuantisedConfidenceLUT} $n=2$      & 0.336 & --    & 0.476 & --    & -- \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{reference classes, for comparison}} \\
+\code{ConfidenceLUT} $n=2$                       & 1.801 & 5.389 & 1.751 & 6.697 & 840.0 \\
+\code{QuantisedConfidenceLUT} $n=2$              & 2.585 & 12.489 & 4.484 & 19.123 & 1142.4 \\
 \bottomrule
 \end{tabular}
-\caption{Timings of one multi-head LUT alone, with $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$,
-\code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, in fp32, on random input. \emph{Decode} is a forward pass
-without gradients. \emph{Step} is one training step, a forward and a backward pass. The GPU columns use a batch of $B=24{,}576$ input vectors, the training batch of the sweep.
-The CPU column uses $B=1{,}024$. \textbf{Measured for this report:} one workstation with torch 2.9.1
-(cu130), the CUDA 13.3 toolkit for the JIT kernels, and driver 595. RTX 5090 (32\,GB, native kernels
-active): medians of 10 repeats after 3 warm-up runs. CPU (a 24-thread desktop part, using the
-\mbox{\code{embedding\_bag}} path of the fused versions): medians of 15 repeats after 5 warm-up runs, with the
-fastest repeat within $15\%$ of the median. The H100 columns were measured on an H100 virtual machine
-provided by Nebius. The last line was measured later with the same module and settings (median of three
-runs); its H100 numbers are pending.}
+\caption{Timings of one multi-head LUT alone, with $h_\text{in}=h_\text{out}=16$, \code{tph}$=64$,
+\code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, in fp32, on 8{,}192 random input vectors, from the
+benchmark records \code{benchmarks/results\_2026-10-15/} of the library (torch 2.9.1, CUDA 13.0).
+\emph{Decode} is a forward pass in evaluation mode without gradients. \emph{Step} is one training step, a
+forward and a backward pass. Each time is the median wall-clock time of 100 steps, after 20 warm-up steps
+and with the L2 cache flushed before each step; the median is taken over 3 rounds and averaged over the
+passes of the record (3 on the RTX 5090, 2 on the H100). \emph{Peak} is the peak memory of a training step
+above what is allocated before it; it is the same on both GPUs. The deployed class has no training step.}
 \label{tab:bench}
 \end{table}
 
 \needlines{5}
 The table shows the following.
 \begin{itemize}\itemsep0pt
-\item \textbf{Most of a training step is the backward pass.} On both GPUs, a training step at the
-  training batch size takes $20$ to $29$ ms for every hard lookup and for every lookup variant that retrieves
-  two rows. The backward pass takes $17$ to $19$ ms of this time, because it has to distribute (scatter)
-  the gradient over the $6.3$ million values of the tables.
-\item \textbf{The scored lookup variant with a single row is the cheapest.} \code{ConfidenceLUT} with $n=1$
-  has the shortest training step ($11.5$ ms). Together with its int8 counterpart, it also has the
-  smallest peak memory ($1.1$ GB). There are two reasons: its compiled forward pass combines the
-  sequence of small kernels that compute the score into one, and it retrieves only one row per table.
-\item \textbf{A second row roughly doubles the decode time.} The decode time increases from $1.0$ to
-  $3.5$ ms for Manifesto, from $1.5$ to $4.6$ ms for Confidence, and from $2.0$ to $4.1$ ms for the int8
-  counterpart of Confidence.
-\item \textbf{On a GPU, quantization saves memory but not time.} The quantized lookup variant is not
-  consistently faster than the floating-point lookup variant ($4.1$ ms against $4.6$ ms at $n=2$, but $2.0$ ms
-  against $1.5$ ms at $n=1$). The reason is that the benchmark measures the training form of the module
-  with gradients switched off. This form still fetches floating-point rows, which the straight-through
-  estimator needs. The integer lookup is used only after the model has been converted with
-  \code{export\_deployment} (Section~\ref{sec:quant}). The benefit of quantization on a GPU is the
-  smaller memory: the int8 tables that are used in decode need a quarter of the fp32 storage ($6$~MiB
-  instead of $24$~MiB per layer). On hardware that performs low-precision integer arithmetic cheaply, we
-  expect the integer lookup to be faster as well, but this has not been measured.
-\item \textbf{The fused versions are faster and need less memory.} At the training batch size, the
-  native training step of \code{FusedSoftSignHardLUT} is $1.6$ times faster than the training step of
-  its reference lookup variant \code{SoftSignHardLUT}, and it uses $2.7$ times less memory. (These numbers were
-  recorded when the fused version was merged into the library. The reference lookup variants are not in
-  Table~\ref{tab:bench}.)
-\item \textbf{The speed is limited by memory traffic, not by arithmetic.} The two GPUs differ by less
-  than $15\%$ on every line of the table. This indicates that the transfer of data to and from memory
-  limits the speed, and not the arithmetic.
-\item \textbf{The CPU gives the same ranking.} With a batch that is 24 times smaller, the same
-  configurations take $36$ to $92$ ms per training step on the CPU. Per input vector, this is about one
-  hundred times slower than on a GPU. The scored lookup variant with a single row is again the cheapest, and
-  the weighted retrievals of two rows cost $1.7$ to $2.6$ times more.
+\item \textbf{Most of a training step is the backward pass.} A fused training step takes $1.5$ to $2.5$
+  ms on the RTX 5090 and $1.9$ to $3.1$ ms on the H100. According to the records, the backward pass takes
+  $74$ to $82\%$ of it on the RTX 5090.
+\item \textbf{A second row costs time in decode.} On the RTX 5090, the decode time grows by a factor of
+  about $1.7$ from one row to two rows (from $0.28$ to $0.49$ ms for Manifesto, from $0.29$ to $0.51$
+  ms for confidence, and from $0.34$ to $0.57$ ms for its int8 counterpart in training form).
+\item \textbf{The int8 decode is the fastest decode of the confidence lookup variants.}
+  \code{DeployedQuantisedConfidenceLUT} reads the int8 tables with one kernel. On the RTX 5090 it takes
+  $0.24$ ms with one row and $0.34$ ms with two rows, against $0.29$ and $0.51$ ms for the floating-point
+  \code{FusedConfidenceLUT}; the H100 shows the same order. Its tables also need a quarter of the memory
+  ($6$~MiB instead of $24$~MiB per layer of the sweep).
+\item \textbf{The soft-sign uncertainty function costs training time.} It makes the training step of the
+  Manifesto classes longer by $11$ to $25\%$ on the RTX 5090, and by $29$ to $45\%$ on the H100. On the
+  RTX 5090 it changes the decode time by $6\%$ or less; on the H100 it makes the decode of the hard lookup
+  $38\%$ longer.
+\item \textbf{The fused classes are faster and need less memory.} At $n=2$, the training step of
+  \code{FusedConfidenceLUT} is $2.2$ times faster than that of the compiled reference class
+  \code{ConfidenceLUT} on both GPUs, and it needs $8.7$ times less memory. For the int8 lookup variant the
+  training step is $5$ to $7$ times faster.
+\item \textbf{The RTX 5090 is faster than the H100 here.} On every line of the table except the decode of
+  \code{ConfidenceLUT}, the RTX 5090 takes less time, by a factor of up to about $2$.
 \end{itemize}
 
 \subsection{Which lookup variant to use}
 \label{sec:which}
 
-For the best accuracy, use \code{ConfidenceLUT} with $n=2$. For decode with int8 tables, use
-\code{QuantisedConfidenceLUT}. Generations 1 and 2 are useful mainly as points of reference. A hard
-lookup gives the cheapest inference, but it is less accurate than the weighted retrieval of the same
-generation (Table~\ref{tab:results}).
+For the best accuracy, use the confidence lookup variant with $n=2$ (\code{ConfidenceLUT}, or
+\code{FusedConfidenceLUT} on a GPU). In the sweep it is the only lookup variant with a lower loss than the
+dense FFN, by a small margin. For decode with int8 tables, train \code{QuantisedConfidenceLUT} with $n=2$
+(\code{FusedQuantisedConfidenceLUT} on a GPU), export it, and decode with
+\code{DeployedQuantisedConfidenceLUT}; in the sweep it matches the dense FFN within the variation from run
+to run. The Manifesto lookup variants are useful mainly as points of reference. A hard lookup reads one
+row per table without a multiplication, but it is less accurate than the weighted retrieval with the same
+uncertainty function (Table~\ref{tab:results}), and in the benchmarks the int8 decode with one row is
+faster still.
 
 \begin{thebibliography}{9}\small\setlength{\itemsep}{1pt}
 \bibitem{lsh} P.~Indyk and R.~Motwani. ``Approximate nearest neighbors: towards removing the curse of
