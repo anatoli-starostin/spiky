@@ -17,8 +17,12 @@ a language-model comparison against a dense baseline are in the report
 `doc/lutorch_ex/lutorch_ex_report.tex`); this README refers to its sections as "report §N". The report calls a
 cartridge a *lookup variant*: "cartridge" is the Python API's term only.
 
-**Install.** `lutorch_ex` is part of the `spiky` package: `pip install -e .` from the repository root (see the
-[repository README](../../../README.md)).
+**Install.** `lutorch_ex` needs only PyTorch and `ninja` (plus the CUDA toolkit for the fused classes); it uses no
+other spiky code. In the spiky repository it comes with the `spiky` package: `pip install -e .` from the repository
+root (see the [repository README](../../../README.md)). On its own:
+`pip install "spiky-lutorch-ex @ git+https://github.com/anatoli-starostin/spiky@<commit>#subdirectory=src/spiky/lutorch_ex"`,
+with the extras `[deploy]` (safetensors output) and `[test]`. The import is `spiky.lutorch_ex` either way; install one
+or the other, not both.
 
 **What runs where.** Each cartridge is either a *reference* class or a *fused* class:
 
@@ -89,8 +93,8 @@ properties are in the [Cartridges specification](#cartridges-specification). All
 `spiky.lutorch_ex`.
 
 **Compilation.** On CUDA the reference classes' eval forward is `torch.compile`d. Their training forward is compiled
-for `ConfidenceLUT` and `QuantisedConfidenceLUT`, and runs eager for `ManifestoHardLUT` and `ManifestoSoftLUT`. The
-CPU runs eager. The fused classes and `DeployedQuantisedConfidenceLUT` are never compiled: they call their kernels.
+for `ConfidenceLUT` and `QuantisedConfidenceLUT`, and runs eager, by design, for `ManifestoHardLUT` and
+`ManifestoSoftLUT` (their `_COMPILE_TRAIN` is False). The CPU runs eager. The fused classes and `DeployedQuantisedConfidenceLUT` are never compiled: they call their kernels.
 
 **Precision.** The reference classes other than `QuantisedConfidenceLUT`, and the fused Manifesto and Confidence
 classes, accept bfloat16 / float16 inputs and low-precision tables (dtypes per class in the specification table): the
