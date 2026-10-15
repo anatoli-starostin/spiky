@@ -85,6 +85,7 @@ parser.add_argument("--max-seq-len", type=int, default=2048, help="max context l
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 # Training horizon (only one used, in order of precedence)
 parser.add_argument("--num-iterations", type=int, default=-1, help="explicit number of optimization steps (-1 = disable)")
+parser.add_argument("--max-steps", type=int, default=-1, help="[lut_nanochat] benchmark cap: stop after this many optimization steps while KEEPING the full --num-iterations LR schedule/horizon (-1 = disable). For short throwaway timing runs; real runs leave it at -1.")
 parser.add_argument("--target-flops", type=float, default=-1.0, help="calculate num_iterations to reach target_flops (-1 = disable)")
 parser.add_argument("--target-param-data-ratio", type=float, default=12, help="calculate num_iterations to maintain data:param ratio (Chinchilla=20, -1 = disable)")
 # Optimization
@@ -748,6 +749,13 @@ while True:
         gc.disable() # nuclear intervention here: disable GC entirely except:
     elif step % 5000 == 0: # every 5000 steps...
         gc.collect() # manually collect, just to be safe for very, very long runs
+
+    # [lut_nanochat] benchmark cap (--max-steps): stop after N optimizer steps while KEEPING the full
+    # num_iterations LR schedule/horizon; the N steps above were timed and logged, so we fall through to the
+    # peak-memory prints below. Default -1 leaves real runs unaffected.
+    if args.max_steps > 0 and step >= args.max_steps:
+        print0(f"[bench] reached --max-steps {args.max_steps}; stopping (schedule horizon {num_iterations})")
+        break
 
 # print a few more stats
 print0(f"Peak memory usage: {get_max_memory() / 1024 / 1024:.2f}MiB")
