@@ -26,6 +26,6 @@ export WANDB_GROUP=${WANDB_GROUP:-nanochat_lut_ffn}
 export ARCH_TAG=${ARCH_TAG:-lut_ffn_confidence_n1_h32_tph32}
 export EXTRA_TAGS="${EXTRA_TAGS:-},ffn=confidenceLUT,read_top_n=1,h=32,tph=32,d=48,r=1536,cells=256,nap=8"
 # --lut-ffn + --no-lr-rescale (v2 parity) + the h32/tph32 geometry (d defaults to 48 -> r=1536).
-export TRAIN_EXTRA="--lut-ffn --no-lr-rescale --lut-ffn-h 32 --lut-ffn-tph 32 ${TRAIN_EXTRA:-}"
+export TRAIN_EXTRA="--lut-ffn --no-lr-rescale --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-proj-bf16 ${TRAIN_EXTRA:-}"
 
 exec bash runs/baseline_d24_1xh100.sh "$@"
