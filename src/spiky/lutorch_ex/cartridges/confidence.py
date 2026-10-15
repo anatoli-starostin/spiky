@@ -98,7 +98,7 @@ class ConfidenceLUT(ReferenceForward, ConfidenceBase):
         w = w.to(table.dtype)
         if torch.compiler.is_compiling():
             out = fused_scored_read(rows, w, table)
-        else:
+        else:   # its backward has a size limit: _fused_ops.py
             out = F.embedding_bag(rows, table, per_sample_weights=w, mode="sum")
         return out.reshape(c.shape[0], G, d_out)
 

@@ -15,7 +15,7 @@ so the eager form of the read is ``F.embedding_bag`` (see ``confidence.py``).
 
 The ``index_add_`` uses atomic float32 adds: the table gradient agrees with embedding_bag's sorted reduction to float32
 re-association, not bit for bit, and is not bit-reproducible run to run (the CUDA training step already is not: it has
-other atomic scatters). It is not bound by embedding_bag's 32-bit launch limit (README).
+other atomic scatters). It is not bound by embedding_bag's 32-bit launch limit (_fused_ops.py).
 """
 from __future__ import annotations
 

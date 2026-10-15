@@ -132,7 +132,7 @@ def test_compiled_fused_read_is_one_graph_with_the_scatter_fused(read_top_n):
 # --------------------------------------------------------------------------------------- large sizes (CUDA)
 
 _LARGE_SPEC = LUTSpec(h_in=16, h_out=16, tph=64, nap=8, d_in=48, d_out=48)   # 262,144 rows x 48: the d24 geometry
-_EB_CLIFF = 332_922_890          # embedding_bag dense backward crashes from here at this geometry (README)
+_EB_CLIFF = 332_922_890          # embedding_bag dense backward crashes from here at this geometry (_fused_ops.py)
 
 
 def _need_gib(gib):

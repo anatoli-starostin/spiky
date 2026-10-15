@@ -92,7 +92,7 @@ def resolve_index_dtype(index_dtype: Optional[torch.dtype], spec) -> torch.dtype
 # embedding_bag forward device-asserts above 2**31 - 1 index entries with int32 (measured, torch 2.9.1), so an
 # auto-int32 cartridge reads in int64 for a call whose read could exceed it (B * n_groups * tph * 2 entries, 2 = the
 # most cells any read takes per table). The separate, much lower embedding_bag BACKWARD size limit is a documented
-# upstream constraint, not enforced here (README: "PyTorch's embedding_bag backward size limit").
+# upstream constraint, not enforced here (_fused_ops.py: "PyTorch's embedding_bag backward size limit").
 _INT32_MAX_ENTRIES = torch.iinfo(torch.int32).max
 
 

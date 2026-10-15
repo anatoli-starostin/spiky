@@ -238,31 +238,6 @@ every confidence cartridge, `read_top_n` is required. Both widths train (also as
 evaluate and export: the export records `meta["read_top_n"]`, and `DeployedQuantisedConfidenceLUT` reads that many
 cells.
 
-### PyTorch's embedding_bag backward size limit
-
-This is a known upstream constraint. lutorch_ex documents it but doesn't enforce it.
-
-- **Symptom:** a training step crashes with an opaque `CUDA error: an illegal memory access was encountered`.
-  It is not a readable error, and stray reads could in principle return wrong gradients instead of crashing.
-- **Cause:** PyTorch's CUDA `aten::_embedding_bag_dense_backward` (kernel `compute_grad_weight_bags`) indexes
-  its launch threads in 32 bits. It fails when
-  `(floor(numel/10) + min(numel, num_weights)) * 32 * ceil(d_out/32) > 2^31`, where:
-  - `numel` is the index-tensor element count of one call;
-  - `num_weights` is the table rows;
-  - `d_out` is the row width.
-- **Dtype-independent:** it reproduces identically for int32 and int64 indices.
-- **Where it bites:** far below 2^31 entries. At h=16, tph=64, nap=8, d_out=48 (262,144 rows) the cliff is at
-  ~2^28.3 entries (measured: 332,922,889 OK, 332,922,890 crashes; torch 2.9.1, RTX 5090). That's ~325k
-  tokens per micro-batch at `read_top_n=1` and ~163k at `read_top_n=2`, against a live micro-batch of 32,768
-  (~10× and ~5× headroom).
-- **Exposed routes** (training calls to `F.embedding_bag` or `_embedding_bag_dense_backward`):
-  ConfidenceLUT's eager read (CPU, `LUTORCH_EX_NO_COMPILE=1`), QuantisedConfidenceLUT and the Manifesto
-  references' train reads.
-- **Not exposed:** ConfidenceLUT's compiled read (its table gradient is an `index_add_`; verified correct on the
-  compiled n=2 path past the cliff, to 819M entries where memory ran out first), the fused classes'
-  kernels, and every eval / `no_grad` path.
-- **Workaround:** reduce the micro-batch size and raise gradient accumulation.
-
 ## Reference and fused cartridges
 
 Each class has exactly one implementation; there is no `backend=` argument.

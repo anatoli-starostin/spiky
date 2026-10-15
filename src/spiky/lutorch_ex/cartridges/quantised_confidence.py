@@ -89,6 +89,7 @@ class QuantisedScaffold:
         gca = _global_cells(c_alt, G, tph, K)
         idx = torch.cat([gc, gca], dim=2).reshape(B * G, 2 * tph)
         psw = torch.cat([psw2[..., 0], psw2[..., 1]], dim=2).reshape(B * G, 2 * tph).to(W2.dtype)
+        # embedding_bag's backward has a size limit: _fused_ops.py
         return F.embedding_bag(idx, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
     # -- integer int8 shift-add read (inference / cross-check), equals the fake-quant value --------
@@ -266,6 +267,7 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
         # tph <= 1024 (in general tph <= 2^(17 - (hi - lo))), and FusedQuantisedConfidenceLUT's order gives the same
         # bits. It FAILS for tph > 1024, a wider window, or table dropout (the 1 / (1 - rate) weights round).
         gc = _global_cells(c, G, tph, K).reshape(B * G, tph)
+        # embedding_bag's backward has a size limit: _fused_ops.py
         return F.embedding_bag(gc, W2, per_sample_weights=psw, mode="sum").reshape(B, G, d_out)
 
     def _forward_impl(self, x: torch.Tensor) -> torch.Tensor:

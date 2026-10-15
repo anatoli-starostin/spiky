@@ -10,6 +10,23 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+# PyTorch's embedding_bag backward size limit: a known upstream constraint, documented here and not enforced.
+# The training reads below, ConfidenceLUT's eager read (confidence.py; on CUDA with LUTORCH_EX_NO_COMPILE=1) and
+# QuantisedConfidenceLUT's reads (quantised_confidence.py) get their table gradient on CUDA from PyTorch's
+# aten::_embedding_bag_dense_backward (kernel
+# compute_grad_weight_bags), which indexes its launch threads in 32 bits. It fails when
+#     (floor(numel / 10) + min(numel, num_weights)) * 32 * ceil(d_out / 32) > 2^31
+# with numel the index-tensor element count of one call, num_weights the table rows and d_out the row width, for int32
+# and int64 indices alike. The symptom is an opaque "CUDA error: an illegal memory access was encountered" in the
+# training step; stray reads could in principle return wrong gradients instead of crashing.
+# It bites far below 2^31 entries: at h=16, tph=64, nap=8, d_out=48 (262,144 rows) the cliff is at ~2^28.3 entries
+# (332,922,889 run, 332,922,890 crash; torch 2.9.1, RTX 5090), i.e. ~325k tokens per micro-batch at read_top_n=1 and
+# ~163k at read_top_n=2, against a live micro-batch of 32,768 (~10x and ~5x headroom). The remedy is a smaller
+# micro-batch with more gradient accumulation.
+# Not exposed: ConfidenceLUT's compiled read (its table gradient is an index_add_, _fused_read.py; verified correct on
+# the compiled n=2 path past the cliff, to 819M entries where memory ran out first, tests/test_fused_read.py), the
+# fused classes' kernels, the CPU, and every eval / no_grad path.
+
 # Low-precision reductions accumulate in float32 and the result is cast back to the caller's dtype
 # (the cartridge does that in _route). For bfloat16 / float16 weights the embedding_bag reduce runs on an
 # float32 view of the table (torch's embedding_bag has no accumulate-dtype knob), so summing a
