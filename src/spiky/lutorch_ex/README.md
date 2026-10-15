@@ -31,8 +31,7 @@ cartridge a *lookup variant*: "cartridge" is the Python API's term only.
   input and the PyTorch definition for a CPU input.
 
 The kernels live in three CUDA extensions (`cartridges/csrc/`), built with `torch.utils.cpp_extension` the first time
-a class needs one (`FusedQuantisedConfidenceLUT`: when it is constructed). The build needs `setuptools`, `ninja` and
-the CUDA toolkit (`nvcc`). The `lutorch_ex_pow2_int8_read` extension, used by `FusedQuantisedConfidenceLUT` and
+a class needs one. The build needs `setuptools`, `ninja` and the CUDA toolkit (`nvcc`). The `lutorch_ex_pow2_int8_read` extension, used by `FusedQuantisedConfidenceLUT` and
 `DeployedQuantisedConfidenceLUT`, is enabled only on sm_120 and sm_90 GPUs.
 
 **No fallback.** A fused class never falls back to PyTorch, and neither does `DeployedQuantisedConfidenceLUT` on a
