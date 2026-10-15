@@ -39,6 +39,7 @@ class LUTFFNConfig:
     table_dropout_rate: float = 0.2
     tv_lambda: float = 10.0        # cell-TV penalty weight (applied in base_train's step loop)
     fused: bool = True             # explicit FusedConfidenceLUT CUDA kernel (hand-fused twin of ConfidenceLUT; needs the lutorch_ex_fused_confidence ext + setuptools in the venv). False -> reference ConfidenceLUT (Inductor-compiled read, no ext). Bitwise-equal at eval; fused ~1.6x faster train fwd+bwd.
+    proj_fp8_muon: bool = False    # projection optimiser/precision mode. False (default) = fp32 island + the AdamW LUT group. True = ProjectionMHL runs the compress/decompress GEMMs in fp8 (its native fp8_projections, from fp32 master weights; the cartridge still gets fp32 via compress_fp8_out_dtype=float32) AND the projection WEIGHTS route to Muon (tagged _lut_to_muon; biases stay AdamW). Orthogonal to `fused` and to the h/d/tph geometry.
 
 
 class LUTFeedForward(nn.Module):
@@ -58,7 +59,15 @@ class LUTFeedForward(nn.Module):
                     beta_init=cfg.beta_init, gamma_init=cfg.gamma_init,
                     learnable_score=True, weight_init_std=cfg.weight_init_std,
                     table_dropout_rate=cfg.table_dropout_rate)
-        self.mhl = ProjectionMHL(cart, d_model=d_model).float()  # fp32 island
+        # Default: fp32 island. proj_fp8_muon: compress/decompress GEMMs run in fp8 via ProjectionMHL's
+        # native fp8_projections (from fp32 master weights; compress hands the cartridge fp32). The .float()
+        # keeps every master parameter fp32 either way (fp8 is a per-GEMM cast, not a stored dtype).
+        if cfg.proj_fp8_muon:
+            self.mhl = ProjectionMHL(cart, d_model=d_model,
+                                     fp8_projections=("compress", "decompress"),
+                                     compress_fp8_out_dtype=torch.float32).float()
+        else:
+            self.mhl = ProjectionMHL(cart, d_model=d_model).float()  # fp32 island
 
         # Clean zero-init identity drop-in: ProjectionMHL zeros decompress.weight; also zero its bias so
         # the block emits exactly 0 at init (constant 0, not merely row-to-row-constant).
@@ -66,10 +75,17 @@ class LUTFeedForward(nn.Module):
             if self.mhl.decompress.bias is not None:
                 nn.init.zeros_(self.mhl.decompress.bias)
 
-        # Tag the projection Linears so the fp8 converter skips them (they are the fp32 island).
+        # Always tag the projection Linears _lut_no_fp8 so nanochat's fp8 converter skips them (in fp8+Muon
+        # mode ProjectionMHL itself owns their fp8; in the default mode they are the fp32 island).
+        # In proj_fp8_muon mode ALSO tag the projection WEIGHTS (2-D only -- biases/1-D stay in the AdamW LUT
+        # group, Newton-Schulz needs 2-D) with _lut_to_muon so GPT.setup_optimizer routes them to Muon.
         for m in self.mhl.modules():
             if isinstance(m, nn.Linear):
                 m._lut_no_fp8 = True
+                if cfg.proj_fp8_muon:
+                    for p in m.parameters(recurse=False):
+                        if p.ndim >= 2:
+                            p._lut_to_muon = True
 
         if device is not None:
             self.to(device)
