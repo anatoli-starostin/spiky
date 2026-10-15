@@ -36,7 +36,7 @@ NANOCHAT_FA3_REVISION=$(python3 -c "import json;print(json.load(open('../pins.js
     PYTHONPATH="$PWD" .venv/bin/python -c "import nanochat; import spiky.lutorch_ex; print('nanochat + spiky.lutorch_ex import OK')"
 # The import check alone does not prove the CUDA kernels build: make the JIT build happen here and fail loudly.
 if .venv/bin/python -c "import torch; raise SystemExit(0 if torch.cuda.is_available() else 1)"; then
-    .venv/bin/python -c "from spiky.lutorch_ex.cartridges.fused_confidence import fused_confidence_ext as e; \
-assert e() is not None, 'fused_confidence CUDA extension did not build'; print('lutorch_ex CUDA extension builds OK')"
+    .venv/bin/python -c "from spiky.lutorch_ex.cartridges._fused_confidence_cuda import EXT; \
+assert EXT.get() is not None, 'fused_confidence CUDA extension did not build'; print('lutorch_ex CUDA extension builds OK')"
 fi
 echo "UNIFIED ENV READY: torch $AFTER (pinned) + spiky.lutorch_ex (editable). Baseline unaffected."
