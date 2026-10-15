@@ -15,6 +15,12 @@
 #   bash runs/setup_unified_env.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The CUDA JIT build below needs the `ninja` executable (the ninja pip pkg installs it into .venv/bin) AND nvcc
+# (CUDA_HOME/bin) on PATH. This venv is used WITHOUT activation (we call .venv/bin/python directly), so put both
+# on PATH here, or torch.utils.cpp_extension fails verify_ninja_availability and the extension silently does not
+# build (the cartridges fall back to the slow path). The built .so is cached in TORCH_EXTENSIONS_DIR for real runs.
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+export PATH="$PWD/.venv/bin:$CUDA_HOME/bin:$PATH"
 LX=../../../src/spiky/lutorch_ex                         # spiky repo root / src/spiky/lutorch_ex
 BEFORE=$(.venv/bin/python -c "import torch; print(torch.__version__)")
 # setuptools: torch.utils.cpp_extension needs it to JIT-build lutorch_ex's CUDA extensions (fused_confidence,
