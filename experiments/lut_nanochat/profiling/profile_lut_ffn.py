@@ -90,7 +90,10 @@ import torch.nn.functional as F                                   # noqa: E402
 
 D_MODEL, N_LAYER, SEQ_LEN = 1536, 24, 2048
 STEP_TOKENS = 2 ** 20                                              # d24 global batch (tokens / optimizer step)
-LUT_GEOM = dict(h=16, d=48, tph=64, nap=8)                         # locked --lut-ffn geometry (r = h*d = 768)
+LUT_GEOM = dict(h=int(os.environ.get("LUT_PROFILE_H", 16)),        # default: locked --lut-ffn geometry (r = h*d = 768)
+                d=int(os.environ.get("LUT_PROFILE_D", 48)),        # override via LUT_PROFILE_{H,D,TPH,NAP} to profile
+                tph=int(os.environ.get("LUT_PROFILE_TPH", 64)),    # a different geometry, e.g. the h32/tph32 (r=1536)
+                nap=int(os.environ.get("LUT_PROFILE_NAP", 8)))     # fork: LUT_PROFILE_H=32 LUT_PROFILE_TPH=32
 ALL_VARIANTS = ["dense-fp32", "dense-bf16", "dense-fp8", "lut-fp32", "lut-bf16", "lut-fp8",
                 "lut-fp8lib-c32", "lut-fp8lib-c16", "lut-fp8lib-d", "lut-bf16lib",
                 "lut-fp32-i32", "lut-bf16lib-i32",
