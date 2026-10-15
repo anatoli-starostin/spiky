@@ -1,11 +1,11 @@
 // FusedManifestoHardLUT / FusedManifestoSoftLUT: hand-written CUDA forward + backward for the Manifesto read, both
-// weight functions, built the way fused_confidence.cu is (one forward and one backward kernel, nothing per-table in
+// uncertainty functions, built the way fused_confidence.cu is (one forward and one backward kernel, nothing per-table in
 // global memory).
 //
 // The Manifesto math (manifesto_base.py, manifesto_hard.py, manifesto_soft.py), per (b, g, t), with the table-dropout
 // factor m (the [B, G, tph] mask ManifestoLUT._table_dropout_mask returns, 0 or 1/keep_prob; 1 without dropout):
 //   margins u_j = z[a_j] - z[b_j] (single anchors: z[a_j]); address c = MSB-first [u_j > 0]; j* = first argmin |u_j|;
-//   neighbour c' = c with bit j* flipped; the neighbour weight w of mu = |u_j*|:
+//   neighbour c' = c with bit j* flipped; the uncertainty w of mu = |u_j*|:
 //     rational (temps == nullptr)          w = 0.5 / (1 + mu),                         -dw/dmu = 0.5 / (1 + mu)^2;
 //     softsign (temps = [T_s, T_sel])      rho = mu / (T_s + mu), w = sigmoid(-2 rho / T_sel),
 //                                          -dw/dmu = w (1-w) 2 T_s / (T_sel (T_s + mu)^2),
@@ -51,7 +51,7 @@ struct Params {
     const float* W;          // [G * tph * K, d_out], float32 table (nullptr when the table is bfloat16)
     const __nv_bfloat16* Wb; // the same, bfloat16 table (nullptr when the table is float32)
     const float* mask;       // [B, G, tph] table-dropout factor (ManifestoLUT._table_dropout_mask), nullptr = none
-    const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational weight
+    const float* temps;      // softsign: [T_soft, T_select] (device); nullptr = the rational uncertainty
     int B, G, tph, nap, d_in, d_out, rows_per_cta;
 };
 
@@ -166,7 +166,7 @@ __device__ inline void address_table(const Params& p, int g, int b, int t, const
     const int base = (g * p.tph + t) << nap;
     cs[t] = base + c;
     cas[t] = base + (c ^ (1 << (nap - 1 - jstar)));
-    float w, ndw;                                          // the neighbour weight and -dw/dmu (see the header)
+    float w, ndw;                                          // the uncertainty and -dw/dmu (see the header)
     float ts = 0.f, tl = 1.f, den = 1.f, rho = 0.f, s = 0.f;
     if constexpr (SS) {
         ts = p.temps[0];

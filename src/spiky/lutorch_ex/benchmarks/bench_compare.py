@@ -49,10 +49,12 @@ def noise_floor(metric: str, vectors: int, before: float) -> float:
 
 
 #: Row order of the figures: the reference Manifesto family, the fused families, Confidence, Quantised, Deployed.
-ORDER = ["ManifestoHardLUT", "ManifestoHardLUT weight=softsign", "ManifestoSoftLUT", "ManifestoSoftLUT weight=softsign",
-         "FusedManifestoHardLUT", "FusedManifestoHardLUT weight=softsign", "FusedManifestoSoftLUT",
-         "FusedManifestoSoftLUT weight=softsign", "ConfidenceLUT n=1", "ConfidenceLUT n=2", "FusedConfidenceLUT n=1",
-         "FusedConfidenceLUT n=2", "QuantisedConfidenceLUT n=1", "QuantisedConfidenceLUT n=2",
+ORDER = ["ManifestoHardLUT", "ManifestoHardLUT uncertainty_func=softsign",
+         "ManifestoSoftLUT", "ManifestoSoftLUT uncertainty_func=softsign",
+         "FusedManifestoHardLUT", "FusedManifestoHardLUT uncertainty_func=softsign",
+         "FusedManifestoSoftLUT", "FusedManifestoSoftLUT uncertainty_func=softsign",
+         "ConfidenceLUT n=1", "ConfidenceLUT n=2", "FusedConfidenceLUT n=1", "FusedConfidenceLUT n=2",
+         "QuantisedConfidenceLUT n=1", "QuantisedConfidenceLUT n=2",
          "FusedQuantisedConfidenceLUT n=1", "FusedQuantisedConfidenceLUT n=2",
          "DeployedQuantisedConfidenceLUT", "DeployedQuantisedConfidenceLUT n=1"]
 BEFORE_C, AFTER_C = "#E69F00", "#009E73"                  # orange / green (Okabe-Ito: CVD-distinct)
@@ -148,7 +150,7 @@ def _plt():
 
 
 def _label(c):
-    s = c["cls"].replace("LUT", "").replace(" weight=softsign", "·softsign")
+    s = c["cls"].replace("LUT", "").replace(" uncertainty_func=softsign", "·softsign")
     v = f"{c['vectors'] // 1024}k" if c["vectors"] % 1024 == 0 else str(c["vectors"])
     return f"{s} · {c['dtype'].replace('float32', 'fp32').replace('bfloat16', 'bf16')} · {v}"
 

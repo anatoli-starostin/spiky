@@ -1,17 +1,17 @@
-"""ManifestoHardLUT — the hard Manifesto reference cartridge (Gen-1 variant 1.1 with ``weight="rational"``, Gen-2
-variant 2.3 with ``weight="softsign"``).
+"""ManifestoHardLUT — the hard Manifesto reference cartridge, with either uncertainty function
+(``uncertainty_func="rational"`` or ``"softsign"``).
 
 "Hard forward, two-alternative soft backward."
 
-All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell read, the neighbour weight
-``w``) lives in :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`.
+All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell read, the uncertainty ``w``)
+lives in :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`.
 
 The math
 ========
 Per group ``g`` and table ``t`` the base computes the hard cell ``c_t`` (MSB-first sign-bit address over the table's
 ``nap`` margins ``u_j = z[a_j] - z[b_j]``), its least-confident-bit-flip neighbour ``c_t'`` (``j* = argmin_j |u_j|``),
-the deciding margin ``u_{j*}`` and the neighbour weight ``w_t = w(|u_{j*}|)`` (``weight="rational"``:
-``0.5/(1 + |u_{j*}|)``; ``weight="softsign"``: the learned-temperature sigmoid).
+the deciding margin ``u_{j*}`` and the uncertainty ``w_t = w(|u_{j*}|)`` (``uncertainty_func="rational"``:
+``0.5/(1 + |u_{j*}|)``; ``uncertainty_func="softsign"``: the learned-temperature sigmoid).
 
 Hard forward.
     ``y = sum_t W_t[c_t]``: one row per table, summed over the group's ``tph`` tables (and over groups into the shared

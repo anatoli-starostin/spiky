@@ -34,7 +34,7 @@ class ConfidenceBase(ManifestoLUT):
     read_tau_init or read_tau_learnable with read_top_n=1 raises ValueError rather than being silently ignored.
     """
 
-    _WEIGHTED = False            # scored cells: no neighbour-weight function (weight= / soft-sign temperatures)
+    _HAS_UNCERTAINTY_FUNC = False    # scored cells: no uncertainty_func= and no soft-sign temperatures
 
     def __init__(
         self,

@@ -1,8 +1,9 @@
-"""FusedManifestoHardLUT — the fused twin of ManifestoHardLUT, for both weight functions.
+"""FusedManifestoHardLUT — the fused twin of ManifestoHardLUT, for both uncertainty functions.
 
-Same Manifesto maths (hard sign-addressed read; two-alternative soft backward through the neighbour weight ``w``,
-``weight="rational"`` or ``"softsign"``), computed by the hand-written CUDA kernels (``csrc/fused_manifesto.cu``: one
-forward and one backward kernel, nothing per table in global memory, the soft-sign temperatures' gradients included).
+Same Manifesto maths (hard sign-addressed read; two-alternative soft backward through the uncertainty ``w``,
+``uncertainty_func="rational"`` or ``"softsign"``), computed by the hand-written CUDA kernels
+(``csrc/fused_manifesto.cu``: one forward and one backward kernel, nothing per table in global memory, the soft-sign
+temperatures' gradients included).
 Those kernels are its only implementation: a case they do not cover (a CPU input, a float64 input, an
 float16 or float64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case,
 and so does a missing extension, naming the cause. The reference class

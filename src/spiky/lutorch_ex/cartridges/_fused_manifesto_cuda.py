@@ -3,8 +3,8 @@ forward + backward kernels (``csrc/fused_manifesto.cu``), built the way FusedCon
 not cover, or a missing extension, raises; the reference classes (ManifestoHardLUT / ManifestoSoftLUT) cover the rest.
 
 One forward and one backward kernel per step run the whole cartridge: addressing (margins, MSB-first address,
-least-confident bit, neighbour), the neighbour weight w (``weight="rational"``: 0.5 / (1 + |u*|); ``"softsign"``: the
-learned-temperature sigmoid, the two temperatures passed in as a device tensor), the (weighted) read summed over the
+least-confident bit, neighbour), the uncertainty w (``uncertainty_func="rational"``: 0.5 / (1 + |u*|); ``"softsign"``:
+the learned-temperature sigmoid, the two temperatures passed in as a device tensor), the (weighted) read summed over the
 group's tables, and on the backward the weight-gradient scatter (vector float32 atomics), the j*-pair margin gradient
 into z and, for ``softsign``, the two temperatures' gradients (summed per CTA, then one atomic add each).
 Nothing per table goes through global memory (no ``[B, G*tph, d_out]`` expanded gradient, no materialised addressing
@@ -59,8 +59,9 @@ class _FusedManifesto(torch.autograd.Function):
     @staticmethod
     def forward(ctx, z, weights, temps, anc_a, anc_b, mask, nap, mode, knobs, out_bf16=False):
         # z: float32 or bfloat16 [B, G, d_in]. weights: float32 or bfloat16 [G, tph, K, d_out] (read in place).
-        # temps: float32 [2] (T_soft, T_select) for weight="softsign", None for "rational". mask: float32 [B, G, tph]
-        # or None. out_bf16: the kernel stores its (float32-accumulated) output as bfloat16; only for a bfloat16 z.
+        # temps: float32 [2] (T_soft, T_select) for uncertainty_func="softsign", None for "rational". mask: float32
+        # [B, G, tph] or None. out_bf16: the kernel stores its (float32-accumulated) output as bfloat16; only for a
+        # bfloat16 z.
         ext = EXT.get()
         W2 = weights.reshape(-1, weights.shape[-1])
         fwd_threads, bwd_threads, vec = _launch(knobs, W2.shape[1], weights.dtype)
@@ -118,9 +119,10 @@ def manifesto_cuda_forward(module, x: torch.Tensor, mode: int) -> torch.Tensor:
     # Routing gate: the kernel may store bfloat16 directly only when _route is the identity (h_out == n_groups: per-head
     # and fan-out). Fan-in sums groups in _route, which must happen on the float32 output before the single cast below.
     out_bf16 = z.dtype == torch.bfloat16 and module.spec.h_out == module.spec.n_groups
-    # weight="softsign": the two temperatures, float32, on the device (no host sync); autograd carries their gradient
-    # back to the log-parametrised leaves.
-    temps = torch.stack(module._softsign_temps(torch.float32)).contiguous() if module.weight == "softsign" else None
+    # uncertainty_func="softsign": the two temperatures, float32, on the device (no host sync); autograd carries their
+    # gradient back to the log-parametrised leaves.
+    temps = (torch.stack(module._softsign_temps(torch.float32)).contiguous()
+             if module.uncertainty_func == "softsign" else None)
     grp = _FusedManifesto.apply(z, module.weights, temps, module._anc_a16, module._anc_b16, mask,
                                 module.spec.nap, mode, module.knobs, out_bf16)
     return module._route(grp, x).to(x.dtype)

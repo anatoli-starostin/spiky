@@ -13,8 +13,8 @@ import torch.nn.functional as F
 # PyTorch's embedding_bag backward size limit: a known upstream constraint, documented here and not enforced.
 # The training reads below, ConfidenceLUT's eager read (confidence.py; on CUDA with LUTORCH_EX_NO_COMPILE=1) and
 # QuantisedConfidenceLUT's reads (quantised_confidence.py) get their table gradient on CUDA from PyTorch's
-# aten::_embedding_bag_dense_backward (kernel
-# compute_grad_weight_bags), which indexes its launch threads in 32 bits. It fails when
+# aten::_embedding_bag_dense_backward (kernel compute_grad_weight_bags), which indexes its launch threads in 32 bits.
+# It fails when
 #     (floor(numel / 10) + min(numel, num_weights)) * 32 * ceil(d_out / 32) > 2^31
 # with numel the index-tensor element count of one call, num_weights the table rows and d_out the row width, for int32
 # and int64 indices alike. The symptom is an opaque "CUDA error: an illegal memory access was encountered" in the

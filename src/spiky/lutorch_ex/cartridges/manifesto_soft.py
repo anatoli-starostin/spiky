@@ -1,11 +1,11 @@
-"""ManifestoSoftLUT — the soft Manifesto reference cartridge (Gen-1 variant 1.2 with ``weight="rational"``, Gen-2
-variant 2.4 with ``weight="softsign"``).
+"""ManifestoSoftLUT — the soft Manifesto reference cartridge, with either uncertainty function
+(``uncertainty_func="rational"`` or ``"softsign"``).
 
 "Soft forward, two-alternative blend." The soft counterpart of
 :class:`~spiky.lutorch_ex.cartridges.manifesto_hard.ManifestoHardLUT`.
 
-All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell read, the neighbour weight
-``w``) lives in :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`.
+All shared structure (anchor pairs, MSB-first addressing, head routing, the two-cell read, the uncertainty ``w``)
+lives in :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT`.
 
 The math
 ========
@@ -15,13 +15,13 @@ blend itself the output, at both train and eval:
     y = sum_t [ (1 - w_t) * W_t[c_t] + w_t * W_t[c_t'] ]
 
 with ``c_t`` the MSB-first sign-bit address, ``c_t'`` its least-confident-bit-flip neighbour
-(``j* = argmin_j |u_j|``), and the neighbour weight ``w_t = w(|u_{j*}|)`` in ``(0, 1/2]`` (``weight="rational"``:
-``0.5 / (1 + |u_{j*}|)``; ``weight="softsign"``: the learned-temperature sigmoid).
+(``j* = argmin_j |u_j|``), and the uncertainty ``w_t = w(|u_{j*}|)`` in ``(0, 1/2]`` (``uncertainty_func="rational"``:
+``0.5 / (1 + |u_{j*}|)``; ``uncertainty_func="softsign"``: the learned-temperature sigmoid).
 
 The blend is an ordinary differentiable expression, so gradients flow into **both** cell rows (``(1 - w)`` into
 ``W[c_t]`` and ``w`` into ``W[c_t']``) and into the input (and, with ``softsign``, the two temperatures) via ``w``.
 Only the discrete indices ``c_t, c_t', j*`` are non-differentiable. The value is continuous across a bit flip (at
-``u = 0`` the two cells carry equal weight ``1/2`` and simply swap roles).
+``u = 0`` the two cells carry an equal share ``1/2`` and simply swap roles).
 
 Read path: training uses one ``F.embedding_bag`` with ``per_sample_weights = [1-w, w]`` (read, scale and tph sum in one
 kernel); eval uses the plain two-cell read and blend, compiled on CUDA (ReferenceForward). Backward is plain autograd.

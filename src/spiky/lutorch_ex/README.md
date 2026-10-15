@@ -122,8 +122,8 @@ row `c`.
 
 | class | value (`a`, `b`) | training gradient | learned scalars | fused twin |
 | --- | --- | --- | --- | --- |
-| `ManifestoHardLUT` | `1`, `0` | surrogate `1-w`, `w`; weight grad on row `c` only | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoHardLUT` |
-| `ManifestoSoftLUT` | `1-w`, `w` | the value itself; both rows | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoSoftLUT` |
+| `ManifestoHardLUT` | `1`, `0` | surrogate `1-w`, `w`; weight grad on row `c` only | `uncertainty_func="softsign"`: `T_soft`, `T_sel` | `FusedManifestoHardLUT` |
+| `ManifestoSoftLUT` | `1-w`, `w` | the value itself; both rows | `uncertainty_func="softsign"`: `T_soft`, `T_sel` | `FusedManifestoSoftLUT` |
 | `ConfidenceLUT` (`read_top_n=1`) | `s`, `0` | the value itself | `β`, `γ` | `FusedConfidenceLUT` |
 | `ConfidenceLUT` (`read_top_n=2`) | `s(1-v)`, `s·v` | the value itself | `β`, `γ`, `τ` | `FusedConfidenceLUT` |
 | `QuantisedConfidenceLUT` | as above, int8 rows and power-of-two weights | straight-through to the float values | `β`, `γ`; `τ` at `read_top_n=2` | `FusedQuantisedConfidenceLUT` |
@@ -131,21 +131,22 @@ row `c`.
 
 All classes are importable from `spiky.lutorch_ex`.
 
-### Gen-1 and Gen-2 — Manifesto, `weight="rational" | "softsign"`
+### Manifesto, `uncertainty_func="rational" | "softsign"`
 
 `ManifestoHardLUT` returns the hard read and sends the input gradient through the blend, onto the two anchors of the
-deciding probe only. `ManifestoSoftLUT` makes the blend the value, at training and at evaluation. The two generations
-differ only in the neighbour weight `w`, chosen by `weight=`:
+deciding probe only. `ManifestoSoftLUT` makes the blend the value, at training and at evaluation. The neighbour's
+share `w` of the blend is the uncertainty of the deciding margin `u*`, computed by the function chosen with
+`uncertainty_func=`:
 
-- **`weight="rational"`** (Gen-1, the default): the fixed uncertainty `w = U = 0.5 / (1 + u*)`, in `(0, 0.5]`,
+- **`uncertainty_func="rational"`** (the default): the fixed uncertainty `w = U = 0.5 / (1 + u*)`, in `(0, 0.5]`,
   exported as `rational_uncertainty`. No learnable scalars: the tables are the only parameters.
-- **`weight="softsign"`** (Gen-2): a blend weight with two temperatures, learned per layer:
+- **`uncertainty_func="softsign"`**: a soft-sign of the margin with two temperatures, learned per layer:
 
   ```text
   rho = u* / (T_soft + u*)          w = sigmoid(-2 * rho / T_sel)    in (0, 0.5]
   ```
 
-  They are stored as `log_soft_score_temp` and `log_select_temp`, and exist only with `weight="softsign"`.
+  They are stored as `log_soft_score_temp` and `log_select_temp`, and exist only with `uncertainty_func="softsign"`.
 
 ### Gen-3 — Confidence
 
@@ -201,12 +202,12 @@ Manifesto (`ManifestoHardLUT`, `ManifestoSoftLUT` and their fused twins):
 
 | argument | default | meaning |
 | --- | --- | --- |
-| `weight` | `"rational"` | the neighbour weight: `"rational"` (Gen-1) or `"softsign"` (Gen-2) |
-| `soft_score_temp` | `0.5` | `weight="softsign"` only: initial `T_soft` |
-| `select_temp` | `0.5` | `weight="softsign"` only: initial `T_sel` |
-| `learnable_temps` | `True` | `weight="softsign"` only: `False` stores both temperatures as frozen buffers |
+| `uncertainty_func` | `"rational"` | the uncertainty function giving the neighbour's share `w`: `"rational"` or `"softsign"` |
+| `soft_score_temp` | `0.5` | `uncertainty_func="softsign"` only: initial `T_soft` |
+| `select_temp` | `0.5` | `uncertainty_func="softsign"` only: initial `T_sel` |
+| `learnable_temps` | `True` | `uncertainty_func="softsign"` only: `False` stores both temperatures as frozen buffers |
 
-The three temperature arguments raise with `weight="rational"`.
+The three temperature arguments raise with `uncertainty_func="rational"`.
 
 Confidence (`ConfidenceLUT`, `QuantisedConfidenceLUT`):
 
@@ -241,7 +242,7 @@ cells.
 ## Reference and fused cartridges
 
 Each class has exactly one implementation; there is no `backend=` argument.
-The reference cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT` (either weight) and `ConfidenceLUT`, are
+The reference cartridges, `ManifestoHardLUT`, `ManifestoSoftLUT` (either uncertainty_func) and `ConfidenceLUT`, are
 readable PyTorch (compiled on CUDA) and run anywhere. They are the **oracle**: `tests/test_fused_vs_reference.py` is the required equivalence
 harness: every fused class against its reference class, per dtype, on the value, the input
 gradient, the table gradient and every learned scalar, with explicit tolerances justified in its docstring.
@@ -358,7 +359,7 @@ backward takes 0.36 ms instead of 2.6 ms eager, and it holds no per-axis interme
 from spiky.lutorch_ex import LUTSpec, FusedManifestoSoftLUT, ProjectionMHL, cell_tv_penalty
 
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)
-ffn = ProjectionMHL(FusedManifestoSoftLUT(spec, seed=1, weight="softsign", table_dropout_rate=0.2), d_model=384)
+ffn = ProjectionMHL(FusedManifestoSoftLUT(spec, seed=1, uncertainty_func="softsign", table_dropout_rate=0.2), d_model=384)
 opt = torch.optim.AdamW(ffn.parameters(), lr=3e-4)
 
 x = torch.randn(256, 384)
@@ -509,7 +510,7 @@ lutorch_ex/
 ├── deploy_registry.py   format tag -> rebuilder registry
 ├── cartridges/
 │   ├── manifesto_base.py            ManifestoLUT: tables, anchors, addressing, routing, cell TV, table dropout
-│   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both weights)
+│   ├── manifesto_hard.py, manifesto_soft.py           the Manifesto reference cartridges (both uncertainty functions)
 │   ├── fused_manifesto_hard.py, fused_manifesto_soft.py   fused twins
 │   ├── confidence.py                Gen-3 ConfidenceLUT
 │   ├── quantised_confidence.py      QuantisedConfidenceLUT (and the family's shared QuantisedScaffold)

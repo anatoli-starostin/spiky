@@ -17,7 +17,7 @@ from spiky.lutorch_ex import (ConfidenceLUT, FusedManifestoHardLUT, FusedManifes
                               LUTSpec,
                               ManifestoHardLUT, ManifestoSoftLUT, QuantisedConfidenceLUT, cell_tv_penalty)
 from spiky.lutorch_ex.tests._requires_extension import requires_extension
-from spiky.lutorch_ex.tests._weights import softsign
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign
 
 _CUDA = torch.cuda.is_available()
 

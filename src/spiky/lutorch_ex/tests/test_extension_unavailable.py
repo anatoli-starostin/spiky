@@ -12,7 +12,7 @@ from spiky.lutorch_ex.cartridges import _fallback, _fused_confidence_cuda, _fuse
 from spiky.lutorch_ex.cartridges import _fused_quantised_cuda
 from spiky.lutorch_ex.cartridges._fallback import NativeUnavailableError, classify, record_build_failure
 from spiky.lutorch_ex.lut_spec import LUTSpec
-from spiky.lutorch_ex.tests._weights import softsign
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign
 
 CUDA = torch.cuda.is_available()
 
@@ -119,7 +119,7 @@ def _spec():
     return LUTSpec(h_in=4, h_out=4, tph=8, nap=4, d_in=8, d_out=8, anchor_mode="pairs")
 
 
-#: Both fused Manifesto twins, with both weight functions.
+#: Both fused Manifesto twins, with both uncertainty functions.
 MANIFESTO = [lx.FusedManifestoHardLUT, lx.FusedManifestoSoftLUT, softsign(lx.FusedManifestoHardLUT),
              softsign(lx.FusedManifestoSoftLUT)]
 

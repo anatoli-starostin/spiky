@@ -54,7 +54,7 @@ def _plt():
 
 
 def _label(name):
-    return name.replace("LUT", "").replace(" weight=softsign", " · softsign")
+    return name.replace("LUT", "").replace(" uncertainty_func=softsign", " · softsign")
 
 
 def _pair_axes(plt, ax, names, a_vals, b_vals, a_hollow, b_hollow, title, unit, n1, n2):

@@ -316,7 +316,7 @@
   },
   {
    "geometry": "champion",
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "rounds": 9,
@@ -357,7 +357,7 @@
   },
   {
    "geometry": "champion",
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "rounds": 9,
@@ -398,7 +398,7 @@
   },
   {
    "geometry": "champion",
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "rounds": 9,
@@ -439,7 +439,7 @@
   },
   {
    "geometry": "champion",
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "rounds": 9,
@@ -1004,7 +1004,7 @@
   },
   {
    "geometry": "large",
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "rounds": 9,
@@ -1045,7 +1045,7 @@
   },
   {
    "geometry": "large",
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "rounds": 9,
@@ -1086,7 +1086,7 @@
   },
   {
    "geometry": "large",
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "rounds": 9,
@@ -1127,7 +1127,7 @@
   },
   {
    "geometry": "large",
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "rounds": 9,
@@ -1665,7 +1665,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -1700,7 +1700,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -1734,7 +1734,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -1768,7 +1768,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -2240,7 +2240,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -2274,7 +2274,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -2308,7 +2308,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -2342,7 +2342,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -2782,7 +2782,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -2816,7 +2816,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -2850,7 +2850,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -2884,7 +2884,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -3358,7 +3358,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -3392,7 +3392,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -3426,7 +3426,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -3460,7 +3460,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -3902,7 +3902,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -3937,7 +3937,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -3971,7 +3971,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -4005,7 +4005,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -4479,7 +4479,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -4513,7 +4513,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -4547,7 +4547,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -4582,7 +4582,7 @@
    "pass": "A"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -5124,7 +5124,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -5159,7 +5159,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -5193,7 +5193,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -5227,7 +5227,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -5699,7 +5699,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -5733,7 +5733,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -5767,7 +5767,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -5801,7 +5801,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -6241,7 +6241,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -6276,7 +6276,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -6310,7 +6310,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -6344,7 +6344,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -6819,7 +6819,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -6853,7 +6853,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -6888,7 +6888,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -6923,7 +6923,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -7361,7 +7361,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -7395,7 +7395,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -7429,7 +7429,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -7463,7 +7463,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -7935,7 +7935,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -7969,7 +7969,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -8003,7 +8003,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -8037,7 +8037,7 @@
    "pass": "B"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -8581,7 +8581,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -8615,7 +8615,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -8649,7 +8649,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -8683,7 +8683,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -9155,7 +9155,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -9189,7 +9189,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -9224,7 +9224,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -9259,7 +9259,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -9699,7 +9699,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -9734,7 +9734,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -9769,7 +9769,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -9803,7 +9803,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -10277,7 +10277,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -10311,7 +10311,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -10345,7 +10345,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -10381,7 +10381,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -10821,7 +10821,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -10855,7 +10855,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -10889,7 +10889,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -10924,7 +10924,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 8192,
    "eval_forward": {
@@ -11397,7 +11397,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoHardLUT weight=softsign",
+   "cartridge": "ManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -11431,7 +11431,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "ManifestoSoftLUT weight=softsign",
+   "cartridge": "ManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -11465,7 +11465,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoHardLUT weight=softsign",
+   "cartridge": "FusedManifestoHardLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {
@@ -11499,7 +11499,7 @@
    "pass": "C"
   },
   {
-   "cartridge": "FusedManifestoSoftLUT weight=softsign",
+   "cartridge": "FusedManifestoSoftLUT uncertainty_func=softsign",
    "dtype": "float32",
    "batch": 32768,
    "eval_forward": {

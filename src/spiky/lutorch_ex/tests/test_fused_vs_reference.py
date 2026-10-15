@@ -1,7 +1,7 @@
 """The fused-vs-reference equivalence harness, the one REQUIRED check binding each fused class to its
 reference class.
 
-Per cartridge (FusedManifestoHardLUT / FusedManifestoSoftLUT with both weights, FusedConfidenceLUT with read_top_n 1
+Per cartridge (FusedManifestoHardLUT / FusedManifestoSoftLUT with both uncertainty functions, FusedConfidenceLUT with read_top_n 1
 and 2, FusedQuantisedConfidenceLUT), per dtype (float32; bfloat16 table + input; float16 input on a float32 table;
 bfloat16 table with a float32 input; float16 input on a bfloat16 table -- every table / input combination the fused
 classes declare), per anchor mode and head pattern, wherever the fused class covers the case (the quantised op: float32,
@@ -95,8 +95,8 @@ SEED = 7
 CARTRIDGES = [
     ("ManifestoHard", FusedManifestoHardLUT, ManifestoHardLUT, {}, "manifesto"),
     ("ManifestoSoft", FusedManifestoSoftLUT, ManifestoSoftLUT, {}, "manifesto"),
-    ("ManifestoHard[softsign]", FusedManifestoHardLUT, ManifestoHardLUT, dict(weight="softsign"), "manifesto"),
-    ("ManifestoSoft[softsign]", FusedManifestoSoftLUT, ManifestoSoftLUT, dict(weight="softsign"), "manifesto"),
+    ("ManifestoHard[softsign]", FusedManifestoHardLUT, ManifestoHardLUT, dict(uncertainty_func="softsign"), "manifesto"),
+    ("ManifestoSoft[softsign]", FusedManifestoSoftLUT, ManifestoSoftLUT, dict(uncertainty_func="softsign"), "manifesto"),
     ("Confidence n=1", FusedConfidenceLUT, ConfidenceLUT,
      dict(read_top_n=1, beta_init=1.7, gamma_init=0.8), "confidence"),
     ("Confidence n=2", FusedConfidenceLUT, ConfidenceLUT,
@@ -261,9 +261,9 @@ def test_fused_matches_reference(cart, dt, anchor_mode, geom):
 #: (id, fused class, reference class, kwargs, extension, the scalars the kwargs freeze)
 FROZEN = [
     ("ManifestoHard[softsign] temps frozen", FusedManifestoHardLUT, ManifestoHardLUT,
-     dict(weight="softsign", learnable_temps=False), "manifesto", ("log_soft_score_temp", "log_select_temp")),
+     dict(uncertainty_func="softsign", learnable_temps=False), "manifesto", ("log_soft_score_temp", "log_select_temp")),
     ("ManifestoSoft[softsign] temps frozen", FusedManifestoSoftLUT, ManifestoSoftLUT,
-     dict(weight="softsign", learnable_temps=False), "manifesto", ("log_soft_score_temp", "log_select_temp")),
+     dict(uncertainty_func="softsign", learnable_temps=False), "manifesto", ("log_soft_score_temp", "log_select_temp")),
     ("Confidence n=1 score frozen", FusedConfidenceLUT, ConfidenceLUT,
      dict(read_top_n=1, beta_init=1.7, gamma_init=0.8, learnable_score=False), "confidence",
      ("confidence_log_beta", "confidence_log_gamma")),

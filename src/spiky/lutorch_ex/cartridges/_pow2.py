@@ -6,7 +6,7 @@ backward with :func:`ste_cell_weights` (the agreement is tested in tests/test_fu
 It is pure PyTorch (no CUDA / no extension dependency) and holds the whole p2_int8 quantisation
 math — the power-of-two scale, the log-domain score exponent, the two-cell blend exponents, the
 straight-through weights and tables, and the int8 shift-add read. Keeping it a separate module
-keeps Gen-1/Gen-2/ConfidenceLUT untouched.
+keeps the Manifesto cartridges and ConfidenceLUT untouched.
 
 The formulas: log2 s is in the log domain, log2 S + (g + gamma*sum_i logsigmoid(beta u_i))/ln2 (g=0 in the
 frozen-g rows); q = clamp(floor(2 u*/(tau ln2) + 1/2), 0, J); c_q = log2(1+2^-q) for q<C else 0;

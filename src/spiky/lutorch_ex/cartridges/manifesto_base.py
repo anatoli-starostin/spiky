@@ -1,10 +1,11 @@
-"""Shared structure for the Manifesto cartridge family (hard and soft variants, two weight functions).
+"""Shared structure for the Manifesto cartridge family (hard and soft variants, two uncertainty functions).
 
 The Manifesto cartridges read, per table, the addressed cell ``c_t`` and its least-confident-bit-flip neighbour
-``c_t'`` and blend them with a weight ``w`` on the neighbour, a function of the deciding margin ``|u_{j*}|``:
+``c_t'`` and blend them, the neighbour's share being the uncertainty ``w``, a function of the deciding margin
+``|u_{j*}|`` chosen by ``uncertainty_func``:
 
-* ``weight="rational"`` (Gen-1): ``w = U = 0.5 / (1 + |u_{j*}|)``, no parameters;
-* ``weight="softsign"`` (Gen-2): ``rho = |u_{j*}| / (T_soft + |u_{j*}|)``, ``w = sigmoid(-2 rho / T_select)``, with
+* ``uncertainty_func="rational"``: ``w = U = 0.5 / (1 + |u_{j*}|)``, no parameters;
+* ``uncertainty_func="softsign"``: ``rho = |u_{j*}| / (T_soft + |u_{j*}|)``, ``w = sigmoid(-2 rho / T_select)``, with
   two learned per-layer temperatures stored log-parametrised (``log_soft_score_temp``, ``log_select_temp``;
   initialised at 0.5).
 
@@ -59,8 +60,8 @@ from .uncertainty import rational_uncertainty
 # CPU, where torch.compile overhead isn't worth it. LUTORCH_EX_NO_COMPILE=1 disables it.
 _COMPILE_ENABLED = os.environ.get("LUTORCH_EX_NO_COMPILE", "0") != "1" and hasattr(torch, "compile")
 
-#: The neighbour-weight functions (see the module docstring).
-WEIGHTS = ("rational", "softsign")
+#: The uncertainty functions (see the module docstring).
+UNCERTAINTY_FUNCS = ("rational", "softsign")
 
 # Cell-index dtypes (``index_dtype``, every cartridge). The index the reads consume is the FLAT row index into the
 # [n_groups * tph * 2**nap, d_out] table, up to n_groups * tph * 2**nap - 1 (262,143 at h=16, tph=64, nap=8), not the
@@ -100,15 +101,15 @@ class ManifestoLUT(MultiHeadLUT):
     """Base for the Manifesto cartridges: addressing + two-cell structure + routing.
 
     Scaffolding only: state (tables, anchors, the soft-sign temperatures), validation, the
-    addressing and the neighbour weight (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
+    addressing and the uncertainty (:meth:`_blend_w`), shared by the reference and the fused classes. It has NO
     runnable forward: a reference class gets its forward from
     :class:`~spiky.lutorch_ex.cartridges.reference_base.ReferenceForward`, a fused class defines its own kernel call, so
-    a fused class has nothing to fall back to. ``weight`` selects the neighbour-weight function; the temperature
-    arguments exist only with ``weight="softsign"``.
+    a fused class has nothing to fall back to. ``uncertainty_func`` selects the uncertainty function; the temperature
+    arguments exist only with ``uncertainty_func="softsign"``.
     """
-    # Whether the cartridge has the neighbour-weight function (weight=, the soft-sign temperatures). False for the
+    # Whether the cartridge has the uncertainty function (uncertainty_func=, the soft-sign temperatures). False for the
     # confidence family, which scores its cells instead.
-    _WEIGHTED: bool = True
+    _HAS_UNCERTAINTY_FUNC: bool = True
 
     def __init__(
         self,
@@ -118,7 +119,7 @@ class ManifestoLUT(MultiHeadLUT):
         weight_init_std: float = 1e-3,
         table_dropout_rate: float = 0.0,
         index_dtype: Optional[torch.dtype] = None,
-        weight: str = "rational",
+        uncertainty_func: str = "rational",
         soft_score_temp: Optional[float] = None,
         select_temp: Optional[float] = None,
         learnable_temps: Optional[bool] = None,
@@ -126,20 +127,21 @@ class ManifestoLUT(MultiHeadLUT):
     ):
         # Every keyword is consumed by this class or a subclass on the way here; anything left is a typo or an option
         # this cartridge does not have (silently ignoring it once turned a misspelt table_dropout_rate into no dropout).
-        if not self._WEIGHTED:                 # ConfidenceLUT and its family score their cells; no neighbour weight
-            given = dict(weight=weight if weight != "rational" else None, soft_score_temp=soft_score_temp,
-                         select_temp=select_temp, learnable_temps=learnable_temps)
+        if not self._HAS_UNCERTAINTY_FUNC:     # ConfidenceLUT and its family score their cells; no uncertainty function
+            given = dict(uncertainty_func=uncertainty_func if uncertainty_func != "rational" else None,
+                         soft_score_temp=soft_score_temp, select_temp=select_temp, learnable_temps=learnable_temps)
             unknown.update({k: v for k, v in given.items() if v is not None})
         if unknown:
             raise TypeError(f"{type(self).__name__}: unexpected keyword argument(s) {sorted(unknown)}")
-        if weight not in WEIGHTS:
-            raise ValueError(f"{type(self).__name__}: weight must be one of {WEIGHTS}, got {weight!r}")
+        if uncertainty_func not in UNCERTAINTY_FUNCS:
+            raise ValueError(f"{type(self).__name__}: uncertainty_func must be one of {UNCERTAINTY_FUNCS}, "
+                             f"got {uncertainty_func!r}")
         temps = dict(soft_score_temp=soft_score_temp, select_temp=select_temp, learnable_temps=learnable_temps)
-        if weight == "rational" and any(v is not None for v in temps.values()):
+        if uncertainty_func == "rational" and any(v is not None for v in temps.values()):
             given = sorted(k for k, v in temps.items() if v is not None)
-            raise ValueError(f"{type(self).__name__}: {given} apply only to weight='softsign'")
+            raise ValueError(f"{type(self).__name__}: {given} apply only to uncertainty_func='softsign'")
         super().__init__(spec)
-        self.weight = weight
+        self.uncertainty_func = uncertainty_func
         G, tph, nap, d_in, d_out = (
             spec.n_groups, spec.tph, spec.nap, spec.d_in, spec.d_out,
         )
@@ -185,8 +187,8 @@ class ManifestoLUT(MultiHeadLUT):
                   for h in range(G)]
         self.weights = nn.Parameter(torch.stack(blocks, dim=0))   # [G, tph, K, d_out]
 
-        # weight="softsign": the two learned temperatures, log-parametrised so they stay positive.
-        if weight == "softsign":
+        # uncertainty_func="softsign": the two learned temperatures, log-parametrised so they stay positive.
+        if uncertainty_func == "softsign":
             ls = math.log(float(0.5 if soft_score_temp is None else soft_score_temp))
             lx = math.log(float(0.5 if select_temp is None else select_temp))
             if learnable_temps is None or learnable_temps:
@@ -222,12 +224,13 @@ class ManifestoLUT(MultiHeadLUT):
         return W2[_global_cells(c, G, tph, K)], W2[_global_cells(c_alt, G, tph, K)]
 
     def _blend_w(self, u_abs_star: torch.Tensor) -> torch.Tensor:
-        """The weight on the neighbour cell ``c'``, in ``(0, 1/2]``, from ``|u_{j*}|`` ``[B, G, tph]``.
+        """The uncertainty ``w`` (the neighbour cell ``c'``'s share of the blend), in ``(0, 1/2]``, from ``|u_{j*}|``
+        ``[B, G, tph]``.
 
         ``rational``: ``U = 0.5 / (1 + |u*|)``. ``softsign``: ``rho = |u*| / (T_s + |u*|)``,
         ``w = sigmoid(-2 rho / T_sel)``; the temperatures are taken in the margin's dtype (the addressing
         precision: float32 for a bfloat16 fused cartridge), so the blend runs there."""
-        if self.weight == "rational":
+        if self.uncertainty_func == "rational":
             return rational_uncertainty(u_abs_star)
         t_s = self.log_soft_score_temp.to(u_abs_star.dtype).exp()
         t_sel = self.log_select_temp.to(u_abs_star.dtype).exp()
@@ -235,7 +238,8 @@ class ManifestoLUT(MultiHeadLUT):
         return torch.sigmoid(-2.0 * rho / t_sel)
 
     def _softsign_temps(self, dtype):
-        """``(T_soft, T_select)`` in ``dtype``, differentiable wrt the log-parametrised leaves (``weight="softsign"``):
+        """``(T_soft, T_select)`` in ``dtype``, differentiable wrt the log-parametrised leaves
+        (``uncertainty_func="softsign"``):
         for the fused CUDA backward, which owns the temperatures' gradient."""
         return self.log_soft_score_temp.to(dtype).exp(), self.log_select_temp.to(dtype).exp()
 

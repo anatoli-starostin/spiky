@@ -70,7 +70,7 @@ import pytest as _pytest  # noqa: E402
 
 import spiky.lutorch_ex as _lx  # noqa: E402
 _FusedConfidenceLUT = _lx.FusedConfidenceLUT  # the public export  # noqa: E305
-from spiky.lutorch_ex.tests._weights import softsign  # noqa: E402
+from spiky.lutorch_ex.tests._uncertainty_funcs import softsign  # noqa: E402
 
 
 @_pytest.mark.parametrize("cls", [
