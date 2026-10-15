@@ -14,7 +14,8 @@ The geometry, the addressing and the wrapper are fixed. The *read mathematics* �
 what gradient training sees — is a swappable **cartridge**. The mathematics of every cartridge, the design choices and
 a language-model comparison against a dense baseline are in the report
 [`doc/lutorch_ex/lutorch_ex_report.pdf`](../../../doc/lutorch_ex/lutorch_ex_report.pdf) (source:
-`doc/lutorch_ex/lutorch_ex_report.tex`); this README refers to its sections as "report §N".
+`doc/lutorch_ex/lutorch_ex_report.tex`); this README refers to its sections as "report §N". The report calls a
+cartridge a *lookup variant*: "cartridge" is the Python API's term only.
 
 **Install.** `lutorch_ex` is part of the `spiky` package: `pip install -e .` from the repository root (see the
 [repository README](../../../README.md)).
