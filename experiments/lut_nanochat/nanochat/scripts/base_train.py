@@ -70,6 +70,7 @@ parser.add_argument("--lut-ffn-weight-init-std", type=float, default=1e-3, help=
 parser.add_argument("--lut-ffn-table-dropout", type=float, default=0.2, help="[lut_nanochat] LUT table dropout rate")
 parser.add_argument("--lut-ffn-tv-lambda", type=float, default=10.0, help="[lut_nanochat] cell-TV penalty weight (<=0 disables)")
 parser.add_argument("--lut-ffn-lr", type=float, default=3e-3, help="[lut_nanochat] AdamW LR for LUT-FFN params (scaled by 1/sqrt(dmodel/768))")
+parser.add_argument("--lut-ffn-proj-fp8-muon", action="store_true", help="[lut_nanochat] run the ProjectionMHL compress/decompress GEMMs in fp8 (ProjectionMHL native fp8_projections, fp32 masters, cartridge still fp32) and optimise the projection WEIGHTS with Muon at matrix-lr instead of the default fp32 island + AdamW LUT group. Orthogonal to geometry/fused; default off.")
 parser.add_argument("--no-lr-rescale", action="store_true", help="[lut_nanochat] disable the batch-size LR rescaling (force batch_lr_scale=1.0 instead of sqrt(B/B_ref)); LRs stay at their configured base values. The per-dim AdamW 1/sqrt(dmodel/768) correction in setup_optimizer is NOT affected by this flag.")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
@@ -203,6 +204,7 @@ lut_cfg = LUTFFNConfig(
     read_top_n=args.lut_ffn_read_top_n, beta_init=args.lut_ffn_beta, gamma_init=args.lut_ffn_gamma,
     seed=args.lut_ffn_seed, weight_init_std=args.lut_ffn_weight_init_std,
     table_dropout_rate=args.lut_ffn_table_dropout, tv_lambda=args.lut_ffn_tv_lambda,
+    proj_fp8_muon=args.lut_ffn_proj_fp8_muon,
 )
 if lut_cfg.enabled:
     n_lut = apply_lut_ffn(model, lut_cfg, device=device)
