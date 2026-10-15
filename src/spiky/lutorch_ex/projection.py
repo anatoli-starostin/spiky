@@ -193,9 +193,10 @@ class ProjectionMHL(nn.Module):
     @property
     def d_model(self) -> int:
         """The common width of a square wrapper (``input_dim == output_dim``). A rectangular wrapper
-        has no single ``d_model``; ask for ``input_dim`` / ``output_dim`` instead."""
+        has no single ``d_model``; ask for ``input_dim`` / ``output_dim`` instead. That raises a TypeError, not an
+        AttributeError: nn.Module.__getattr__ would replace an AttributeError's message with its generic one."""
         if self.input_dim != self.output_dim:
-            raise AttributeError(
+            raise TypeError(
                 f"ProjectionMHL is rectangular (input_dim={self.input_dim}, output_dim={self.output_dim}); "
                 "it has no single d_model - use input_dim / output_dim"
             )
