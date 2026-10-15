@@ -278,8 +278,9 @@ class ManifestoLUT(MultiHeadLUT):
         if _COMPILE_ENABLED and w.is_cuda:
             if self._compiled_tv is None:
                 # Static shapes, unlike the reference forward's dynamic=True: on symbolic shapes Inductor's per-axis
-                # reductions are ~4x slower (0.86 vs 0.21 ms of GPU time at h16 tph64 nap8 d48, float32). A table never
-                # changes shape, so this costs one compile per (table shape, nap, dtype), shared by every instance.
+                # reductions are ~4x slower (0.86 vs 0.21 ms of GPU time at h16 tph64 nap8 d48, float32, RTX 5090;
+                # commit 3ae1174c). A table never changes shape, so this costs one compile per (table shape, nap,
+                # dtype), shared by every instance.
                 self._compiled_tv = torch.compile(_cell_tv_eager, dynamic=False)
             return self._compiled_tv(w, nap)
         return _cell_tv_eager(w, nap)

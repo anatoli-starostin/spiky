@@ -1,4 +1,4 @@
-"""Gen-3 QuantisedConfidenceLUT (p2_int8 quant-aware training).
+"""QuantisedConfidenceLUT (p2_int8 quant-aware training).
 
 The STE forward value is a staircase (round/clamp power-of-two), so it is not directly
 gradcheckable; the correct target is the SMOOTH SURROGATE that carries the STE's gradient

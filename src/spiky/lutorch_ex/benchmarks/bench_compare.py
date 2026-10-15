@@ -135,6 +135,12 @@ def _env(rec, path):
             f"driver {e.get('driver', '?')}, clocks {'locked' if e.get('clocks_locked') else 'unlocked'}")
 
 
+def _protocol(rec):
+    s = rec.get("settings", {})
+    return (f"{s.get('rounds', '?')} rotated rounds × {s.get('warmup', '?')} warm-up / "
+            f"{s.get('repeats', '?')} timed")
+
+
 def _plt():
     try:
         import matplotlib
@@ -310,9 +316,11 @@ def main(argv=None):
     if a.no_figures:
         return
     plt = _plt()
+    pb, pa = _protocol(rb), _protocol(ra)
+    proto = pb if pb == pa else f"before {pb}, after {pa}"
     caveat = (f"Before = {_env(rb, a.before)}.\nAfter = {_env(ra, a.after)}.\n"
-              "Same benchmark and protocol (bench_snapshot.py: compiled, one fresh process per cell, Dynamo reset, "
-              "10 warm-up + 30 timed, median; peak above the pre-step allocation), "
+              "bench_snapshot.py (each class's defaults, one fresh process per cell, Dynamo reset, "
+              f"{proto}, L2 flushed, median; peak above the pre-step allocation), "
               + ("one session, interleaved cell by cell (same conditions)." if a.same_session
                  else "different sessions: not a controlled A/B.")
               + "\nHatched / grey = within the cell's noise floor "

@@ -1,4 +1,4 @@
-"""Shared scaffolding of the confidence family: the Gen-3 parameters, nothing that runs.
+"""Shared scaffolding of the confidence family: its parameters, nothing that runs.
 
 :class:`ConfidenceBase` adds to :class:`~spiky.lutorch_ex.cartridges.manifesto_base.ManifestoLUT` (tables, anchors,
 addressing) the confidence score's learned temperatures ``beta`` / ``gamma`` and, at ``read_top_n = 2``, the blend
@@ -19,13 +19,13 @@ from .manifesto_base import ManifestoLUT
 
 
 class ConfidenceBase(ManifestoLUT):
-    """Gen-3 confidence-scored cartridge state; see the module docstring.
+    """Confidence-scored cartridge state; see the module docstring.
 
     Args (beyond the shared :class:`ManifestoLUT` ones):
-        read_top_n: required, no default: 1 (single cell, row 3.1) or 2 (two-cell τ-blend, row 3.2 champion). Every
+        read_top_n: required, no default: 1 (single scored cell) or 2 (two-cell τ-blend). Every
             construction states the read width.
-        beta_init / gamma_init: initial β, γ (stored log-parametrised; champion (β,γ)=(2,1)).
-        read_tau_init: initial τ (default 0.5, the champion). Only valid at read_top_n=2.
+        beta_init / gamma_init: initial β, γ (stored log-parametrised; defaults (β,γ)=(2,1)).
+        read_tau_init: initial τ (default 0.5). Only valid at read_top_n=2.
         read_tau_learnable: whether τ is a learned nn.Parameter (default True) or a frozen buffer. Only valid at
             read_top_n=2.
         learnable_score: whether β, γ are learned nn.Parameters (default True) or frozen buffers.

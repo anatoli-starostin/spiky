@@ -121,8 +121,8 @@ class KernelKnobs:
     """Launch configuration of a hand-written kernel family (all explicit). A field left at None takes its default from
     ``LUTORCH_EX_<ENV>_CUDA_<FIELD>`` (``ENV`` set by the subclass), else the built-in default: 64 / 64 threads per CTA
     (forward / backward), 4 rows per CTA, vector width 4 (float32 table) and 4 (bfloat16 table: 8 is slower on the RTX
-    5090, mostly in the backward), vector atomics on (sm_90+). Defaults = the sweep winners on the RTX 5090 and the
-    H100."""
+    5090, mostly in the backward), vector atomics on (sm_90+). The float32-table defaults are the
+    sweep winners on the RTX 5090 and the H100 (0d8a66d5); vec_bf16 was swept on the RTX 5090 only (9472c8ef)."""
     ENV: ClassVar[str] = ""
     fwd_threads: Optional[int] = None
     bwd_threads: Optional[int] = None

@@ -1,4 +1,4 @@
-"""ConfidenceLUT — the Gen-3 confidence-scored (LookupFFN-inspired) cartridge, scored-only.
+"""ConfidenceLUT — the confidence-scored (LookupFFN-inspired) cartridge, scored-only.
 
 Same sign-bit addressing as the Manifesto family — per table, ``n = nap`` anchor-pair margins
 ``u_j`` (``u_j = z[a_j] - z[b_j]`` in pairs mode, ``u_j = z[a_j]`` in single mode), a cell
@@ -7,11 +7,11 @@ of a soft blend, the hard read is gated by a differentiable **confidence score**
 magnitudes:
 
     s_t = (Σ_j |u_j|) · exp( γ · Σ_j logσ(β·|u_j|) )          # LookupFFN's learned-margin score
-    y   = Σ_t s_t · W_t[c_t]                                  # read_top_n = 1  (ablation row 3.1)
+    y   = Σ_t s_t · W_t[c_t]                                  # read_top_n = 1
 
 with ``β = exp(confidence_log_beta)``, ``γ = exp(confidence_log_gamma)`` learned per layer (there
-is no additive log-gain ``g``: frozen at 0, ``exp(0)=1``, it would do nothing). At ``read_top_n = 2`` (the Gen-3
-champion, ablation row 3.2) the read is a two-cell τ-blend between the addressed cell ``c`` and its least-confident-bit
+is no additive log-gain ``g``: frozen at 0, ``exp(0)=1``, it would do nothing). At ``read_top_n = 2`` the read
+is a two-cell τ-blend between the addressed cell ``c`` and its least-confident-bit
 neighbour ``c'`` (``j* = argmin_j |u_j|``), still score-gated:
 
     v   = σ(-2·|u_{j*}| / τ)  ∈ (0, ½]                        # τ = exp(log_read_tau), learned
@@ -32,11 +32,11 @@ One read, for train and eval and both n: ``y = Σ_k w_k · W[r_k]`` over the fla
 It runs in one of two forms of the same maths, chosen by whether the forward is being compiled:
 
 * compiled (CUDA, the default): :func:`fused_scored_read` (``cartridges/_fused_read.py``), a gather × weight → sum
-  with its own backward, which Inductor fuses into a few kernels. Fp32, h16 d48 tph64 nap8, 8,192 vectors: train
-  step 6.55 → 3.48 ms (n = 1) and 11.83 → 5.35 ms (n = 2) against ``F.embedding_bag``;
+  with its own backward, which Inductor fuses into a few kernels; its training step is faster than
+  ``F.embedding_bag``'s (measured in commit 835dc667);
 * eager (CPU, or ``LUTORCH_EX_NO_COMPILE=1``): one ``F.embedding_bag`` with ``per_sample_weights``. Uncompiled, the
-  fused read materialises its gathered rows (CPU n = 1 train step 97.6 → 350.7 ms at 1,024 vectors), so eager keeps
-  the one-kernel embedding_bag.
+  fused read materialises its gathered rows and its CPU training step is several times slower (commit 835dc667),
+  so eager keeps the one-kernel embedding_bag.
 
 The two agree to float32 re-association (≤ 7e-7), not bitwise. Backward is autograd through either form: ``s_t`` / ``v``
 (and their temperatures) are fully differentiable. FusedConfidenceLUT's ``cuda`` path never reads through here.
@@ -53,7 +53,7 @@ from .reference_base import ReferenceForward
 
 
 class ConfidenceLUT(ReferenceForward, ConfidenceBase):
-    """Gen-3 confidence-scored reference cartridge; see the module docstring. Arguments: those of
+    """Confidence-scored reference cartridge; see the module docstring. Arguments: those of
     :class:`~spiky.lutorch_ex.cartridges.confidence_base.ConfidenceBase`."""
 
     # Compile the TRAIN forward too (not just eval): the score/blend read-out folds into a handful
@@ -61,7 +61,7 @@ class ConfidenceLUT(ReferenceForward, ConfidenceBase):
     # whole _forward_impl is compiled, so the addressing is included.
     _COMPILE_TRAIN = True
 
-    # -- the Gen-3-specific pieces: the confidence score and the blend weight ---------------
+    # -- the confidence-specific pieces: the confidence score and the blend weight ---------
 
     def _score(self, u: torch.Tensor) -> torch.Tensor:
         """Confidence score ``s_t = (Σ_j|u_j|)·exp(γ·Σ_j logσ(β|u_j|))`` from margins ``u``

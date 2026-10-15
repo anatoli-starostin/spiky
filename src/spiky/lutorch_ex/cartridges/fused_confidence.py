@@ -4,7 +4,7 @@
 Same parameters, numerics, state_dict and interface as :class:`ConfidenceLUT` (read_top_n 1 and 2, pairs and single
 anchors, table dropout, learnable or frozen β / γ / τ); both build on
 :class:`~spiky.lutorch_ex.cartridges.confidence_base.ConfidenceBase`, neither inherits the other's forward. Instead of
-torch.compile + Inductor (3 forward and 9 backward kernels at the d24 geometry), one forward and one backward kernel
+torch.compile + Inductor (a dozen kernels per training step, counted in 463284aa), one forward and one backward kernel
 each run the whole cartridge: addressing, confidence score, blend weight, score-weighted read, and on the backward the
 weight-gradient scatter, the score / blend / margin gradients into z, and the β / γ / τ gradients. The per-table
 address, score and margins never touch global memory; the backward recomputes them from z.
@@ -15,8 +15,10 @@ vector atomics. Defaults come from ``LUTORCH_EX_CONF_CUDA_*`` environment variab
 through ``cartridge.knobs``.
 
 The kernels are its only implementation. A case they do not cover (a CPU input, a float64 input, a float16
-or float64 table, nap > 16, d_in beyond int16 anchors, a d_out one CTA cannot cover) raises, naming the case, and so
-does a missing extension, naming the cause; :class:`ConfidenceLUT` runs everywhere else.
+or float64 table, nap > 16, a d_out one CTA cannot cover) raises a RuntimeError per call, naming the case and the
+reference class, and so does a missing extension (NativeUnavailableError), naming the cause; d_in beyond int16
+anchors (> 32767) raises a ValueError at construction, also naming the reference class. :class:`ConfidenceLUT` runs
+everywhere else.
 
 bfloat16 / float16 (like the other fused cartridges): addressing runs in float32 (so the discrete bit decisions don't
 drift), every read and reduction accumulates in float32, and the output is rounded to the input dtype once. A
@@ -48,7 +50,8 @@ class FusedConfidenceLUT(ConfidenceBase):
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self.knobs = knobs if knobs is not None else CudaKnobs()
         if spec.d_in > torch.iinfo(torch.int16).max:
-            raise ValueError(f"FusedConfidenceLUT needs d_in <= 32767, got {spec.d_in}")
+            raise ValueError(f"FusedConfidenceLUT needs d_in <= 32767, got {spec.d_in}. "
+                             "Construct ConfidenceLUT (the reference class) for this case.")
         # int16 copies of the anchors for the kernels (the int64 buffers stay the state_dict's source of truth).
         self.register_buffer("_anc_a16", self.anchor_a.to(torch.int16).contiguous(), persistent=False)
         if self.anchor_b is not None:

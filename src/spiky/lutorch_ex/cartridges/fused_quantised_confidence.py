@@ -14,8 +14,10 @@ from .quantised_confidence import QuantisedScaffold
 class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     """The fused twin of :class:`QuantisedConfidenceLUT`: one fused CUDA forward; see the module docstring.
 
-    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, a CUDA float32 input and a float32 table; anything else raises,
-    naming the case and the reference class, and a missing extension raises
+    Covers read_top_n 1 and 2, pairs anchors, nap <= 8, d_in <= 32767, a CUDA float32 input and a float32 table.
+    Anything else raises, naming the case and, where it runs the case, the reference class (not for a bfloat16 /
+    float16 input or table, which the reference does not take either): d_in > 32767 as a ValueError at construction,
+    every other case as a RuntimeError per call. A missing extension raises
     :class:`~spiky.lutorch_ex.cartridges._fallback.NativeUnavailableError` with its classified cause. Same parameters,
     state_dict and deployment export as the reference.
 
@@ -34,7 +36,8 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
         _fused_quantised_cuda.ensure_registered()
         # int16 copies of the anchors for the kernel (the int64 buffers stay the state_dict's source of truth).
         if spec.d_in > torch.iinfo(torch.int16).max:
-            raise ValueError(f"FusedQuantisedConfidenceLUT needs d_in <= 32767, got {spec.d_in}")
+            raise ValueError(f"FusedQuantisedConfidenceLUT needs d_in <= 32767, got {spec.d_in}. "
+                             "Construct QuantisedConfidenceLUT (the reference class) for this case.")
         self.register_buffer("_anc_a16", self.anchor_a.to(torch.int16).contiguous(), persistent=False)
         if self.anchor_b is not None:
             self.register_buffer("_anc_b16", self.anchor_b.to(torch.int16).contiguous(), persistent=False)

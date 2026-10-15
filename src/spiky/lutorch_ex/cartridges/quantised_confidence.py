@@ -1,11 +1,11 @@
-"""QuantisedConfidenceLUT — the p2_int8 quant-aware sibling of ConfidenceLUT (Gen-3).
+"""QuantisedConfidenceLUT — the p2_int8 quant-aware sibling of ConfidenceLUT.
 
 Same learned-margin confidence score and τ-blend as :class:`ConfidenceLUT` (inherited), but the
 read is **quant-aware**: the cell tables are fake-quantised to int8 with a per-(group, channel)
 power-of-two scale, and the score / blend weights are rounded to powers of two — both with a
 straight-through estimator, so the forward value is the quantised read while gradients flow to the
-float master weights, β, γ (and τ for n=2) through the exact float surrogate. This reproduces the
-quantised champion (ablation row 3.2 int8 / abl_48).
+float master weights, β, γ (and τ for n=2) through the exact float surrogate. It is the
+int8-deployable form of ConfidenceLUT, at read_top_n = 1 or 2.
 
 The quantisation math lives in :mod:`._pow2`, so this cartridge is a thin wiring layer over it:
 
@@ -193,8 +193,9 @@ class QuantisedConfidenceLUT(QuantisedScaffold, ConfidenceLUT):
     #: folded producer then exceeds realize_opcount_threshold (default 30), so Inductor writes that ~1 GiB producer (at
     #: 32,768 vectors) to global memory and re-reads it in a separate kernel. With both raised it keeps the margins in
     #: registers and still emits the same in-order add chain (the eager maths, which layer 1 pins, is untouched).
-    #: Measured at 32,768 vectors, float32 (eval ms / peak GiB): defaults 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44;
-    #: reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90 (also at 1000). Train total unchanged.
+    #: Measured on the RTX 5090 (read_top_n=2, 32,768 vectors, float32; commit 89814465), eval ms / peak GiB: defaults
+    #: 11.4-11.7 / 2.03; reads 8 alone 11.4 / 1.44; reads 8 + op count 60 11.5 / 1.50; reads 8 + op count 100 9.9 / 0.90
+    #: (also at 1000). Train total unchanged.
     #: Version-dependent: a torch upgrade can rename the options or change the heuristic; a bench_snapshot run
     #: (benchmarks/) is the regression detector. DeployedQuantisedConfidenceLUT is never compiled: on CUDA it runs the
     #: deploy_fwd kernel, on the CPU the eager torch definition.
