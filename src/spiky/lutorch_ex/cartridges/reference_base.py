@@ -28,9 +28,6 @@ class ReferenceForward:
     #: Compile the TRAIN forward too (not just eval). False for the Manifesto references (their train step is
     #: memory-bound and eager is fastest); True for the confidence family.
     _COMPILE_TRAIN: bool = False
-    #: ``dynamic=`` for the TRAIN compile: True traces one shape-agnostic graph; None (torch.compile's auto) specialises
-    #: on the first shape, which fuses the quantised monolith's backward better.
-    _COMPILE_TRAIN_DYNAMIC = True
     #: Whether bfloat16 / float16 run (as float32 maths, see the module docstring). False only for
     #: QuantisedConfidenceLUT, outside this spec's families: its precision contract belongs to the quantised-cartridges
     #: work.
@@ -61,7 +58,7 @@ class ReferenceForward:
                 return self._compiled(x)
             if self._COMPILE_TRAIN:
                 if self._compiled_train is None:
-                    self._compiled_train = torch.compile(self._forward_impl, dynamic=self._COMPILE_TRAIN_DYNAMIC,
+                    self._compiled_train = torch.compile(self._forward_impl, dynamic=True,
                                                          options=dict(self._COMPILE_OPTIONS) or None)
                 return self._compiled_train(x)
         return self._forward_impl(x)
