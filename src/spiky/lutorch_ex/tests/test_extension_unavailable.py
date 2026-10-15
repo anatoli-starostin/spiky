@@ -142,6 +142,14 @@ def test_fused_manifesto_without_extension_raises_with_cause(cls, no_manifesto_e
             m(torch.randn(64, 4, 8, device="cuda"))
 
 
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("cls", MANIFESTO, ids=lambda c: c.__name__)
+def test_fused_manifesto_without_extension_raises_with_cause_in_eval(cls, no_manifesto_ext):
+    m = cls(_spec(), seed=0).cuda().eval()
+    with torch.no_grad(), pytest.raises(NativeUnavailableError, match=r"\[setuptools_missing\]"):
+        m(torch.randn(64, 4, 8, device="cuda"))
+
+
 @pytest.mark.parametrize("cls", MANIFESTO, ids=lambda c: c.__name__)
 def test_fused_manifesto_cpu_input_raises_naming_the_reference_class(cls):
     """No fallback on the CPU either: a CPU input is a case the kernels do not cover."""
@@ -162,6 +170,15 @@ def no_confidence_ext(monkeypatch):
 def test_fused_confidence_without_extension_raises_with_cause(no_confidence_ext):
     m = lx.FusedConfidenceLUT(_spec(), read_top_n=1, seed=0).cuda().train()
     with pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
+        m(torch.randn(32, 4, 8, device="cuda"))
+    assert "13.0" in str(e.value)
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+@pytest.mark.parametrize("n,train", [(1, False), (2, True), (2, False)], ids=["n1-eval", "n2-train", "n2-eval"])
+def test_fused_confidence_without_extension_raises_with_cause_every_read_and_mode(n, train, no_confidence_ext):
+    m = lx.FusedConfidenceLUT(_spec(), read_top_n=n, seed=0).cuda().train(train)
+    with torch.set_grad_enabled(train), pytest.raises(NativeUnavailableError, match=r"\[cuda_version_mismatch\]") as e:
         m(torch.randn(32, 4, 8, device="cuda"))
     assert "13.0" in str(e.value)
 
@@ -194,6 +211,14 @@ def no_quantised_ext(monkeypatch):
 @pytest.mark.skipif(not CUDA, reason="needs CUDA")
 def test_fused_quantised_without_extension_raises_with_cause(no_quantised_ext):
     m = lx.FusedQuantisedConfidenceLUT(_spec(), seed=0, read_top_n=2).cuda()
+    for train in (True, False):
+        with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
+            m.train(train)(torch.randn(16, 4, 8, device="cuda"))
+
+
+@pytest.mark.skipif(not CUDA, reason="needs CUDA")
+def test_fused_quantised_n1_without_extension_raises_with_cause(no_quantised_ext):
+    m = lx.FusedQuantisedConfidenceLUT(_spec(), seed=0, read_top_n=1).cuda()
     for train in (True, False):
         with pytest.raises(NativeUnavailableError, match=r"\[ninja_missing\]"):
             m.train(train)(torch.randn(16, 4, 8, device="cuda"))
