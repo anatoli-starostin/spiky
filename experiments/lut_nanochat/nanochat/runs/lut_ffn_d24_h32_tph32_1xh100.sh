@@ -27,5 +27,9 @@ export ARCH_TAG=${ARCH_TAG:-lut_ffn_confidence_n1_h32_tph32}
 export EXTRA_TAGS="${EXTRA_TAGS:-},ffn=confidenceLUT,read_top_n=1,h=32,tph=32,d=48,r=1536,cells=256,nap=8"
 # --lut-ffn + --no-lr-rescale (v2 parity) + the h32/tph32 geometry (d defaults to 48 -> r=1536).
 export TRAIN_EXTRA="--lut-ffn --no-lr-rescale --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-proj-bf16 ${TRAIN_EXTRA:-}"
+# Pin the training horizon to v2 parity (5568). Without this, base_train auto-derives 5280 from this
+# config's param-data ratio -- a different LR-decay horizon and ~0.3B fewer tokens than v2. Env-overridable
+# (e.g. NUM_ITERATIONS=3 for a smoke run).
+export NUM_ITERATIONS=${NUM_ITERATIONS:-5568}
 
 exec bash runs/baseline_d24_1xh100.sh "$@"
