@@ -39,6 +39,7 @@ class LUTFFNConfig:
     table_dropout_rate: float = 0.2
     tv_lambda: float = 10.0        # cell-TV penalty weight (applied in base_train's step loop)
     fused: bool = True             # explicit FusedConfidenceLUT CUDA kernel (hand-fused twin of ConfidenceLUT; needs the lutorch_ex_fused_confidence ext + setuptools in the venv). False -> reference ConfidenceLUT (Inductor-compiled read, no ext). Bitwise-equal at eval; fused ~1.6x faster train fwd+bwd.
+    proj_bf16: bool = False
     proj_fp8_muon: bool = False    # projection optimiser/precision mode. False (default) = fp32 island + the AdamW LUT group. True = ProjectionMHL runs the compress/decompress GEMMs in fp8 (its native fp8_projections, from fp32 master weights; the cartridge still gets fp32 via compress_fp8_out_dtype=float32) AND the projection WEIGHTS route to Muon (tagged _lut_to_muon; biases stay AdamW). Orthogonal to `fused` and to the h/d/tph geometry.
 
 
@@ -66,6 +67,8 @@ class LUTFeedForward(nn.Module):
             self.mhl = ProjectionMHL(cart, d_model=d_model,
                                      fp8_projections=("compress", "decompress"),
                                      compress_fp8_out_dtype=torch.float32).float()
+        elif cfg.proj_bf16:
+            self.mhl = ProjectionMHL(cart, d_model=d_model, projection_dtype=torch.bfloat16).float()
         else:
             self.mhl = ProjectionMHL(cart, d_model=d_model).float()  # fp32 island
 
