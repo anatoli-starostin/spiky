@@ -1,5 +1,5 @@
 % lutorch_ex library report.
-% Build: latexmk -pdf -interaction=nonstopmode -halt-on-error lutorch_ex_report.tex
+% Build: latexmk -pdf -interaction=nonstopmode -halt-on-error lutorch_ex_report_izhikevich_2026-10-09.tex
 % fig_curves.pdf is Figure 4, plotted from the run histories; the code is src/spiky/lutorch_ex/.
 %
 % The report goes from the smallest element to the full system (Figure 1):
@@ -236,8 +236,8 @@ variant} is the rule that fixes these choices. (The code calls a lookup variant 
 report uses that word only for the Python classes.) The lookup variants are interchangeable: when one
 lookup variant is replaced by another, nothing else in the system changes. Section~\ref{sec:oneformula}
 gives the single formula that all lookup variants share. The rest of the report needs only that part.
-Section~\ref{sec:generations} describes the three generations of lookup variants, and it can be skipped
-at first.
+Section~\ref{sec:generations} describes the lookup variants of the library one by one, and it can be
+skipped at first.
 
 \subsection{One formula, two ways to use it}
 \label{sec:oneformula}
@@ -261,55 +261,56 @@ A weighted retrieval uses Equation~\eqref{eq:retrieval} both in training and in 
 hard lookup also uses the neighbor row and the coefficients, but only during training, where they are
 needed to compute the gradient (Section~\ref{sec:gradient}).
 
-\subsection{Three generations of coefficients}
+\subsection{The lookup variants of the library}
 \label{sec:generations}
 
-The library has three generations of lookup variants (Table~\ref{tab:matrix}). Each generation extends the one
-before it. Generation 1 computes the coefficients with a fixed function of the deciding margin.
-Generation 2 makes this function learnable. Generation 3 also uses all the other margins of the table.
-Generations 1 and 2 are available both as a hard lookup and as a weighted retrieval. Generation 3 is
-available only as a weighted retrieval.
+The library has two families of lookup variants (Table~\ref{tab:matrix}). The Manifesto lookup variants
+compute the coefficients from the deciding margin with an \term{uncertainty function} $U$. The argument
+\code{uncertainty\_func} chooses $U$: a fixed function (\code{"rational"}, the default), or a function
+with two learnable temperatures (\code{"softsign"}). The confidence lookup variants also use all the
+other margins of the table. The Manifesto lookup variants are available both as a hard lookup and as a
+weighted retrieval. The confidence lookup variants are available only as a weighted retrieval.
 
 \begin{table}[htb]
 \centering\small
 \setlength{\tabcolsep}{7pt}
 \begin{tabular}{@{}L{29mm}L{27mm}L{70mm}L{21mm}@{}}
 \toprule
-generation & $a$, \ $b$ & defined by & learned scalars \\
+lookup variant & $a$, \ $b$ & defined by & learned scalars \\
 \midrule
-1 Manifesto & $1-U$, \ $U$ & $U=0.5/(1+u^\star)$ & none \\
-2 SoftSign & $1-w$, \ $w$ & $w=\sigma(-2\rho/T_\text{sel})$ \ with \ $\rho=u^\star/(T_\text{soft}+u^\star)$ & $T_\text{soft}$, $T_\text{sel}$ \\
-3 Confidence, $n=1$ & $s$, \ $0$ & $s=\big(\sum_j m_j\big)\exp\!\big(\gamma\sum_j\log\sigma(\beta m_j)\big)$ & $\beta$, $\gamma$ \\
-3 Confidence, $n=2$ & $s\,(1-v)$, \ $s\,v$ & the same $s$, \ and \ $v=\sigma(-2u^\star/\tau)$ & $\beta$, $\gamma$, $\tau$ \\
+Manifesto, rational & $1-U$, \ $U$ & $U=0.5/(1+u^\star)$ & none \\
+Manifesto, soft-sign & $1-U$, \ $U$ & $U=\sigma(-2\rho/T_\text{sel})$ \ with \ $\rho=u^\star/(T_\text{soft}+u^\star)$ & $T_\text{soft}$, $T_\text{sel}$ \\
+Confidence, $n=1$ & $s$, \ $0$ & $s=\big(\sum_j m_j\big)\exp\!\big(\gamma\sum_j\log\sigma(\beta m_j)\big)$ & $\beta$, $\gamma$ \\
+Confidence, $n=2$ & $s\,(1-v)$, \ $s\,v$ & the same $s$, \ and \ $v=\sigma(-2u^\star/\tau)$ & $\beta$, $\gamma$, $\tau$ \\
 \bottomrule
 \end{tabular}
 \caption{The coefficients of the selected row ($a$) and of its neighbor ($b$) in
-Equation~\eqref{eq:retrieval}, for the three generations. Here $u^\star$ is the deciding margin,
+Equation~\eqref{eq:retrieval}, for the lookup variants of the library. Here $u^\star$ is the deciding margin,
 $m_j=|u_j|$ are the margins of the table, $\sigma$ is the logistic function, and $n$ is the number of rows
 retrieved per table. In a hard lookup these coefficients are used only in training.
 Table~\ref{tab:classes} lists the classes.}
 \label{tab:matrix}
 \end{table}
 
-\textbf{Generation 1: Manifesto.} The coefficient of the neighbor row is the fixed uncertainty function
+\textbf{Manifesto, rational uncertainty.} The coefficient of the neighbor row is the fixed uncertainty function
 $U$ of the Spiking Manifesto~\citep{manifesto}, applied to the deciding margin. $U$ equals $\tfrac12$
 when the deciding margin is zero. In that case the two rows are equally plausible. $U$ decreases toward
-zero as the margin grows. The hard lookup of this generation, \code{ManifestoHardLUT}, is the rule of the
+zero as the margin grows. The hard lookup with this $U$, \code{ManifestoHardLUT}, is the rule of the
 Manifesto as it was published. The weighted retrieval, \code{ManifestoSoftLUT}, goes beyond the
 Manifesto. In the Manifesto, $U$ is used only to compute gradients during training, and inference uses
 the plain sum of the selected rows (its Eq.~3 and Section III-A).
 
-\textbf{Generation 2: SoftSign.} Generation 2 has the same form as generation 1, but the coefficient of
-the neighbor row is learnable. Two parameters, the temperatures $T_\text{soft}$ and $T_\text{sel}$,
+\textbf{Manifesto, soft-sign uncertainty.} This uncertainty function has the same role, but it is
+learnable. Two parameters, the temperatures $T_\text{soft}$ and $T_\text{sel}$,
 replace the fixed constants of $U$. The first temperature rescales the deciding margin into a number
-$\rho$ between 0 and 1. The second temperature turns $\rho$ into a coefficient $w$, which is at most
+$\rho$ between 0 and 1. The second temperature turns $\rho$ into the coefficient $U$, which is at most
 $\tfrac12$. Both temperatures are learned. There is one pair of temperatures for each multi-head LUT
-(Section~\ref{sec:heads}), and both start at the value $0.5$. They can also be kept fixed.
-\code{SoftSignHardLUT} is the hard lookup of this generation, and \code{SoftSignSmoothLUT} is the
-weighted retrieval.
+(Section~\ref{sec:heads}), and both start at the value $0.5$. They can also be kept fixed. The same two
+classes, \code{ManifestoHardLUT} (hard lookup) and \code{ManifestoSoftLUT} (weighted retrieval), use
+this $U$ when they are constructed with \code{uncertainty\_func="softsign"}.
 
-\textbf{Generation 3: Confidence.} Generations 1 and 2 use only the deciding margin. Generation 3 uses
-all the margins of a table to estimate how much the table can be trusted for the present input. It
+\textbf{Confidence.} The Manifesto lookup variants use only the deciding margin. The confidence lookup
+variants use all the margins of a table to estimate how much the table can be trusted for the present input. It
 multiplies the contribution of the table by a \term{confidence score} $s$, which is the score of
 LookupFFN~\citep{lookupffn}. The score is a product of two factors. The first factor is the sum of the
 margins. It grows as the input moves away from the points where the bits change their values. The second
@@ -321,7 +322,7 @@ reduction is.
 
 The class \code{ConfidenceLUT} retrieves either one row or two rows per table ($n=1$ or $n=2$). With
 $n=1$, the contribution of the table is the selected row multiplied by the score. With $n=2$, the
-neighbor row is added as in generation 2, and the score multiplies both rows. The coefficient $v$ of the
+neighbor row is added as in the Manifesto weighted retrieval, and the score multiplies both rows. The coefficient $v$ of the
 neighbor row is at most $\tfrac12$. It depends only on the deciding margin and on a temperature $\tau$.
 The scalars $\beta$, $\gamma$ and $\tau$ are learned, and each multi-head LUT has one value of each. They
 are stored as logarithms, and their initial values are $2$, $1$ and $0.5$.
@@ -381,7 +382,7 @@ multi-head LUT replaces an FFN.
   \node[draw=black!55, dashed, rounded corners, fit=(cmp)(mh)(dec), inner xsep=3mm, inner ysep=6.5mm] (wr) {};
 \end{scope}
 \node[font=\scriptsize, text=black!70, anchor=south west] at ([xshift=1mm,yshift=0.3mm]mh.north west) {multi-head LUT (Section~\ref{sec:heads})};
-\node[font=\scriptsize, text=black!70, anchor=south west] at ([xshift=1mm,yshift=0.3mm]wr.north west) {ProjectionLUT wrapper (Section~\ref{sec:projection})};
+\node[font=\scriptsize, text=black!70, anchor=south west] at ([xshift=1mm,yshift=0.3mm]wr.north west) {ProjectionMHL wrapper (Section~\ref{sec:projection})};
 \draw[->] (x) -- (cmp);
 \draw[->] (cmp.east) to[out=25,in=180] node[above,sloped,font=\scriptsize]{$z_1$} (t1.west);
 \draw[->] (cmp.east) to[out=-25,in=180] node[below,sloped,font=\scriptsize]{$z_G$} (t2.west);
@@ -392,7 +393,7 @@ multi-head LUT replaces an FFN.
 \draw[->] (cat) -- (dec);
 \draw[->] (dec) -- (y);
 \end{tikzpicture}
-\caption{A multi-head LUT (inner dashed box, Section~\ref{sec:heads}) inside the ProjectionLUT wrapper
+\caption{A multi-head LUT (inner dashed box, Section~\ref{sec:heads}) inside the ProjectionMHL wrapper
 (outer dashed box, Section~\ref{sec:projection}). The input projection
 ($D_\text{in}\to h_\text{in}d_\text{in}$) splits $x$ into the input slices $z_g$ of the heads. In each
 head the probes turn $z_g$ into one address per table, and the contributions of the \code{tph} tables of
@@ -431,7 +432,7 @@ $W[c]$ & row $c$ of a table: $d_\text{out}$ learnable values & \\
 \multicolumn{3}{@{}l}{\emph{One lookup variant (Section~\ref{sec:variants})}} \\
 $a$, $b$ & coefficients of the selected row and of its neighbor row & \\
 $f$ & contribution of one table, $a\,W[c]+b\,W[c']$ & \\
-$n$ & number of rows retrieved per table in generation 3 & 1 or 2 \\
+$n$ & number of rows retrieved per table by a confidence lookup variant (\code{read\_top\_n}) & 1 or 2 \\
 \addlinespace[3pt]
 \multicolumn{3}{@{}l}{\emph{Heads and the multi-head LUT (Section~\ref{sec:heads})}} \\
 \code{tph} & number of tables per head & 64 \\
@@ -468,12 +469,12 @@ involved. The heads of this report are therefore not attention heads. Where both
 report writes ``attention heads'' for the latter.
 
 % ======================================================================================================
-\section{The ProjectionLUT wrapper: input and output projections}
+\section{The ProjectionMHL wrapper: input and output projections}
 \label{sec:projection}
 
 This section describes the wrapper, which is the last box of the library in Figure~\ref{fig:levels}. A
 multi-head LUT works on $G$ narrow slices, but the model around it works on a single vector of the model
-width. The class \code{ProjectionMHL}, which is also called the ``ProjectionLUT'' wrapper, connects the
+width. The class \code{ProjectionMHL}, the wrapper, connects the
 two (Figure~\ref{fig:projlut}). It places one linear map in front of the multi-head LUT and another
 linear map behind it. The first map is the \term{input projection}, and the second is the \term{output
 projection}. (The code calls them \code{compress} and \code{decompress}.) Seen from the outside, the
@@ -581,9 +582,11 @@ in an array $W$ of shape $G\times\code{tph}\times K\times d_\text{out}$, and the
 provides the things that every lookup variant needs: the selected row, the margins, the neighbor row, and the
 routing of the result of each head to its position in the output. The class of a lookup variant then defines two things
 of its own. The first is the choice of the coefficients in Equation~\eqref{eq:retrieval}. The second is
-the function that training differentiates (Section~\ref{sec:gradient}). The lookup variants of generations 1 and
-2 also exist in versions whose names begin with \code{Fused}. A fused version computes the same
-mathematics with fewer and faster kernels.
+the function that training differentiates (Section~\ref{sec:gradient}). Each of these classes, the
+\term{reference} classes, is written in plain PyTorch and runs on the CPU and on CUDA. Each also exists
+in a version whose name begins with \code{Fused}. A fused class computes the same mathematics in
+hand-written CUDA kernels. It needs a CUDA input, and it never falls back to PyTorch: an input that its
+kernels do not cover raises an error.
 
 \begin{table}[htb]
 \centering\small
@@ -592,10 +595,10 @@ mathematics with fewer and faster kernels.
 \toprule
 level & class & role \\
 \midrule
-lookup variant, generation 1 & \code{ManifestoHardLUT}, \code{ManifestoSoftLUT} & hard lookup, weighted retrieval \\
-lookup variant, generation 2 & \code{SoftSignHardLUT}, \code{SoftSignSmoothLUT} & hard lookup, weighted retrieval \\
-lookup variant, generation 3 & \code{ConfidenceLUT}, \code{QuantisedConfidenceLUT} & weighted retrieval; the second with int8 tables (Section~\ref{sec:quant}) \\
-lookup variant, fused & the prefix \code{Fused} before a class name of generation 1 or 2, for example \code{FusedSoftSignHardLUT} & the same mathematics with fewer and faster kernels \\
+lookup variant, Manifesto & \code{ManifestoHardLUT}, \code{ManifestoSoftLUT} & hard lookup, weighted retrieval; \code{uncertainty\_func="rational"} (the default) or \code{"softsign"} \\
+lookup variant, confidence & \code{ConfidenceLUT}, \code{QuantisedConfidenceLUT} & weighted retrieval with $n=1$ or $n=2$ rows (\code{read\_top\_n}); the second trained for int8 tables (Section~\ref{sec:quant}) \\
+lookup variant, fused & the prefix \code{Fused} before any of these four class names, for example \code{FusedManifestoHardLUT} & the same mathematics in hand-written CUDA kernels; CUDA input only \\
+lookup variant, int8 decode & \code{Deployed\allowbreak QuantisedConfidenceLUT} & inference only, built from an export of \code{QuantisedConfidenceLUT} (Section~\ref{sec:quant}) \\
 multi-head LUT & \code{MultiHeadLUT} & the interface of every lookup variant: $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$ \\
  & \code{ManifestoLUT} & the base class of every lookup variant: tables, anchors, addresses, margins, routing of the head outputs \\
  & \code{LUTSpec} & the sizes of a multi-head LUT: the numbers of heads, tables per head and probes per table, and the widths \\
@@ -623,7 +626,8 @@ y = ffn(x.reshape(-1, 384)).reshape(x.shape)     # torch.Size([4, 128, 384])
 \end{lstlisting}
 \end{minipage}
 
-Any other lookup variant can be used in place of \code{ConfidenceLUT}.
+Any other lookup variant class can be used in place of \code{ConfidenceLUT}; a fused class needs the
+input on a CUDA device.
 
 % ======================================================================================================
 \section{Training: gradients and regularizers}
@@ -649,12 +653,12 @@ rows are updated by training.
 \textbf{Hard lookup.} In a hard lookup, the coefficients are constants ($a=1$, $b=0$), so the output has
 no useful derivative with respect to the input. A hard lookup therefore uses a different function in the
 backward pass. In the backward pass, and only there, it uses Equation~\eqref{eq:retrieval} with the
-coefficients of the weighted retrieval of the same generation. A function that is used in this way is
+coefficients of the weighted retrieval with the same uncertainty function. A function that is used in this way is
 called a \term{surrogate}: it is a smooth function that replaces a function without a useful derivative.
 The surrogate provides the gradient with respect to the input. The update of the table itself goes to
 the selected row $c$ only.
 
-\textbf{Generation 1.} With the coefficients $a=1-U$ and $b=U$ of Table~\ref{tab:matrix},
+\textbf{Manifesto.} With the coefficients $a=1-U$ and $b=U$ of Table~\ref{tab:matrix},
 differentiating Equation~\eqref{eq:retrieval} gives
 \[
   \frac{\partial\tilde f}{\partial z[a_{j^\star}]}=-\frac{\partial\tilde f}{\partial z[b_{j^\star}]}
@@ -663,10 +667,10 @@ differentiating Equation~\eqref{eq:retrieval} gives
 Here $j^\star$ is the deciding probe, $a_{j^\star}$ and $b_{j^\star}$ are its two anchors, and the tilde
 indicates the surrogate. The gradient with respect to the input is therefore nonzero only at the two
 anchors of the deciding probe, and it has opposite signs at the two anchors (Eqs.~4 and~5 of the
-Manifesto). In generation 2, the coefficient $w$ also depends on the input only through the deciding
-margin, so the gradient is nonzero at the same two anchors.
+Manifesto). This holds for both uncertainty functions, because both depend on the input only through the
+deciding margin. With \code{"softsign"}, the two temperatures receive a gradient as well.
 
-\textbf{Generation 3.} In generation 3, the gradient reaches the input only through the score $s$, which
+\textbf{Confidence.} In a confidence lookup variant, the gradient reaches the input only through the score $s$, which
 depends on all \code{nap} margins, and for $n=2$ also through $v$, which depends on the deciding margin.
 In this way, a table learns how much confidence to assign to its output. The gradient never tells the
 table that a different row would have been a better choice.
@@ -674,7 +678,8 @@ table that a different row would have been a better choice.
 \subsection{Regularizers}
 \label{sec:reg}
 
-Two regularizers are implemented in the base class \code{ManifestoLUT}, so every lookup variant can use them.
+Two regularizers are implemented in the base class \code{ManifestoLUT}, so every lookup variant with a
+trainable table can use them (all except \code{DeployedQuantisedConfidenceLUT}, which is inference only).
 Both are switched off by default. The first regularizer acts on the rows of a table, and the second acts
 on whole tables.
 
@@ -701,8 +706,8 @@ it does not change the forward pass.
 \code{table\_dropout\_rate}), training removes whole tables at random. For every sample, every head and
 every table, an independent random decision keeps the table with probability $1-p$. The outputs of the
 tables that are kept are multiplied by $1/(1-p)$, so the expected output does not change. A table that is
-removed contributes nothing to the output or to the gradient for that sample. In generation 3, the
-dropout mask multiplies the score $s$, which has the same effect. In decode, and whenever gradients are
+removed contributes nothing to the output or to the gradient for that sample. In a confidence lookup
+variant, the dropout mask multiplies the score $s$, which has the same effect. In decode, and whenever gradients are
 switched off, no table is removed and no output is rescaled.
 
 % ======================================================================================================
@@ -719,8 +724,9 @@ projection.
 Section~\ref{sec:heads}, the tables hold $6.3$ million values per layer. In the whole model, they hold
 $37.7$ million of the $68.2$ million parameters. When the tables are stored as 8-bit integers (int8)
 instead of 32-bit floating-point numbers (fp32), they need only a quarter of the memory.
-\code{QuantisedConfidenceLUT} is the generation-3 lookup variant ($n=2$) that is trained so that it can be
-decoded in this form. Its quantization mode is named \code{p2\_int8}, which stands for powers of two and
+\code{QuantisedConfidenceLUT} is the confidence lookup variant, with $n=1$ or $n=2$, that is trained so
+that it can be decoded in this form; \code{FusedQuantisedConfidenceLUT} computes the same in CUDA
+kernels. Its quantization mode is named \code{p2\_int8}, which stands for powers of two and
 int8. The mode is selected by the argument \mbox{\code{quant\_mode="p2\_int8"}}.
 
 \textbf{What \code{p2\_int8} does.} The mode converts the weighted retrieval
@@ -740,7 +746,8 @@ three inner levels of Figure~\ref{fig:levels}.
   power of two, $2^{-q}$, with $q=\operatorname{round}\big(2u^\star/(\tau\ln2)\big)$. The common factor
   $s(1-v)=s/(1+r)$ is rounded to $2^{k'}$, with $k'=\operatorname{round}(\log_2 s-c_q)$ and
   $c_q=\log_2(1+2^{-q})$. A table then adds $2^{k'}\hat W[c]+2^{k'-q}\hat W[c']$. This operation needs
-  two shifts and one addition, and it needs no multiplication.
+  two shifts and one addition, and it needs no multiplication. With $n=1$ there is no neighbor row: the
+  score itself is rounded, $k'=\operatorname{round}(\log_2 s)$, and a table adds $2^{k'}\hat W[c]$.
 \item \textbf{The sum of a head becomes an integer sum.} The shifts are counted in units of $2^{-6}$, so
   that every shift is a shift to the left. The sum over the tables is kept in a 32-bit integer
   accumulator. Only one floating-point operation remains: the shared exponent is applied once, after the
@@ -771,12 +778,16 @@ to a file and discards the floating-point master tables. It also multiplies a co
 output-projection matrix by the factor $2^{e-6}$, so that the shared exponent becomes part of that
 matrix. This multiplication is exact, because multiplying a floating-point number by a power of two
 changes only its exponent. As a result, no separate step has to apply the shared exponent at run time.
-The file contains the int8 tables, the anchors and the three scalars. In the example, the tables of one
+The file contains the int8 tables, the anchors, the scalars $\beta$ and $\gamma$ (and $\tau$ when $n=2$)
+and the two projections; the rest of the model is stored as it is. In the example, the tables of one
 layer shrink from $24$~MiB to $6$~MiB (a MiB is $2^{20}$ bytes). The function \code{load\_deployment}
-first builds the model on PyTorch's \code{meta} device, which is a placeholder device on which arrays
-have shapes but occupy no memory. It then fills the model from the file, so the floating-point tables are
-never allocated in memory. In decode, the multi-head LUT returns the integer accumulator, and the output
-projection applies the shared exponent that was included in it.
+first calls a function supplied by the user, \code{make\_skeleton}, which builds the model on PyTorch's
+\code{meta} device, a placeholder device on which arrays have shapes but occupy no memory. It then fills
+the model from the file, so the floating-point tables are never allocated in memory. Each quantized
+multi-head LUT becomes a \code{DeployedQuantisedConfidenceLUT}. In decode, it returns the integer
+accumulator, and the output projection applies the shared exponent that was included in it. On a CUDA
+input, the integer lookup is one hand-written kernel; on a CPU input, it is the PyTorch definition of the
+same integer arithmetic.
 \begin{lstlisting}
 export_deployment(model, "m.lxq")
 dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()
