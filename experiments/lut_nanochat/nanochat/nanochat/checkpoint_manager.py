@@ -101,6 +101,22 @@ def build_model(checkpoint_dir, step, device, phase):
     # Load the model state
     model.to_empty(device=device)
     model.init_weights() # note: this is dumb, but we need to init the rotary embeddings. TODO: fix model re-init
+    # [lut_nanochat] LUT-FFN drop-in: if this checkpoint was trained with --lut-ffn, rebuild the block MLPs as the
+    # ConfidenceLUT cartridge BEFORE load_state_dict (same order as base_train: after init_weights), so the state_dict
+    # keys/shapes match. Geometry is recovered from the saved meta user_config -- never hardcoded.
+    _uc = (meta_data.get("user_config") or {})
+    if _uc.get("lut_ffn"):
+        from nanochat.lut_ffn import LUTFFNConfig, apply_lut_ffn
+        _lcfg = LUTFFNConfig(
+            enabled=True,
+            h=_uc["lut_ffn_h"], d=_uc["lut_ffn_d"], tph=_uc["lut_ffn_tph"], nap=_uc["lut_ffn_nap"],
+            read_top_n=_uc["lut_ffn_read_top_n"], beta_init=_uc["lut_ffn_beta"], gamma_init=_uc["lut_ffn_gamma"],
+            seed=_uc["lut_ffn_seed"], weight_init_std=_uc["lut_ffn_weight_init_std"],
+            table_dropout_rate=_uc.get("lut_ffn_table_dropout", 0.0), tv_lambda=_uc.get("lut_ffn_tv_lambda", 0.0),
+        )
+        _n = apply_lut_ffn(model, _lcfg, device=device)
+        log0(f"[lut_nanochat] rebuilt {_n} block MLPs as LUT-FFN from meta: h={_lcfg.h} d={_lcfg.d} tph={_lcfg.tph} "
+             f"nap={_lcfg.nap} read_top_n={_lcfg.read_top_n} fused={_lcfg.fused}")
     model.load_state_dict(model_data, strict=True, assign=True)
     # Put the model in the right training phase / mode
     if phase == "eval":
