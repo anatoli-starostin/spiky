@@ -120,13 +120,14 @@ read uses that formula as its value, so both rows learn. A **hard** read returns
 `b = 0`) and uses the blend only as a **surrogate** for the input gradient, so the table update stays on
 row `c`.
 
-| class | gen | value (`a`, `b`) | training gradient | learned scalars | fused twin |
-| --- | --- | --- | --- | --- | --- |
-| `ManifestoHardLUT` | 1 / 2 | `1`, `0` | surrogate `1-w`, `w`; weight grad on row `c` only | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoHardLUT` |
-| `ManifestoSoftLUT` | 1 / 2 | `1-w`, `w` | the value itself; both rows | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoSoftLUT` |
-| `ConfidenceLUT` (`read_top_n=1`) | 3 | `s`, `0` | the value itself | `β`, `γ` | — |
-| `ConfidenceLUT` (`read_top_n=2`) | 3 | `s(1-v)`, `s·v` | the value itself | `β`, `γ`, `τ` | — |
-| `QuantisedConfidenceLUT` | 3 | as above, int8 rows and power-of-two weights | straight-through to the float values | `β`, `γ`, `τ` | — |
+| class | value (`a`, `b`) | training gradient | learned scalars | fused twin |
+| --- | --- | --- | --- | --- |
+| `ManifestoHardLUT` | `1`, `0` | surrogate `1-w`, `w`; weight grad on row `c` only | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoHardLUT` |
+| `ManifestoSoftLUT` | `1-w`, `w` | the value itself; both rows | `weight="softsign"`: `T_soft`, `T_sel` | `FusedManifestoSoftLUT` |
+| `ConfidenceLUT` (`read_top_n=1`) | `s`, `0` | the value itself | `β`, `γ` | `FusedConfidenceLUT` |
+| `ConfidenceLUT` (`read_top_n=2`) | `s(1-v)`, `s·v` | the value itself | `β`, `γ`, `τ` | `FusedConfidenceLUT` |
+| `QuantisedConfidenceLUT` | as above, int8 rows and power-of-two weights | straight-through to the float values | `β`, `γ`; `τ` at `read_top_n=2` | `FusedQuantisedConfidenceLUT` |
+| `DeployedQuantisedConfidenceLUT` | as `QuantisedConfidenceLUT` at its export's `read_top_n`, read from the int8 rows | — (inference-only) | — (`β`, `γ`, `τ` are buffers from the export) | — |
 
 All classes are importable from `spiky.lutorch_ex`.
 
