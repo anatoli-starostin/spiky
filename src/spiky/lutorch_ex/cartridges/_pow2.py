@@ -1,7 +1,8 @@
 """Power-of-two int8 LUT read: the torch definition of the power-of-two read. QuantisedConfidenceLUT (the reference
-class), its forward_int, DeployedQuantisedConfidenceLUT's integer read, and export all use it;
-FusedQuantisedConfidenceLUT's p2_scalars op (``_fused_quantised_cuda``) computes the same integers and recomputes its
-backward with :func:`ste_cell_weights` (the agreement is tested in tests/test_fused_vs_reference.py).
+class), its forward_int, DeployedQuantisedConfidenceLUT's integer read on the CPU, and export all use it.
+FusedQuantisedConfidenceLUT's CUDA kernels (quant_fwd / quant_bwd, ``_fused_quantised_cuda``) compute the same integers
+and the gradient of :func:`ste_cell_weights` by hand; the lutorch_ex::p2_scalars test op exposes those integers (the
+agreement is tested in tests/test_fused_vs_reference.py).
 
 It is pure PyTorch (no CUDA / no extension dependency) and holds the whole p2_int8 quantisation
 math — the power-of-two scale, the log-domain score exponent, the two-cell blend exponents, the

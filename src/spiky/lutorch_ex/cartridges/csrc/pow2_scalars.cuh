@@ -1,10 +1,11 @@
 // The per-table scalars of the power-of-two read -- THE single definition of the forward integers.
 //
-// Included by csrc/pow2_int8_read.cu and called, compiled with --fmad=false (no contraction anywhere), by p2_scalar_kernel
-// -- the forward of the lutorch_ex::p2_scalars custom op. (The torch implementation in pow2_read.py computes the same
-// quantities; it is the fallback when the extension is unavailable and the path of every read the op does not serve. It is
-// not bit-identical to this code -- torch.compile's float32 reduction order and libdevice differ -- so agreement between the
-// two is checked by the tests rather than guaranteed.)
+// Included by csrc/pow2_int8_read.cu and called, compiled with --fmad=false (no contraction anywhere), by its kernels:
+// the fused forward (quant_fwd), the deployed int8 read (deploy_fwd) and p2_scalar_kernel, the forward of the
+// lutorch_ex::p2_scalars test op. (The torch definition in _pow2.py computes the same quantities for the reference
+// QuantisedConfidenceLUT and the deployed CPU read; there is no fallback from these kernels to it. It is not
+// bit-identical to this code by construction -- torch.compile's float32 reduction order and libdevice differ -- so
+// agreement between the two is checked by the tests rather than guaranteed.)
 //
 // For one table with margins d[0..nap-1] (note Sections 2-4):
 //   m_p = |d_p|,  c1 = sum_p [d_p > 0] 2^(nap-1-p),  mj = first argmin_p m_p,  mv = m_mj,  c2 = c1 ^ 2^(nap-1-mj)

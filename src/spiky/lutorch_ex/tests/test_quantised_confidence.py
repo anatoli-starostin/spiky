@@ -6,7 +6,7 @@ gradcheckable; the correct target is the SMOOTH SURROGATE that carries the STE's
 n=2), and (b) assert the real STE forward's gradient equals the surrogate's — so the gradcheck'd
 surrogate is exactly the quant-aware backward. Plus: quant-aware run matrix, fake-quant eval ==
 int8 shift-add read (bit-exact), train == eval value, bfloat16 raises, both anchor modes, both
-read_top_n. These are the reference class's own checks; FusedQuantisedConfidenceLUT (the p2_scalars op) is checked
+read_top_n. These are the reference class's own checks; FusedQuantisedConfidenceLUT (its CUDA kernels) is checked
 against it in test_fused_vs_reference.py.
 """
 import re

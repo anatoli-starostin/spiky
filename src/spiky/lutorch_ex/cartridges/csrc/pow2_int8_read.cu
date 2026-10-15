@@ -1,6 +1,6 @@
-// Forward of the lutorch_ex::p2_scalars custom op: p2::table_scalars (csrc/pow2_scalars.cuh) for every table of a batch of
-// margins. The op supplies the per-table integers (c1, c2, shift codes, k', q) and the straight-through cell weights of the
-// power-of-two read; lutorch_ex accumulates the int8 rows with its torch read (pow2_read.int_blend_read).
+// The quantised family's CUDA kernels: FusedQuantisedConfidenceLUT's forward (table_exponents, quant_fwd) and backward
+// (quant_bwd), DeployedQuantisedConfidenceLUT's int8 read (deploy_fwd), and `scalars`, the forward of the
+// lutorch_ex::p2_scalars op -- a test oracle for the per-table integers (p2::table_scalars, csrc/pow2_scalars.cuh).
 
 #include <torch/extension.h>
 #include <c10/cuda/CUDAGuard.h>

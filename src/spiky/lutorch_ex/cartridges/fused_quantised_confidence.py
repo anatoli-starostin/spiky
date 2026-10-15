@@ -29,7 +29,8 @@ class FusedQuantisedConfidenceLUT(QuantisedScaffold, ConfidenceBase):
     def __init__(self, spec, *, read_top_n: int, quant_mode: str = "p2_int8", quant_overrides=None, **kw):
         super().__init__(spec, read_top_n=read_top_n, **kw)
         self._init_quant(quant_mode, quant_overrides)
-        # Build / register the op eagerly; never raises -- _require raises per call.
+        # Build the extension eagerly (this also registers the p2_scalars test op); never raises -- require_cuda raises
+        # per call.
         _fused_quantised_cuda.ensure_registered()
         # int16 copies of the anchors for the kernel (the int64 buffers stay the state_dict's source of truth).
         if spec.d_in > torch.iinfo(torch.int16).max:

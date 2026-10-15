@@ -1,13 +1,14 @@
 """The CUDA implementation of FusedQuantisedConfidenceLUT and DeployedQuantisedConfidenceLUT: the p2 extension's
-build / load and device gating, the lutorch_ex::p2_scalars custom op, the fused read, and the checks that a call is a
-case the kernels cover. Used ONLY by those two classes; the reference QuantisedConfidenceLUT never calls it (importing
-this module builds nothing: ensure_registered() loads the extension).
+build / load and device gating, the fused read, and the checks that a call is a case the kernels cover; plus the
+lutorch_ex::p2_scalars custom op, a test oracle. Used ONLY by those two classes and the tests; the reference
+QuantisedConfidenceLUT never calls it (importing this module builds nothing: ensure_registered() loads the extension).
 
 EXTENSION
 
-csrc/pow2_int8_read.cu provides `scalars` (the forward of the lutorch_ex::p2_scalars custom op below: p2::table_scalars,
-csrc/pow2_scalars.cuh, for every table) and FusedQuantisedConfidenceLUT's read: `table_exponents`, `quant_fwd` (the
-fused forward) and `quant_bwd` (the fused backward), wrapped by FusedQuantRead.
+csrc/pow2_int8_read.cu provides the production kernels -- FusedQuantisedConfidenceLUT's read: `table_exponents`,
+`quant_fwd` (the fused forward) and `quant_bwd` (the fused backward), wrapped by FusedQuantRead; and
+DeployedQuantisedConfidenceLUT's `deploy_fwd` -- and `scalars`, the forward of the lutorch_ex::p2_scalars op below
+(p2::table_scalars, csrc/pow2_scalars.cuh, for every table), which no class calls.
 
 Built lazily with torch.utils.cpp_extension on first use, for the visible device's architecture, and ONLY on an
 architecture in VALIDATED_ARCHES: an explicit allowlist of the compute capabilities on which the kernel has been
@@ -16,10 +17,13 @@ requirement. Anything else -- no CUDA, an architecture not on the list, no nvcc,
 return None and records the classified cause (cartridges/_fallback.py), which the fused classes raise with. There is
 no fallback and no switch: to run without the extension, construct QuantisedConfidenceLUT.
 
-CUSTOM OP -- the per-table integers of the power-of-two read.
+CUSTOM OP -- the per-table integers of the power-of-two read: a test oracle, not a production path.
 
-Its integers must agree with the torch definition in _pow2 (blend_exponents). That is tested, not guaranteed by
-construction: tests/test_fused_vs_reference.py compares the fused class with the reference class.
+lutorch_ex::p2_scalars exposes p2::table_scalars -- the device function the production kernels compute their
+integers with -- on its own, so tests/test_fused_vs_reference.py can compare those integers with the torch definition
+in _pow2 (blend_exponents) on every table. No class calls it: FusedQuantisedConfidenceLUT runs
+FusedQuantRead (quant_fwd / quant_bwd) and DeployedQuantisedConfidenceLUT runs deploy_fwd. It is registered by
+ensure_registered(), which also builds the extension the production kernels need.
 
 Backward: RECOMPUTE with the torch expression. The op's backward re-evaluates the straight-through form
 (_pow2.ste_cell_weights) with the op's integers held fixed and returns autograd's gradient of it: the same code as the
@@ -100,13 +104,13 @@ def require_deploy_cuda(module, x: torch.Tensor):
 
 
 # ======================================================================================================================
-# the lutorch_ex::p2_scalars custom op
+# the lutorch_ex::p2_scalars custom op (a test oracle; see the module docstring)
 _registered = False
 
 
 def ensure_registered() -> bool:
-    """Build / load the extension and register lutorch_ex::p2_scalars, once and eagerly (before any torch.compile'd
-    forward). False when the extension is unavailable (never raises; the cause is recorded)."""
+    """Build / load the extension, once, and register the lutorch_ex::p2_scalars test op with it. False when the
+    extension is unavailable (never raises; the cause is recorded)."""
     global _registered
     if _registered:
         return True

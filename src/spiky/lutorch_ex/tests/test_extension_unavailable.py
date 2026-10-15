@@ -198,7 +198,7 @@ def test_no_backend_argument(cls):
         cls(_spec(), seed=0, backend="cuda", **({"read_top_n": 1} if "Confidence" in cls.__name__ else {}))
 
 
-# -- FusedQuantisedConfidenceLUT (the p2_scalars op) -----------------------------------------------------------------
+# -- FusedQuantisedConfidenceLUT (the pow2_int8_read extension) ------------------------------------------------------
 
 @pytest.fixture
 def no_quantised_ext(monkeypatch):
