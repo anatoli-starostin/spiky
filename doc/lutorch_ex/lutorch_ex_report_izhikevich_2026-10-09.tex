@@ -927,8 +927,8 @@ the int8 form that is used for decode. Two reference classes are added for compa
 taken from the benchmark records in the repository, \code{src/spiky/lutorch\_ex/benchmarks/results\_2026-10-15/}
 (\code{rtx5090.md} and \code{h100.md}). They were measured on an RTX 5090 and on an H100 with the same code
 and the same settings, using the benchmark module of the library,
-\code{spiky.lutorch\_ex.benchmarks.bench\_snapshot}. The records use 16 heads, twice as many as the model
-of the sweep, and 8{,}192 input vectors.
+\code{spiky.lutorch\_ex.benchmarks.bench\_snapshot}. The table uses the large batch of the records,
+32{,}768 input vectors, with 16 heads, twice as many as the model of the sweep.
 
 The reference classes are written in plain PyTorch, to be easy to understand, and the fused classes are
 tested against them. The Manifesto reference classes are not in the table: their training step runs
@@ -944,24 +944,24 @@ records contain no CPU timings.
 \cmidrule(lr){2-3}\cmidrule(lr){4-5}
 lookup variant & decode ms & step ms & decode ms & step ms & peak MiB \\
 \midrule
-\code{FusedManifestoHardLUT}, rational           & 0.281 & 1.545 & 0.447 & 2.072 & 96.0 \\
-\code{FusedManifestoHardLUT}, soft-sign          & 0.297 & 1.929 & 0.619 & 3.012 & 96.0 \\
-\code{FusedManifestoSoftLUT}, rational           & 0.492 & 2.086 & 0.650 & 2.380 & 96.0 \\
-\code{FusedManifestoSoftLUT}, soft-sign          & 0.509 & 2.321 & 0.706 & 3.066 & 96.0 \\
-\code{FusedConfidenceLUT} $n=1$                  & 0.293 & 1.517 & 0.402 & 1.987 & 96.4 \\
-\code{FusedConfidenceLUT} $n=2$                  & 0.507 & 2.414 & 0.722 & 3.103 & 96.4 \\
-\code{FusedQuantisedConfidenceLUT} $n=1$         & 0.335 & 1.474 & 0.688 & 1.915 & 128.4 \\
-\code{FusedQuantisedConfidenceLUT} $n=2$         & 0.565 & 2.497 & 0.952 & 2.744 & 128.4 \\
-\code{DeployedQuantisedConfidenceLUT} $n=1$      & 0.242 & --    & 0.353 & --    & -- \\
-\code{DeployedQuantisedConfidenceLUT} $n=2$      & 0.336 & --    & 0.476 & --    & -- \\
+\code{FusedManifestoHardLUT}, rational           & 1.026 & 5.778 & 1.599 & 7.643 & 240.0 \\
+\code{FusedManifestoHardLUT}, soft-sign          & 1.042 & 7.265 & 2.199 & 11.351 & 240.0 \\
+\code{FusedManifestoSoftLUT}, rational           & 1.899 & 8.030 & 2.488 & 8.971 & 240.0 \\
+\code{FusedManifestoSoftLUT}, soft-sign          & 1.921 & 8.715 & 2.614 & 11.597 & 240.0 \\
+\code{FusedConfidenceLUT} $n=1$                  & 1.075 & 5.697 & 1.443 & 7.289 & 241.5 \\
+\code{FusedConfidenceLUT} $n=2$                  & 1.981 & 9.205 & 2.765 & 11.712 & 241.5 \\
+\code{FusedQuantisedConfidenceLUT} $n=1$         & 1.274 & 5.383 & 2.449 & 6.829 & 369.5 \\
+\code{FusedQuantisedConfidenceLUT} $n=2$         & 2.131 & 9.072 & 3.558 & 10.197 & 369.5 \\
+\code{DeployedQuantisedConfidenceLUT} $n=1$      & 0.909 & --    & 1.296 & --    & -- \\
+\code{DeployedQuantisedConfidenceLUT} $n=2$      & 1.291 & --    & 1.763 & --    & -- \\
 \midrule
 \multicolumn{6}{@{}l}{\emph{reference classes, for comparison}} \\
-\code{ConfidenceLUT} $n=2$                       & 1.801 & 5.389 & 1.751 & 6.697 & 840.0 \\
-\code{QuantisedConfidenceLUT} $n=2$              & 2.585 & 12.489 & 4.484 & 19.123 & 1142.4 \\
+\code{ConfidenceLUT} $n=2$                       & 5.179 & 21.281 & 6.782 & 26.222 & 3216.0 \\
+\code{QuantisedConfidenceLUT} $n=2$              & 9.997 & 49.497 & 17.107 & 74.765 & 4269.4 \\
 \bottomrule
 \end{tabular}
 \caption{Timings of one multi-head LUT alone, with $h_\text{in}=h_\text{out}=16$, \code{tph}$=64$,
-\code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, in fp32, on 8{,}192 random input vectors, from the
+\code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, in fp32, on 32{,}768 random input vectors, from the
 benchmark records \code{benchmarks/results\_2026-10-15/} of the library (torch 2.9.1, CUDA 13.0).
 \emph{Decode} is a forward pass in evaluation mode without gradients. \emph{Step} is one training step, a
 forward and a backward pass. Each time is the median wall-clock time of 100 steps, after 20 warm-up steps
@@ -974,27 +974,27 @@ above what is allocated before it; it is the same on both GPUs. The deployed cla
 \needlines{5}
 The table shows the following.
 \begin{itemize}\itemsep0pt
-\item \textbf{Most of a training step is the backward pass.} A fused training step takes $1.5$ to $2.5$
-  ms on the RTX 5090 and $1.9$ to $3.1$ ms on the H100. According to the records, the backward pass takes
-  $74$ to $82\%$ of it on the RTX 5090.
+\item \textbf{Most of a training step is the backward pass.} A fused training step takes $5.4$ to $9.2$
+  ms on the RTX 5090 and $6.8$ to $11.7$ ms on the H100. According to the records, the backward pass takes
+  $74$ to $84\%$ of it on the RTX 5090.
 \item \textbf{A second row costs time in decode.} On the RTX 5090, the decode time grows by a factor of
-  about $1.7$ from one row to two rows (from $0.28$ to $0.49$ ms for Manifesto, from $0.29$ to $0.51$
-  ms for confidence, and from $0.34$ to $0.57$ ms for its int8 counterpart in training form).
+  $1.7$ to $1.85$ from one row to two rows (from $1.03$ to $1.90$ ms for Manifesto, from $1.08$ to $1.98$
+  ms for confidence, and from $1.27$ to $2.13$ ms for its int8 counterpart in training form).
 \item \textbf{The int8 decode is the fastest decode of the confidence lookup variants.}
   \code{DeployedQuantisedConfidenceLUT} reads the int8 tables with one kernel. On the RTX 5090 it takes
-  $0.24$ ms with one row and $0.34$ ms with two rows, against $0.29$ and $0.51$ ms for the floating-point
+  $0.91$ ms with one row and $1.29$ ms with two rows, against $1.08$ and $1.98$ ms for the floating-point
   \code{FusedConfidenceLUT}; the H100 shows the same order. Its tables also need a quarter of the memory
   ($6$~MiB instead of $24$~MiB per layer of the sweep).
 \item \textbf{The soft-sign uncertainty function costs training time.} It makes the training step of the
-  Manifesto classes longer by $11$ to $25\%$ on the RTX 5090, and by $29$ to $45\%$ on the H100. On the
-  RTX 5090 it changes the decode time by $6\%$ or less; on the H100 it makes the decode of the hard lookup
+  Manifesto classes longer by $9$ to $26\%$ on the RTX 5090, and by $29$ to $49\%$ on the H100. On the
+  RTX 5090 it changes the decode time by $2\%$ or less; on the H100 it makes the decode of the hard lookup
   $38\%$ longer.
 \item \textbf{The fused classes are faster and need less memory.} At $n=2$, the training step of
-  \code{FusedConfidenceLUT} is $2.2$ times faster than that of the compiled reference class
-  \code{ConfidenceLUT} on both GPUs, and it needs $8.7$ times less memory. For the int8 lookup variant the
-  training step is $5$ to $7$ times faster.
-\item \textbf{The RTX 5090 is faster than the H100 here.} On every line of the table except the decode of
-  \code{ConfidenceLUT}, the RTX 5090 takes less time, by a factor of up to about $2$.
+  \code{FusedConfidenceLUT} is $2.2$ to $2.3$ times faster than that of the compiled reference class
+  \code{ConfidenceLUT}, and it needs $13$ times less memory. For the int8 lookup variant the training step
+  is $5.5$ to $7.3$ times faster, with $12$ times less memory.
+\item \textbf{The RTX 5090 is faster than the H100 here.} On every line of the table, the RTX 5090 takes
+  less time, by a factor of $1.1$ to $2.1$.
 \end{itemize}
 
 \subsection{Which lookup variant to use}
