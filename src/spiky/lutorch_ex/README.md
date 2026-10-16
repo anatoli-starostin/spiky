@@ -14,10 +14,15 @@ The geometry, the addressing and the wrapper are fixed. The *read mathematics* �
 what gradient training sees — is a swappable **cartridge**. The mathematics of every cartridge, the design choices and
 a language-model comparison against a dense baseline are in the report
 [`doc/lutorch_ex/lutorch_ex_report.pdf`](../../../doc/lutorch_ex/lutorch_ex_report.pdf) (source:
-`doc/lutorch_ex/lutorch_ex_report.tex`); this README refers to its sections as "report §N".
+`doc/lutorch_ex/lutorch_ex_report.tex`); this README refers to its sections as "report §N". The report calls a
+cartridge a *lookup variant*: "cartridge" is the Python API's term only.
 
-**Install.** `lutorch_ex` is part of the `spiky` package: `pip install -e .` from the repository root (see the
-[repository README](../../../README.md)).
+**Install.** `lutorch_ex` needs only PyTorch and `ninja` (plus the CUDA toolkit for the fused classes); it uses no
+other spiky code. In the spiky repository it comes with the `spiky` package: `pip install -e .` from the repository
+root (see the [repository README](../../../README.md)). On its own:
+`pip install "spiky-lutorch-ex @ git+https://github.com/anatoli-starostin/spiky@<commit>#subdirectory=src/spiky/lutorch_ex"`,
+with the extras `[deploy]` (safetensors output) and `[test]`. The import is `spiky.lutorch_ex` either way; install one
+or the other, not both.
 
 **What runs where.** Each cartridge is either a *reference* class or a *fused* class:
 
@@ -30,8 +35,7 @@ a language-model comparison against a dense baseline are in the report
   input and the PyTorch definition for a CPU input.
 
 The kernels live in three CUDA extensions (`cartridges/csrc/`), built with `torch.utils.cpp_extension` the first time
-a class needs one (`FusedQuantisedConfidenceLUT`: when it is constructed). The build needs `setuptools`, `ninja` and
-the CUDA toolkit (`nvcc`). The `lutorch_ex_pow2_int8_read` extension, used by `FusedQuantisedConfidenceLUT` and
+a class needs one. The build needs `setuptools`, `ninja` and the CUDA toolkit (`nvcc`). The `lutorch_ex_pow2_int8_read` extension, used by `FusedQuantisedConfidenceLUT` and
 `DeployedQuantisedConfidenceLUT`, is enabled only on sm_120 and sm_90 GPUs.
 
 **No fallback.** A fused class never falls back to PyTorch, and neither does `DeployedQuantisedConfidenceLUT` on a
@@ -84,13 +88,13 @@ fan-in (`h_out == 1`) they are summed into the one output head.
 ### Cartridges
 
 Every cartridge computes, per group, `y = sum over tables t of a_t * W_t[c_t] + b_t * W_t[c'_t]`, and differs from
-the others only in the coefficients `a`, `b` and in what training differentiates (report §3). The classes and their
+the others only in the coefficients `a`, `b` and in what training differentiates (report §2, §5.1). The classes and their
 properties are in the [Cartridges specification](#cartridges-specification). All are importable from
 `spiky.lutorch_ex`.
 
 **Compilation.** On CUDA the reference classes' eval forward is `torch.compile`d. Their training forward is compiled
-for `ConfidenceLUT` and `QuantisedConfidenceLUT`, and runs eager for `ManifestoHardLUT` and `ManifestoSoftLUT`. The
-CPU runs eager. The fused classes and `DeployedQuantisedConfidenceLUT` are never compiled: they call their kernels.
+for `ConfidenceLUT` and `QuantisedConfidenceLUT`, and runs eager, by design, for `ManifestoHardLUT` and
+`ManifestoSoftLUT` (their `_COMPILE_TRAIN` is False). The CPU runs eager. The fused classes and `DeployedQuantisedConfidenceLUT` are never compiled: they call their kernels.
 
 **Precision.** The reference classes other than `QuantisedConfidenceLUT`, and the fused Manifesto and Confidence
 classes, accept bfloat16 / float16 inputs and low-precision tables (dtypes per class in the specification table): the
@@ -119,7 +123,7 @@ Manifesto (`ManifestoHardLUT`, `ManifestoSoftLUT`, `FusedManifestoHardLUT`, `Fus
 
 | argument | default | meaning |
 | --- | --- | --- |
-| `uncertainty_func` | `"rational"` | the neighbour's share `U` of the blend: `"rational"` (fixed, no parameters) or `"softsign"` (two learned temperatures); report §3.2, §3.3 |
+| `uncertainty_func` | `"rational"` | the neighbour's share `U` of the blend: `"rational"` (fixed, no parameters) or `"softsign"` (two learned temperatures); report §2.2 |
 | `soft_score_temp` | `0.5` | `uncertainty_func="softsign"` only: initial `T_soft` |
 | `select_temp` | `0.5` | `uncertainty_func="softsign"` only: initial `T_sel` |
 | `learnable_temps` | `True` | `uncertainty_func="softsign"` only: `False` stores both temperatures as frozen buffers |
@@ -137,7 +141,7 @@ Confidence (`ConfidenceLUT`, `FusedConfidenceLUT`, `QuantisedConfidenceLUT`, `Fu
 | `learnable_score` | `True` | `False` freezes `β`, `γ` as buffers |
 | `read_tau_learnable` | `True` | `False` freezes `τ` as a buffer; `read_top_n=2` only (raises at `read_top_n=1`) |
 | `knobs` | `None` | `FusedConfidenceLUT` only: a `CudaKnobs` launch configuration (from `spiky.lutorch_ex.cartridges._cuda_ext`) |
-| `quant_mode` | `"p2_int8"` | quantised classes only: the quantisation preset (`"p2_int8"` is the only one; report §3.5) |
+| `quant_mode` | `"p2_int8"` | quantised classes only: the quantisation preset (`"p2_int8"` is the only one; report §6) |
 | `quant_overrides` | `None` | quantised classes only: may set `Q` (in `[0, 3]`), `L` (in `[1, 8]`) and `kmax`; the window `[kmax − L + 1, kmax]` must stay inside `[-3, 4]` |
 
 ### The wrapper: `ProjectionMHL`
@@ -148,7 +152,7 @@ ProjectionMHL(cartridge, d_model=None, *, input_dim=None, output_dim=None,
               fp8_projections=(), compress_fp8_out_dtype=torch.float32, projection_dtype=None)
 ```
 
-The wrapper puts a linear map on each side of the cartridge (report §2):
+The wrapper puts a linear map on each side of the cartridge (report §4):
 `[N, input_dim] → compress → [N, h_in, d_in] → cartridge → [N, h_out·d_out] → decompress → [N, output_dim]`.
 It takes 2-D input, so a sequence batch is flattened first.
 
@@ -172,7 +176,7 @@ It takes 2-D input, so a sequence batch is flattened first.
 
 `export_deployment(model, path)` writes a model whose `ProjectionMHL` layers wrap a `QuantisedConfidenceLUT` (or
 `FusedQuantisedConfidenceLUT`) in a compact form, and `load_deployment(path, make_skeleton, device=None)` reads it back
-(report §3.5):
+(report §6):
 
 - Export asks every `ProjectionMHL`'s cartridge for a compact payload. A quantised cartridge gives its int8 tables,
   anchors and scalars, and its per-channel power-of-two output scale is folded into a copy of the layer's `decompress`
@@ -384,15 +388,15 @@ The record also holds the same cells at 32,768 vectors (its `large` geometry); s
 
 | name | short description | python class | input dtypes | output dtype | table dtypes | default table dtype | custom CUDA kernels | eval ms (H100) | train ms (H100) | train peak MiB (H100) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Manifesto, hard read | returns the addressed row; trains the input through the blend with the neighbour, the table on the addressed row only (report §3.1–§3.3) | `ManifestoHardLUT` | fp32, fp64, bf16, fp16 | input's | fp32, fp64, bf16, fp16 | fp32 | no | 1.174 | 19.551 † | 1304.0 |
-| Manifesto, soft read | returns the blend of the addressed row and its neighbour (report §3.1–§3.3) | `ManifestoSoftLUT` | fp32, fp64, bf16, fp16 | input's | fp32, fp64, bf16, fp16 | fp32 | no | 2.082 | 19.809 † | 1304.0 |
+| Manifesto, hard read | returns the addressed row; trains the input through the blend with the neighbour, the table on the addressed row only (report §2, §5.1) | `ManifestoHardLUT` | fp32, fp64, bf16, fp16 | input's | fp32, fp64, bf16, fp16 | fp32 | no | 1.174 | 19.551 † | 1304.0 |
+| Manifesto, soft read | returns the blend of the addressed row and its neighbour (report §2) | `ManifestoSoftLUT` | fp32, fp64, bf16, fp16 | input's | fp32, fp64, bf16, fp16 | fp32 | no | 2.082 | 19.809 † | 1304.0 |
 | Manifesto, hard read, fused | `ManifestoHardLUT`'s mathematics in CUDA kernels (the report does not describe the kernels) | `FusedManifestoHardLUT` | fp32, bf16, fp16 (CUDA) | input's | fp32, bf16 | fp32 | yes | 0.447 | 2.072 | 96.0 |
 | Manifesto, soft read, fused | `ManifestoSoftLUT`'s mathematics in CUDA kernels (the report does not describe the kernels) | `FusedManifestoSoftLUT` | fp32, bf16, fp16 (CUDA) | input's | fp32, bf16 | fp32 | yes | 0.650 | 2.380 | 96.0 |
-| Confidence | each table weighted by a confidence score of its margins; one cell (n=1) or a two-cell blend (n=2) (report §3.4) | `ConfidenceLUT` | fp32, fp64, bf16, fp16 | input's | fp32, fp64, bf16, fp16 | fp32 | no | 1.501 · 1.751 | 4.478 · 6.697 | 728.0 · 840.0 |
+| Confidence | each table weighted by a confidence score of its margins; one cell (n=1) or a two-cell blend (n=2) (report §2.2) | `ConfidenceLUT` | fp32, fp64, bf16, fp16 | input's | fp32, fp64, bf16, fp16 | fp32 | no | 1.501 · 1.751 | 4.478 · 6.697 | 728.0 · 840.0 |
 | Confidence, fused | `ConfidenceLUT`'s mathematics in CUDA kernels (the report does not describe the kernels) | `FusedConfidenceLUT` | fp32, bf16, fp16 (CUDA) | input's | fp32, bf16 | fp32 | yes | 0.402 · 0.722 | 1.987 · 3.103 | 96.4 · 96.4 |
-| Confidence, int8 | `ConfidenceLUT` trained quant-aware for an int8 read: int8 rows, power-of-two weights (report §3.5) | `QuantisedConfidenceLUT` | fp32, fp64 | input's | fp32, fp64 | fp32 | no | 2.948 · 4.484 | 11.740 · 19.123 | 568.8 · 1142.4 |
+| Confidence, int8 | `ConfidenceLUT` trained quant-aware for an int8 read: int8 rows, power-of-two weights (report §6) | `QuantisedConfidenceLUT` | fp32, fp64 | input's | fp32, fp64 | fp32 | no | 2.948 · 4.484 | 11.740 · 19.123 | 568.8 · 1142.4 |
 | Confidence, int8, fused | `QuantisedConfidenceLUT`'s mathematics in CUDA kernels (the report does not describe the kernels) | `FusedQuantisedConfidenceLUT` | fp32 (CUDA) | fp32 | fp32 | fp32 | yes | 0.688 · 0.952 | 1.915 · 2.744 | 128.4 · 128.4 |
-| Confidence, int8, deployed | inference-only int8 read built from an export; read width from the export (report §3.5) | `DeployedQuantisedConfidenceLUT` | CUDA: fp32; CPU: fp32, fp64 | CUDA: fp32; CPU: input's | int8 (from the export) | int8 | yes (CUDA input); no (CPU input) | 0.353 · 0.476 | n/a | n/a |
+| Confidence, int8, deployed | inference-only int8 read built from an export; read width from the export (report §6) | `DeployedQuantisedConfidenceLUT` | CUDA: fp32; CPU: fp32, fp64 | CUDA: fp32; CPU: input's | int8 (from the export) | int8 | yes (CUDA input); no (CPU input) | 0.353 · 0.476 | n/a | n/a |
 
 - Input and table dtypes are independent: every listed combination runs. With float32 / float64 input and table the
   output is in the table's dtype (a float64 input with a float32 table gives float32, and the reverse float64). When the
@@ -413,7 +417,7 @@ The record also holds the same cells at 32,768 vectors (its `large` geometry); s
 ## Regularisers
 
 Both regularisers belong to every cartridge that has a trainable table — every class except
-`DeployedQuantisedConfidenceLUT` — and both are off by default (report §4).
+`DeployedQuantisedConfidenceLUT` — and both are off by default (report §5.2).
 
 **Cell total variation.** A table's `2**nap` cells are the corners of an `nap`-dimensional cube.
 `cartridge.cell_tv()` is the mean of `||W[c] - W[c']||²` over every pair of cells whose addresses differ in one bit,

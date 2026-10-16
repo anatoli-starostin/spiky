@@ -1,6 +1,13 @@
 % lutorch_ex library report.
 % Build: latexmk -pdf -interaction=nonstopmode -halt-on-error lutorch_ex_report.tex
-% fig_curves.pdf is Figure 3, plotted from the run histories; the code is src/spiky/lutorch_ex/.
+% fig_curves_v2.pdf is Figure 4, plotted from the val_bpb histories of the nine runs; the code is
+% src/spiky/lutorch_ex/.
+%
+% The report goes from the smallest element to the full system (Figure 1):
+%   1 one table, 2 lookup variants, 3 heads and the multi-head LUT, 4 the wrapper,
+%   5 training (gradients and regularizers), 6 the int8 lookup and decode, 7 experiments.
+% Vocabulary (software side): table, lookup variant (a ``cartridge'' in the code), head, multi-head LUT, wrapper, layer.
+% Code identifiers (nap, tph, compress, decompress, cell_tv, read_top_n, export_deployment, ...) are unchanged.
 \documentclass[11pt]{article}
 \usepackage[margin=1in]{geometry}
 \usepackage{lmodern}
@@ -17,66 +24,124 @@
 \usepackage{hyperref}
 \hypersetup{colorlinks=true,linkcolor=black,citecolor=blue!60!black,urlcolor=blue!60!black,
   pdftitle={The lutorch\_ex library},pdfauthor={Anatoly Starostin}}
-\captionsetup{font=small,labelfont=bf,skip=4pt}
-\setlength{\parskip}{0.25em}
+\captionsetup{font=small,labelfont=bf,skip=6pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\renewcommand{\arraystretch}{1.45}
+\emergencystretch=2.5em
+\renewcommand{\topfraction}{0.85}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\bottomfraction}{0.5}
+\setcounter{topnumber}{3}
+\setcounter{totalnumber}{4}
 % typewriter with a line-break opportunity after every underscore and slash (long class and file names)
 \DeclareRobustCommand{\code}[1]{{\renewcommand{\_}{\textunderscore\allowbreak}\texttt{#1}}}
+\newcommand{\term}[1]{\textbf{#1}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
 \newcommand{\sgn}{\operatorname{sgn}}
+% \needlines{n}: start a new page here if fewer than n lines are left on the current one
+\newcommand{\needlines}[1]{\par\ifdim\dimexpr\pagegoal-\pagetotal\relax<#1\baselineskip \newpage\fi}
 \lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,breaklines=true,frame=single,language=Python,
         keywordstyle=\color{blue!60!black},commentstyle=\color{green!40!black},showstringspaces=false,
-        aboveskip=4pt,belowskip=4pt,xleftmargin=2pt}
-\title{\textbf{The \code{lutorch\_ex} library}\\[2pt]\large lookup-table layers: tables, projections, cartridges, and results}
-\author{Anatoly Starostin\\DeepSpike Inc.}
-\date{October 2026}
+        aboveskip=6pt,belowskip=4pt,xleftmargin=2pt}
+\title{\vspace{-2.5em}\textbf{The \code{lutorch\_ex} library}\\[2pt]\large Multi-head lookup tables in PyTorch, from one table to the full model}
+\author{Anatoly Starostin, DeepSpike Inc.\\[3pt]\normalsize October 2026}
+\date{}
 \begin{document}
 \maketitle
-\vspace{-1.2em}
+\vspace{-3.5em}
 
-\noindent\textbf{In one paragraph.} \code{lutorch\_ex} is a small PyTorch library of \emph{lookup-table
-layers}: drop-in replacements for a feed-forward layer that, instead of multiplying the input by weight
-matrices, turn it into a few sign bits, use those bits as addresses into many small learnable tables, and
-add up the rows they read. This report walks through it in four parts: how a table is addressed and read,
-and how tables form a layer (\S\ref{sec:idea}); a projection wrapper that gives a stack of tables an ordinary vector-in, vector-out
-interface, so it can sit anywhere a feed-forward layer would (\S\ref{sec:projection}); \emph{cartridges}
---- interchangeable read mathematics behind
-one fixed contract, in three generations, one of which is quantised to int8 and ships with a deployment
-path (\S\ref{sec:cartridges}); and the two regularisers every cartridge shares (\S\ref{sec:reg}).
-\S\ref{sec:ml} reports a seven-configuration sweep at 48k steps.
+\section*{Abstract}
+
+\code{lutorch\_ex} is a small PyTorch library that replaces the feed-forward network (FFN) of a
+transformer layer with lookup tables (LUTs). An FFN multiplies its input by two weight matrices. The
+replacement performs a simpler operation. It turns the input into a small number of sign bits, uses those
+bits as addresses into many small learnable tables, and adds up the rows that the addresses select. The
+lookup itself needs no matrix multiplication. In a sweep of eight lookup variants trained for 48{,}000
+steps, with one seed per configuration, the best lookup variant of the library reaches a slightly lower
+validation loss than the dense FFN ($1.0865$ against $1.0894$ bits per byte). Its 8-bit version reaches
+$1.0899$ bits per byte, the same as the dense FFN within the variation between runs.
+
+\section*{How the report is organized}
+
+The report builds the library from its smallest element to the full system, and each level contains the
+one before it (Figure~\ref{fig:levels}). Sections~\ref{sec:table} to~\ref{sec:projection} go through the
+levels: one table, the lookup variants (the rules for what a table returns), the heads and the multi-head LUT,
+and the wrapper, which gives the multi-head LUT the interface of an FFN. Two further sections apply to
+all of these levels and are not shown in the figure: Section~\ref{sec:training} describes training, and
+Section~\ref{sec:quant} describes the same computation with 8-bit tables. Section~\ref{sec:ml} reports the
+experiments with the full model. Table~\ref{tab:notation} collects the notation.
+
+\begin{figure}[!htb]
+\centering
+\begin{tikzpicture}[x=1mm, y=1mm,
+  lvlname/.style={font=\footnotesize\bfseries, align=center, text width=21mm, anchor=north, inner sep=0pt},
+  lvlhint/.style={font=\scriptsize, align=center, text width=21mm, anchor=north, inner sep=0pt},
+  sectag/.style={draw=black!45, fill=white, rounded corners=1.5pt, font=\scriptsize, inner xsep=3pt, inner ysep=1.6pt}]
+\def\W{25.4}% width of one label column, in mm
+\def\D{1.5}%  inset between two nested boxes
+\def\H{31.5}% height of the innermost box
+% the nested boxes, drawn from the outermost to the innermost
+\foreach \k/\fillcol in {6/black!4, 5/blue!8, 4/orange!7, 3/orange!16, 2/orange!27, 1/orange!40}{
+  \draw[draw=black!60, line width=0.5pt, rounded corners=2.5pt, fill=\fillcol]
+    ({-(\k-1)*\D},{-(\k-1)*\D}) rectangle ({\k*\W},{\H+(\k-1)*\D});
+}
+% one label column per box: name, a few words, section number
+\foreach \k/\lname/\lhint/\lsec in {
+  1/{table (LUT)}/{probes $\to$ address $\to$ row}/sec:table,
+  2/{lookup\\variant}/{one row, or two rows with coefficients}/sec:variants,
+  3/{head}/{many tables on one slice of the input, added}/sec:heads,
+  4/{multi-head\\LUT}/{several heads, concatenated}/sec:heads,
+  5/{wrapper}/{a projection in front and one behind}/sec:projection,
+  6/{model}/{a wrapper in place of each FFN}/sec:ml}{
+  \node[lvlname] at ({(\k-0.5)*\W},{\H-3.5}) {\strut\lname};
+  \node[lvlhint] at ({(\k-0.5)*\W},{\H-13.5}) {\strut\lhint};
+  \node[sectag, anchor=south] at ({(\k-0.5)*\W},2.4) {Section~\ref{\lsec}};
+}
+\end{tikzpicture}
+\caption{The levels of the library, from the smallest element to the full system. Each box contains the
+box to its left: a lookup variant is a table together with the rule for what it returns, a head is a group of
+tables, a multi-head LUT is a group of heads, and so on. Sections~\ref{sec:table}
+to~\ref{sec:projection} follow the boxes from left to right, and Section~\ref{sec:ml} reports
+experiments with the full model.}
+\label{fig:levels}
+\end{figure}
 
 % ======================================================================================================
-\section{The idea: tables addressed by an LSH}
-\label{sec:idea}
+\section{One table}
+\label{sec:table}
 
-A lookup table (LUT) replaces a multiply-accumulate with an \emph{address} and a \emph{read}. Hash the
-input to a small integer with a locality-sensitive hash (LSH) --- here, a handful of sign bits --- and
-fetch the stored vector at that address. The construction comes from Izhikevich's \emph{Spiking
-Manifesto}~\citep{manifesto}: a spiking network stores a vast number of synapses but touches only those of
-the neurons that fired, which is exactly what a table read does, and the \emph{order} of spikes rather than
-their magnitude carries the information, which is exactly what a sign-bit address encodes.
+This section describes the innermost box of Figure~\ref{fig:levels}: a single lookup table.
 
-\paragraph{One table.} Work in a space $z\in\mathbb{R}^{d_\text{in}}$ (Figure~\ref{fig:table}). An
-\emph{anchor} is an index into $z$. A table owns \code{nap}\footnote{\code{nap}: the number of anchor
-probes per table.} \emph{probes}; probe $j$ is either an anchor
-pair $(a_j,b_j)$, giving $u_j=z[a_j]-z[b_j]$, or a single anchor $a_j$, giving $u_j=z[a_j]$. Each probe
-contributes one bit $[\,u_j>0\,]$, so an address $c\in[0,K)$ has \code{nap} bits and the table has
-$K=2^{\text{nap}}$ cells, each holding a learnable row $W[c]\in\mathbb{R}^{d_\text{out}}$. The magnitudes $|u_j|$ are the
-\emph{margins}: how far each bit is from flipping. The smallest one, $u^\star=\min_j|u_j|$, marks the
-least certain bit, and flipping that bit gives the \emph{neighbour} cell $c'$ --- the one the input would
-land in under the smallest perturbation. Every read mathematics in this library --- every
-\emph{cartridge}, in the vocabulary of \S\ref{sec:cartridges} --- uses $c$, $u$, and $c'$ and nothing else
-from the input.
+A lookup table does its work with memory instead of arithmetic. A matrix layer multiplies its input by
+weights and adds up the products. A table instead computes an \term{address} from its input and returns
+the vector that is stored at that address. This operation is called a \term{lookup}. The address must be
+cheap to compute, and inputs that are similar to each other should usually receive the same address. A
+hash function with this property is called a locality-sensitive hash (LSH)~\citep{lsh}. The hash function
+used in this library consists of a small number of sign bits.
 
-\paragraph{Many tables, many heads.} Tables are grouped into $G$ \emph{heads} of \code{tph}\footnote{\code{tph}:
-tables per head.} tables each, and the heads together make up a \emph{layer}, the unit that replaces a
-feed-forward layer. A head reads its own $d_\text{in}$-wide slice of the input, and its output is the
-\emph{sum} of its \code{tph} table reads (weighted, in some cartridges). The $G$ head outputs are then
-\emph{concatenated} into the layer's output, $G\,d_\text{out}$ wide. A layer may instead fan all heads
-into one shared output by summing them.
+The construction comes from Izhikevich's \emph{Spiking Manifesto}~\citep{manifesto}. A spiking network
+stores a very large number of synapses, but at any moment it uses only the synapses of the neurons that
+have fired. A table lookup works in the same way: the table is large, and each input uses only one row of
+it. In the Manifesto, the information is carried by the order in which the neurons fire. An address made
+of sign bits encodes this order, because each bit records which of two neurons fired first.
 
-\paragraph{Two kinds of probe.} Which kind a layer uses is fixed when the layer is built. In the default,
-pair form, every probe compares two coordinates of $z$: this is the manifesto's Eq.~1, where the bit
-records which of two neurons fired first. In the single form every probe tests the sign of one
-coordinate instead.
+\textbf{From the input to an address.} A table receives a vector $z\in\mathbb{R}^{d_\text{in}}$ as its
+input (Figure~\ref{fig:table}). It examines $z$ with a small number of \term{probes}. The code calls the
+number of probes \code{nap}. Each probe computes one number $u_j$ from $z$. There are two kinds of probe.
+A probe on an \term{anchor pair} $(a_j,b_j)$ compares two coordinates of $z$, $u_j=z[a_j]-z[b_j]$. A
+probe on a \term{single anchor} $a_j$ uses one coordinate, $u_j=z[a_j]$. An \term{anchor} is a position
+in $z$, that is, the index of one coordinate. The anchors are chosen at random when the table is created,
+and training does not change them.
+
+Each probe produces one bit: the bit is 1 if $u_j>0$, and 0 otherwise. The \code{nap} bits, written next
+to each other, form the address $c$. The address is an integer between $0$ and $K-1$, where
+$K=2^{\text{nap}}$.
+
+\textbf{From the address to a row.} The table has $K$ rows, one for each address. Row $c$ is a learnable
+vector $W[c]\in\mathbb{R}^{d_\text{out}}$. In the simplest case, the lookup returns this row, so the
+table maps the input $z$ to the row $W[c(z)]$. A table with \code{nap} probes therefore divides its
+inputs into $K$ classes, and it stores one vector for each class.
 
 \begin{figure}[t]
 \centering
@@ -91,7 +156,7 @@ coordinate instead.
   note/.style={font=\scriptsize, text=black!60, align=center, text width=58mm}]
 % ================= panel (a): anchor pairs =================
 \begin{scope}
-\node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(a) probes = anchor pairs};
+\node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(a) probes on anchor pairs};
 \foreach \i/\y in {1/1.8,2/1.2,3/0.6,4/0.0}{\node[coord] (z\i) at (0,\y) {$z_{\i}$};}
 \node[cmp] (c1) at (2.0,1.5) {$z_1\!-\!z_3>0$};
 \node[cmp] (c2) at (2.0,0.3) {$z_2\!-\!z_4>0$};
@@ -106,15 +171,15 @@ coordinate instead.
 \foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (r\r) at (6.8,\y) {W[\r]};}
 \node[row, fill=orange!35] (rc) at (6.8,0.6) {W[2]};
 \node[row, fill=orange!12] (ra) at (6.8,0.0) {W[3]};
-\node[tag, anchor=west] at (7.5,0.6) {$c$: read};
-\node[tag, anchor=west] at (7.5,0.0) {$c'$: neighbour};
+\node[tag, anchor=west] at (7.5,0.6) {$c$: selected};
+\node[tag, anchor=west] at (7.5,0.0) {$c'$: neighbor};
 \node[tag, anchor=south] at (6.8,2.1) {table, $K=2^{\text{nap}}=4$ rows};
 \draw[->] (ix) -- (rc.west);
-\node[note] at (4.3,-0.75) {each probe compares two coordinates of $z$; the two sign bits are the row index};
+\node[note] at (4.3,-0.75) {each probe compares two coordinates of $z$; the two sign bits form the address};
 \end{scope}
 % ================= panel (b): single anchors =================
 \begin{scope}[xshift=10.7cm]
-\node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(b) probes = single anchors};
+\node[font=\small\bfseries, anchor=west] at (-0.4,2.75) {(b) probes on single anchors};
 \foreach \i/\y in {1/1.8,2/1.2,3/0.6,4/0.0}{\node[coord] (s\i) at (0,\y) {$z_{\i}$};}
 \node[cmp] (d1) at (2.0,1.5) {$z_2>0$};
 \node[cmp] (d2) at (2.0,0.3) {$z_4>0$};
@@ -129,129 +194,196 @@ coordinate instead.
 \foreach \r/\y in {0/1.8,1/1.2,2/0.6,3/0.0}{\node[row] (q\r) at (6.8,\y) {W[\r]};}
 \node[row, fill=orange!35] (qc) at (6.8,0.0) {W[3]};
 \node[row, fill=orange!12] (qa) at (6.8,0.6) {W[2]};
-\node[tag, anchor=west] at (7.5,0.0) {$c$: read};
-\node[tag, anchor=west] at (7.5,0.6) {$c'$: neighbour};
+\node[tag, anchor=west] at (7.5,0.0) {$c$: selected};
+\node[tag, anchor=west] at (7.5,0.6) {$c'$: neighbor};
 \node[tag, anchor=south] at (6.8,2.1) {table, $K=2^{\text{nap}}=4$ rows};
 \draw[->] (jx) -- (qc.west);
-\node[note] at (4.3,-0.75) {each probe tests one coordinate against zero; same address, same read};
+\node[note] at (4.3,-0.75) {each probe tests one coordinate against zero; the address is formed in the same way};
 \end{scope}
 \end{tikzpicture}}
-\caption{One lookup table in each of the two modes, \code{nap}$=2$. A probe yields one sign bit; the
-bits, most significant first, form the row index $c$, which selects one learnable row of the
-$K=2^{\text{nap}}$-row table. The probe with the smallest margin is the least certain, and flipping its
-bit names the neighbour row $c'$ (lighter), which the richer read forms described later also fetch. (a) Anchor
-pairs compare two coordinates of $z$; (b) single anchors test one coordinate against zero. A head sums
-many such tables.}
+\caption{One lookup table with two probes (\code{nap}$=2$), for each of the two kinds of probe. A probe
+yields one sign bit. The bits, most significant first, form the address $c$, which selects one learnable
+row of the table. The table has $K=2^{\text{nap}}=4$ rows. The probe with the smallest margin is the least
+certain one. If its bit is inverted, the address selects the neighbor row $c'$ (shown in a lighter
+color). A weighted retrieval (Section~\ref{sec:variants}) also fetches this row. (a) A probe on an anchor pair compares two coordinates of
+$z$. (b) A probe on a single anchor tests one coordinate against zero.}
 \label{fig:table}
 \end{figure}
 
+\textbf{Margins and the neighbor row.} The magnitudes $|u_j|$ are used as well. The magnitude $|u_j|$
+is called the \term{margin} of bit $j$. It measures how far the input is from the point where bit $j$
+changes its value. The smallest margin of a table, $u^\star=\min_j|u_j|$, is called the \term{deciding
+margin}, and the bit with this margin is the least certain bit of the address. If this bit is inverted,
+the result is a second address $c'$, which selects the \term{neighbor row}. The neighbor row is the row
+that the input would select after the smallest change of the input that changes the address. A table
+passes three things on to the next level: the address $c$, the margins $u_j$, and the neighbor address
+$c'$. The lookup variants of Section~\ref{sec:variants} use no other information about the input.
+
+\textbf{Two kinds of probe.} The kind of probe is chosen when a multi-head LUT
+(Section~\ref{sec:heads}) is built, and all of its tables use the same kind. The default kind is the
+anchor pair. It is the comparison used in the Manifesto (its Eq.~1), in which the bit records which of
+two neurons fired first. The other kind is the single anchor, which tests the sign of one coordinate.
+Section~\ref{sec:projection} compares the two kinds, because the result of the comparison depends on what
+is placed in front of the tables.
+
 % ======================================================================================================
-\section{ProjectionLUT: input and output projections}
-\label{sec:projection}
+\section{Lookup variants: what a table returns}
+\label{sec:variants}
 
-\code{ProjectionMHL} (the ``ProjectionLUT'' wrapper, Figure~\ref{fig:projlut}) puts a plain linear map on
-each side of the cartridge --- the stack of tables together with its read mathematics --- so that, from
-the outside, it takes an ordinary vector of width $D_\text{in}$ and returns one of width $D_\text{out}$,
-like any feed-forward layer, while the tables work in their narrow per-head spaces. The two widths are
-independent arguments of the wrapper and may differ. Writing $h_\text{in}$ and $h_\text{out}$ for the number of input and output heads and $d_\text{in}$,
-$d_\text{out}$ for their widths ($h_\text{in}=h_\text{out}=G$ in the usual per-head case\footnote{The two head counts
-may differ only when one of them is $1$; the library rejects every other combination. With
-$h_\text{in}=1$ the input projection produces one $d_\text{in}$-wide slice that all $G$ heads read
-(fan-out); with $h_\text{out}=1$ the heads' outputs are summed into one $d_\text{out}$-wide slice that
-the output projection consumes (fan-in).}):
-\[
-  x\in[B,D_\text{in}]\ \xrightarrow{\ \code{compress}\ }\ z\in[B,h_\text{in},d_\text{in}]
-  \ \xrightarrow{\ \code{cartridge}\ }\ y\in[B,h_\text{out},d_\text{out}]
-  \ \xrightarrow{\ \code{decompress}\ }\ \text{out}\in[B,D_\text{out}].
-\]
-\begin{itemize}\itemsep1pt
-\item \textbf{The input projection shapes the hashing.} A probe is also a hyperplane test, and what
-  plane it tests depends on whether \code{compress} is in front and on the kind of probe:
-  \begin{center}\footnotesize
-  \begin{tabular}{@{}l >{\raggedright\arraybackslash}p{4.9cm} >{\raggedright\arraybackslash}p{5.6cm}@{}}
-  \toprule
-  & single anchors & anchor pairs \\
-  \midrule
-  \code{compress} off & $x[a]>0$: an axis-aligned plane of the raw input & $x[a]-x[b]>0$: coefficients $\pm1$, zero bias --- the manifesto's form \\
-  \code{compress} on & $w_a^\top x+b_a>0$: an arbitrary learned hyperplane & $(w_a-w_b)^\top x+(b_a-b_b)>0$: also arbitrary; up to $\binom{d_\text{in}}{2}$ distinct planes per head \\
-  \bottomrule
-  \end{tabular}
-  \end{center}
-  With \code{compress} on, a single-anchor probe reads one row of the projection and is exactly the
-  manifesto's ``hyperplane LSH'' with learnable anchor vectors (\citealp[\S VIII-H]{manifesto}).
-  With \code{compress} in front, both modes get arbitrary hyperplanes, but the same projection yields far
-  more distinct planes in pair form, so tables stop re-using the same few bits; single anchors are
-  somewhat weaker, though not dramatically. Without \code{compress} the gap is large: a single anchor only
-  tests the sign of one raw coordinate, an axis-aligned split, where a pair still compares two.
-\item \textbf{The output projection compresses the tables.} A layer holds an exponential number of
-  cells --- \code{tph} tables per head, $K=2^{\text{nap}}$ cells each, times the heads, so the count is
-  exponential in \code{nap} --- and every cell stores a $d_\text{out}$-wide row, so the per-cell width
-  $d_\text{out}$ is what controls table size. For example, with 8 heads of 64 tables
-  and \code{nap}$=8$, that is $8\times64\times256=131{,}072$ cells per layer, $6.3$M table parameters at
-  $d_\text{out}=48$; in a six-block model of width $384$ that is $37.7$M over six layers, more than half
-  of its $68.2$M parameters, and at the full model width, $d_\text{out}=384$, it would be $50$M per layer. So the tables
-  live in a narrow $d_\text{out}$, and
-  \code{decompress} expands the concatenated head outputs back to model width afterwards, at the cost of one small
-  dense map per layer ($0.15$M parameters).
-\end{itemize}
-Given a learned input projection, the single-anchor mode alone would have sufficed in principle: a pair
-comparison $z[a]-z[b]>0$ is itself a hyperplane on $x$, so in principle anchor pairs could have been
-dropped and the pair form left to \code{compress} to realise. In practice it would not be: ordinary
-training has no reason to drive the \code{compress} matrix into a $\{+1,-1\}$ pair form, so recovering it
-would take machinery this library does not have, such as strict regularisation or a straight-through
-estimator onto $\pm1$ weights.
+This section describes the next box of Figure~\ref{fig:levels}. Section~\ref{sec:table} ended with the
+simplest lookup, in which the table returns the selected row $W[c]$. A table can return more than this
+row. It can also fetch the neighbor row, and it can multiply each row by a coefficient. A \term{lookup
+variant} is the rule that fixes these choices. (The code calls a lookup variant a \emph{cartridge}; this
+report uses that word only for the Python classes.) The lookup variants are interchangeable: when one
+lookup variant is replaced by another, nothing else in the system changes. Section~\ref{sec:oneformula}
+gives the single formula that all lookup variants share. The rest of the report needs only that part.
+Section~\ref{sec:generations} describes the lookup variants of the library one by one, and it can be
+skipped at first.
 
-The library keeps both anchor modes deliberately. The pair comparison is the
-Spiking Manifesto's mechanism as stated --- the relative order of two coordinates --- and it is the
-cheap special case that the whole design is built to exploit: an address bit costs two coordinate reads
-and one subtraction, with the anchors stored as integer indices and no weights of its own (the kernels
-do exactly this), whereas a general per-table hyperplane would cost a $d_\text{in}$-length dot product and
-$d_\text{in}$ weights per bit --- in the example above, with $d_\text{in}=48$, some 4{,}000 subtractions per token and layer
-against about 200{,}000 multiply-adds. Single anchors were added later for flexibility, as the even
-cheaper probe, and sit at the other end of the same trade.
+\subsection{One formula, two ways to use it}
+\label{sec:oneformula}
 
-Either projection --- the input projection \code{compress} or the output projection \code{decompress},
-but not both --- may be switched off (Identity) when the widths already match. By default both are present, \code{decompress} is
-initialised to zero and \code{compress} to $\mathcal{N}(0,0.02)$.
+For one table, every lookup variant computes a vector $f$, which is the \term{contribution} of the table to
+the output:
+\begin{equation}\label{eq:retrieval}
+  f=a\,W[c]+b\,W[c'] .
+\end{equation}
+Here $W[c]$ is the selected row, and $W[c']$ is the neighbor row, whose address differs from $c$ in the
+least certain bit. The coefficients $a$ and $b$ are numbers. They depend on the input only through the
+margins of the table. The formula is used in two ways.
+\begin{description}\itemsep2pt
+\item[Hard lookup.] The contribution is the selected row alone, that is, $a=1$ and $b=0$. The row is
+  used as it is stored, without any multiplication. This is the cheapest possible lookup.
+\item[Weighted retrieval.] Both rows are fetched, and each row is multiplied by its coefficient. The
+  neighbor row receives a larger share of the sum when the deciding margin is smaller. The reason is
+  that, with a small margin, a small change of the input would have selected the neighbor row instead.
+\end{description}
+A weighted retrieval uses Equation~\eqref{eq:retrieval} both in training and in decode (inference). A
+hard lookup also uses the neighbor row and the coefficients, but only during training, where they are
+needed to compute the gradient (Section~\ref{sec:gradient}).
 
-In code, the wrapper takes any cartridge --- the swappable read mathematics of \S\ref{sec:cartridges},
-here \code{ConfidenceLUT} --- and maps $[N,D_\text{in}]$ to $[N,D_\text{out}]$, so a sequence is
-flattened first:
-\begin{lstlisting}
-import torch
-from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
+\subsection{The lookup variants of the library}
+\label{sec:generations}
 
-spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)  # 8 heads of 64 tables
-cart = ConfidenceLUT(spec, seed=1, read_top_n=2)                    # the read mathematics
-ffn  = ProjectionMHL(cart, d_model=384)          # or input_dim=..., output_dim=... (may differ)
-x = torch.randn(4, 128, 384)                     # (B, T, D) activations
-y = ffn(x.reshape(-1, 384)).reshape(x.shape)     # torch.Size([4, 128, 384])
-\end{lstlisting}
-Any other cartridge of \S\ref{sec:cartridges} can take \code{ConfidenceLUT}'s place.
+The library has two families of lookup variants (Table~\ref{tab:matrix}). The Manifesto lookup variants
+compute the coefficients from the deciding margin with an \term{uncertainty function} $U$. The argument
+\code{uncertainty\_func} chooses $U$: a fixed function (\code{"rational"}, the default), or a function
+with two learnable temperatures (\code{"softsign"}). The confidence lookup variants also use all the
+other margins of the table. The Manifesto lookup variants are available both as a hard lookup and as a
+weighted retrieval. The confidence lookup variants are available only as a weighted retrieval.
+
+\begin{table}[htb]
+\centering\small
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{@{}L{29mm}L{27mm}L{70mm}L{21mm}@{}}
+\toprule
+lookup variant & $a$, \ $b$ & defined by & learned scalars \\
+\midrule
+Manifesto, rational & $1-U$, \ $U$ & $U=0.5/(1+u^\star)$ & none \\
+Manifesto, soft-sign & $1-U$, \ $U$ & $U=\sigma(-2\rho/T_\text{sel})$ \ with \ $\rho=u^\star/(T_\text{soft}+u^\star)$ & $T_\text{soft}$, $T_\text{sel}$ \\
+Confidence, $n=1$ & $s$, \ $0$ & $s=\big(\sum_j m_j\big)\exp\!\big(\gamma\sum_j\log\sigma(\beta m_j)\big)$ & $\beta$, $\gamma$ \\
+Confidence, $n=2$ & $s\,(1-v)$, \ $s\,v$ & the same $s$, \ and \ $v=\sigma(-2u^\star/\tau)$ & $\beta$, $\gamma$, $\tau$ \\
+\bottomrule
+\end{tabular}
+\caption{The coefficients of the selected row ($a$) and of its neighbor ($b$) in
+Equation~\eqref{eq:retrieval}, for the lookup variants of the library. Here $u^\star$ is the deciding margin,
+$m_j=|u_j|$ are the margins of the table, $\sigma$ is the logistic function, and $n$ is the number of rows
+retrieved per table. In a hard lookup these coefficients are used only in training.
+Table~\ref{tab:classes} lists the classes.}
+\label{tab:matrix}
+\end{table}
+
+\textbf{Manifesto, rational uncertainty.} The neighbor row is weighted by the fixed uncertainty function
+$U$ of the Spiking Manifesto~\citep{manifesto}, applied to the deciding margin. $U$ equals $\tfrac12$
+when the deciding margin is zero. In that case the two rows are equally plausible. $U$ decreases toward
+zero as the margin grows. The hard lookup with this $U$, \code{ManifestoHardLUT}, is the rule of the
+Manifesto as it was published. The weighted retrieval, \code{ManifestoSoftLUT}, goes beyond the
+Manifesto. In the Manifesto, $U$ is used only to compute gradients during training, and inference uses
+the plain sum of the selected rows (its Eq.~3 and Section III-A).
+
+\textbf{Manifesto, soft-sign uncertainty.} This uncertainty function has the same role, but it has
+learnable parameters. Two parameters, the temperatures $T_\text{soft}$ and $T_\text{sel}$,
+replace the fixed constants of $U$. The first temperature rescales the deciding margin into a number
+$\rho$ between 0 and 1. The second temperature turns $\rho$ into the uncertainty $U$, which is at most
+$\tfrac12$. Both temperatures are learned. There is one pair of temperatures for each multi-head LUT
+(Section~\ref{sec:heads}), and both start at the value $0.5$. They can also be kept fixed. The same two
+classes, \code{ManifestoHardLUT} (hard lookup) and \code{ManifestoSoftLUT} (weighted retrieval), use
+this $U$ when they are constructed with \code{uncertainty\_func="softsign"}.
+
+\textbf{Confidence.} The Manifesto lookup variants use only the deciding margin. The confidence lookup
+variants use all the margins of a table to estimate how much the table can be trusted for the present input. It
+multiplies the contribution of the table by a \term{confidence score} $s$, which is the score of
+LookupFFN~\citep{lookupffn}. The score is a product of two factors. The first factor is the sum of the
+margins. It grows as the input moves away from the points where the bits change their values. The second
+factor, the exponential, is equal to the product of $\sigma(\beta m_j)^\gamma$ over the probes of the
+table. Each term of this product is close to $1$ when the margin is large, and it equals $2^{-\gamma}$
+when the margin is zero. Every uncertain bit therefore reduces the contribution of the table. The scalar
+$\beta$ determines which margins count as large, and the scalar $\gamma$ determines how strong the
+reduction is.
+
+The class \code{ConfidenceLUT} retrieves either one row or two rows per table ($n=1$ or $n=2$). With
+$n=1$, the contribution of the table is the selected row multiplied by the score. With $n=2$, the
+neighbor row is added as in the Manifesto weighted retrieval, and the score multiplies both rows. The coefficient $v$ of the
+neighbor row is at most $\tfrac12$. It depends only on the deciding margin and on a temperature $\tau$.
+The scalars $\beta$, $\gamma$ and $\tau$ are learned, and each multi-head LUT has one value of each. They
+are stored as logarithms, and their initial values are $2$, $1$ and $0.5$.
+
+% ======================================================================================================
+\section{Heads and the multi-head LUT}
+\label{sec:heads}
+
+This section describes the next two boxes of Figure~\ref{fig:levels}. One table divides its inputs into
+only $K$ classes, so a model uses many tables and adds up their contributions. The tables are grouped
+into heads, and the heads are grouped into a multi-head LUT (the inner dashed box of
+Figure~\ref{fig:projlut}).
+
+\textbf{A head.} A \term{head} is a group of tables that all examine the same input vector. The code
+calls the number of tables per head \code{tph}. Head $g$ receives its own slice $z_g$ of the input. The
+slice has $d_\text{in}$ values, and all tables of the head apply their probes to it. Every table has its
+own anchors, so every table forms its own address. Table $t$ of head $g$ forms the address $c_{g,t}$
+from $z_g$, and it returns its contribution $f_{g,t}$ according to Equation~\eqref{eq:retrieval}. The
+output of the head is the \emph{sum} of these contributions:
+\begin{equation}\label{eq:head}
+  y_g=\sum_{t=1}^{\text{tph}} f_{g,t}\ \in\mathbb{R}^{d_\text{out}}, \qquad g=1,\ldots,G .
+\end{equation}
+For a hard lookup, the output is the sum of the selected rows, $y_g=\sum_t W_{g,t}[c_{g,t}]$.
+
+\textbf{A multi-head LUT.} A \term{multi-head LUT} consists of $G$ heads that work side by side. The
+outputs of the heads are \emph{concatenated} into one vector:
+\begin{equation}\label{eq:concat}
+  y=[\,y_1,\ y_2,\ \ldots,\ y_G\,]\ \in\mathbb{R}^{G\,d_\text{out}} .
+\end{equation}
+As an alternative, the library can add the outputs of the heads into a single vector of width
+$d_\text{out}$, $y=\sum_g y_g$. Together with the projections of Section~\ref{sec:projection}, the
+multi-head LUT replaces an FFN.
 
 \begin{figure}[t]
 \centering
 \begin{tikzpicture}[>=Latex, font=\footnotesize,
   box/.style={draw, rounded corners, align=center, inner sep=3pt, minimum height=9mm},
   io/.style={box, fill=black!6},
-  proj/.style={box, fill=blue!8, minimum width=17mm, font=\footnotesize\ttfamily},
+  proj/.style={box, fill=blue!8, minimum width=17mm},
   tbl/.style={draw, fill=orange!14, align=center, inner sep=3pt, minimum width=24mm, minimum height=9mm},
   sumop/.style={draw, circle, inner sep=1pt, minimum size=7mm, fill=green!10}]
 \node[io] (x) {$x$\\$\scriptstyle D_\text{in}$};
-\node[proj, right=7mm of x] (cmp) {compress\\$\scriptstyle G\,d_\text{in}$};
-\node[tbl, right=15mm of cmp, yshift=11mm] (t1) {head 1: \code{tph} tables\\$\scriptstyle z_1\to\text{bits}\to c\to W[c]$};
-\node[tbl, right=15mm of cmp, yshift=-11mm] (t2) {head $G$: \code{tph} tables\\$\scriptstyle z_G\to\text{bits}\to c\to W[c]$};
+\node[proj, right=7mm of x] (cmp) {input\\projection\\$\scriptstyle G\,d_\text{in}$};
+\node[tbl, right=14mm of cmp, yshift=11mm] (t1) {head 1: \code{tph} tables\\$\scriptstyle z_1\to\text{bits}\to c\to W[c]$};
+\node[tbl, right=14mm of cmp, yshift=-11mm] (t2) {head $G$: \code{tph} tables\\$\scriptstyle z_G\to\text{bits}\to c\to W[c]$};
 \node at ($(t1)!0.5!(t2)$) {$\vdots$};
 \node[sumop, right=7mm of t1] (s1) {$\Sigma$};
 \node[sumop] (s2) at (s1 |- t2) {$\Sigma$};
 \node at ($(s1)!0.5!(s2)$) {$\vdots$};
-\node[box, fill=green!10, right=19mm of cmp, xshift=42mm, minimum width=13mm] (cat) {concat\\$\scriptstyle G\,d_\text{out}$};
-\node[proj, right=6mm of cat] (dec) {decompress};
+\node[box, fill=green!10, right=8mm of s1, yshift=-11mm, minimum width=13mm] (cat) {concat\\$\scriptstyle G\,d_\text{out}$};
+\node[proj, right=5mm of cat] (dec) {output\\projection};
 \node[io, right=7mm of dec] (y) {$\text{out}$\\$\scriptstyle D_\text{out}$};
 \begin{scope}[on background layer]
   \foreach \t in {t1,t2}{ \foreach \dx in {1.3,2.6}{
     \draw[fill=orange!14, draw=black] ([xshift=\dx mm,yshift=\dx mm]\t.south east) rectangle ([xshift=\dx mm,yshift=\dx mm]\t.north west); }}
+  \node[draw=black!55, dashed, rounded corners, fit=(t1)(t2)(s1)(s2)(cat), inner xsep=3.5mm, inner ysep=5mm] (mh) {};
+  \node[draw=black!55, dashed, rounded corners, fit=(cmp)(mh)(dec), inner xsep=3mm, inner ysep=6.5mm] (wr) {};
 \end{scope}
+\node[font=\scriptsize, text=black!70, anchor=south west] at ([xshift=1mm,yshift=0.3mm]mh.north west) {multi-head LUT (Section~\ref{sec:heads})};
+\node[font=\scriptsize, text=black!70, anchor=south west] at ([xshift=1mm,yshift=0.3mm]wr.north west) {ProjectionMHL wrapper (Section~\ref{sec:projection})};
 \draw[->] (x) -- (cmp);
 \draw[->] (cmp.east) to[out=25,in=180] node[above,sloped,font=\scriptsize]{$z_1$} (t1.west);
 \draw[->] (cmp.east) to[out=-25,in=180] node[below,sloped,font=\scriptsize]{$z_G$} (t2.west);
@@ -262,319 +394,636 @@ Any other cartridge of \S\ref{sec:cartridges} can take \code{ConfidenceLUT}'s pl
 \draw[->] (cat) -- (dec);
 \draw[->] (dec) -- (y);
 \end{tikzpicture}
-\caption{The ProjectionLUT data path. The input projection \code{compress} ($D_\text{in}\to
-h_\text{in}d_\text{in}$) splits $x$ into per-head spaces $z_g$; in each head the probes hash $z_g$ to a
-cell per table and that head's \code{tph} reads are summed ($\Sigma$); the $G$ head outputs are
-concatenated, and the output projection \code{decompress} ($h_\text{out}d_\text{out}\to D_\text{out}$)
-maps the concatenation to the output. (With fan-in, $h_\text{out}=1$, the heads are summed into one slice
-instead.) $D_\text{in}$ and $D_\text{out}$ are independent and may differ. The tables and per-head sums
-are the cartridge; the wrapper treats it as opaque.}
+\caption{A multi-head LUT (inner dashed box, Section~\ref{sec:heads}) inside the ProjectionMHL wrapper
+(outer dashed box, Section~\ref{sec:projection}). The input projection
+($D_\text{in}\to h_\text{in}d_\text{in}$) splits $x$ into the input slices $z_g$ of the heads. In each
+head the probes turn $z_g$ into one address per table, and the contributions of the \code{tph} tables of
+that head are added ($\Sigma$). The $G$ head outputs are concatenated, and the output projection
+($h_\text{out}d_\text{out}\to D_\text{out}$) maps the concatenation to the output. (With
+$h_\text{out}=1$, the head outputs are added into one slice instead.) The lookup variant determines how the
+contribution of a table is computed. The wrapper does not use the internals of the multi-head LUT.}
 \label{fig:projlut}
 \end{figure}
 
-% ======================================================================================================
-\section{Cartridges}
-\label{sec:cartridges}
+\textbf{How large is a multi-head LUT?} A multi-head LUT has $G\times\code{tph}$ tables, and each table
+has $2^{\text{nap}}$ rows. With 8 heads, 64 tables per head and \code{nap}$=8$, which are the sizes used
+in Section~\ref{sec:ml}, the total is $8\times64\times256=131{,}072$ rows. Every row holds
+$d_\text{out}$ values. With $d_\text{out}=48$, the tables therefore hold $6.3$ million values. In the
+six-layer model of Section~\ref{sec:ml}, the tables of the six layers hold $37.7$ million values
+together, which is more than half of the $68.2$ million parameters of the model. The tables are large,
+but one input vector uses only a small part of them: one or two rows from each table.
 
-Everything described so far is the same for every read form: the geometry, the addressing, the sum over
-tables, the routing, the wrapper. A \emph{cartridge} is the swappable read \emph{mathematics} inside that
-frame. The contract is a shape, $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$
-(\code{MultiHeadLUT}), and the wrapper never reaches inside it. All cartridges are built on one base class,
-\code{ManifestoLUT}. It holds the tables $W\in\mathbb{R}^{G\times\text{tph}\times K\times d_\text{out}}$
-and the anchors (drawn once from a seed, never trained), and it provides what every cartridge needs: the
-addressed cell, the margins, the runner-up, and at the end the routing of each head's result to its output
-slot. A cartridge decides the rest: how the addressed row and its neighbour are weighted and added up into
-a head's output, and which function training differentiates. Gen-1 and Gen-2 also come as \code{Fused…}
-twins with identical mathematics and faster kernels.
-
-\subsection{One read, three ways to weight it}
-\label{sec:oneread}
-Every cartridge computes, per head,
-\[
-  y=\sum_t\big(a_t\,W_t[c_t]+b_t\,W_t[c_t']\big),
-\]
-with $c$ the addressed cell, $c'$ its least-certain-bit neighbour, and weights $a,b$ that depend on the
-margins only. The generations differ in $a$ and $b$ (Table~\ref{tab:matrix}). The addresses are integers
-and carry no gradient, so the input gradient flows through $a$ and $b$ alone.
-
-\textbf{Hard and soft.} A \emph{soft} read uses the formula above as its value at train and eval, so both
-rows learn. A \emph{hard} read returns $W[c]$ alone ($a=1$, $b=0$), adds rows without a multiply, and uses
-the soft formula only as a \emph{surrogate} for the input gradient; the table update stays on row $c$.
-Gen-1 and Gen-2 come in both forms. Gen-3 has no hard form: its weighted read is always the value.
-
-\begin{table}[h]
-\centering\footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabularx}{\textwidth}{@{}l l l >{\raggedright\arraybackslash}X@{}}
+\begin{table}[htb]
+\centering\small
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{@{}L{26mm}L{100mm}L{24mm}@{}}
 \toprule
-generation & $a$, $b$ & learned scalars & cartridges (hard / soft) \\
+name & meaning & value in Section~\ref{sec:ml} \\
 \midrule
-1 Manifesto (\S\ref{sec:manifesto}) & $1-U$, $U$ & --- & \code{ManifestoHardLUT} / \code{ManifestoSoftLUT} \\
-2 SoftSign (\S\ref{sec:softsign}) & $1-w$, $w$ & $T_\text{soft},T_\text{sel}$ & \code{SoftSignHardLUT} / \code{SoftSignSmoothLUT} \\
-3 Confidence (\S\ref{sec:confidence}) & $s(1-v)$, $s\,v$\ \ ($n{=}2$); $s$, $0$\ \ ($n{=}1$) & $\beta,\gamma$ (+$\tau$) & no hard form: \code{ConfidenceLUT}, int8 \code{QuantisedConfidenceLUT} (\S\ref{sec:quant}) \\
+\multicolumn{3}{@{}l}{\emph{One table (Section~\ref{sec:table})}} \\
+$z$ & input vector of a table; all tables of a head share it & \\
+\code{nap} & number of probes per table, which is also the number of address bits & 8 \\
+$K=2^{\text{nap}}$ & number of rows per table & 256 \\
+$u_j$, $|u_j|$ & value of probe $j$, and the margin of its bit & \\
+$u^\star$ & deciding margin: the smallest of the margins of a table & \\
+$c$, $c'$ & address of the selected row, and of its neighbor row & 8 bits each \\
+$W[c]$ & row $c$ of a table: $d_\text{out}$ learnable values & \\
+\addlinespace[3pt]
+\multicolumn{3}{@{}l}{\emph{One lookup variant (Section~\ref{sec:variants})}} \\
+$a$, $b$ & coefficients of the selected row and of its neighbor row & \\
+$f$ & contribution of one table, $a\,W[c]+b\,W[c']$ & \\
+$n$ & number of rows retrieved per table by a confidence lookup variant (\code{read\_top\_n}) & 1 or 2 \\
+\addlinespace[3pt]
+\multicolumn{3}{@{}l}{\emph{Heads and the multi-head LUT (Section~\ref{sec:heads})}} \\
+\code{tph} & number of tables per head & 64 \\
+$G$ & number of heads in a multi-head LUT & 8 \\
+$d_\text{in}$ & width of the input slice $z_g$ of a head & 48 \\
+$d_\text{out}$ & width of a row, which is also the width of the output $y_g$ of a head & 48 \\
+\addlinespace[3pt]
+\multicolumn{3}{@{}l}{\emph{The wrapper (Section~\ref{sec:projection})}} \\
+$D_\text{in}$, $D_\text{out}$ & input and output widths of the wrapper & 384 \\
+$h_\text{in}$, $h_\text{out}$ & number of input slices and of output slices; both equal $G$ in the usual case & 8 \\
+$B$ & number of input vectors in a batch & \\
 \bottomrule
-\end{tabularx}
-\caption{The three generations as weights on the addressed row and its neighbour. Gen-1 and Gen-2 each
-also have \code{Fused…} twins of both forms.}
-\label{tab:matrix}
+\end{tabular}
+\caption{Notation, in the order of the levels of Figure~\ref{fig:levels}. Names in typewriter font are
+the names used in the code.}
+\label{tab:notation}
 \end{table}
 
+\textbf{How these heads compare with attention heads.} The name and the arrangement follow multi-head
+attention. In a Transformer, the vector of width $d_\text{model}$ is projected into $h$ attention heads.
+Each attention head works in its own narrow space of width $d_\text{model}/h$, the heads do not exchange
+information, and their outputs are concatenated and projected back to the model width. A multi-head LUT
+is arranged in the same way. It has $G$ heads, each head works on its own narrow slice, the heads do not
+exchange information, and their outputs are concatenated as in Equation~\eqref{eq:concat}. The
+projections in front of the heads and behind them are the subject of Section~\ref{sec:projection}. Even
+the sizes are similar: the original Transformer has 8 attention heads of width 64 in a model of width
+512, and the model of Section~\ref{sec:ml} has 8 heads of width 48 in a model of width 384.
 
-\subsection{Gen-1 Manifesto}
-\label{sec:manifesto}
-The Spiking Manifesto's model~\citep{manifesto}, with the paper's fixed uncertainty function of the
-deciding margin $|u_{j^\star}|=u^\star$:
+The two kinds of head differ in what a head computes. An attention head combines information from different
+tokens: for each token, it forms a weighted sum of value vectors that come from the other positions of
+the sequence. A head of a multi-head LUT works on one token at a time, as an FFN does. Its output,
+Equation~\eqref{eq:head}, is a sum of table rows selected by that token alone, and no other position is
+involved. The heads of this report are therefore not attention heads. Where both kinds appear, the
+report writes ``attention heads'' for the latter.
+
+% ======================================================================================================
+\section{The ProjectionMHL wrapper: input and output projections}
+\label{sec:projection}
+
+This section describes the wrapper, which is the last box of the library in Figure~\ref{fig:levels}. A
+multi-head LUT works on $G$ narrow slices, but the model around it works on a single vector of the model
+width. The class \code{ProjectionMHL}, the wrapper, connects the
+two (Figure~\ref{fig:projlut}). It places one linear map in front of the multi-head LUT and another
+linear map behind it. The first map is the \term{input projection}, and the second is the \term{output
+projection}. (The code calls them \code{compress} and \code{decompress}.) Seen from the outside, the
+wrapper takes a vector of width $D_\text{in}$ and returns a vector of width $D_\text{out}$, as an FFN
+does. The two widths are separate arguments of the wrapper, and they may be different. The data path is
 \[
-  U=\frac{0.5}{1+u^\star}\in(0,\tfrac12],\qquad
-  \frac{\partial\tilde y}{\partial z[a_{j^\star}]}=-\frac{\partial\tilde y}{\partial z[b_{j^\star}]}
-  =U'(u^\star)\,\sgn(u_{j^\star})\,\big(W[c']-W[c]\big),
+  x\in[B,D_\text{in}]\xrightarrow{\ \substack{\text{input}\\\text{projection}}\ } z\in[B,h_\text{in},d_\text{in}]
+  \xrightarrow{\ \substack{\text{multi-head}\\\text{LUT}}\ } y\in[B,h_\text{out},d_\text{out}]
+  \xrightarrow{\ \substack{\text{output}\\\text{projection}}\ } \text{out}\in[B,D_\text{out}].
 \]
-so the input gradient lands on the two anchors of the deciding probe alone (manifesto Eqs.~4--5).
-\code{ManifestoHardLUT} is Izhikevich's rule verbatim: its value has $a=1$, $b=0$, and $a=1-U$, $b=U$
-serve only as the surrogate. \code{ManifestoSoftLUT} promotes the surrogate Eq.~4 to the value, $a=1-U$,
-$b=U$, which goes beyond the paper: there $U$ only computes training gradients, and inference reads
-with Eq.~3 alone (manifesto \S III-A).
+Here the brackets give the shapes of the arrays, $B$ is the number of input vectors in a batch,
+$h_\text{in}$ and $h_\text{out}$ are the numbers of input slices and output slices, and $d_\text{in}$ and
+$d_\text{out}$ are the widths of these slices. In the usual case, every head has its own input slice and
+its own output slice, so $h_\text{in}=h_\text{out}=G$.\footnote{The two numbers can be different only
+when one of them is $1$. The library rejects every other combination. With $h_\text{in}=1$, the input
+projection produces a single slice of width $d_\text{in}$, and all $G$ heads take this slice as their
+input. With $h_\text{out}=1$, the outputs of the heads are added into a single slice of width
+$d_\text{out}$, and the output projection receives this slice.} The two projections have different
+purposes, which the next two subsections describe.
 
-\subsection{Gen-2 SoftSign}
-\label{sec:softsign}
-The fixed $U$ becomes a blend weight with two temperatures learned per layer (init $0.5$, freezable):
+\subsection{The input projection}
+
+\textbf{The input projection decides what the probes test.} A probe tests on which side of a hyperplane
+the input lies. The set of hyperplanes that the probes can test depends on the kind of probe, and on
+whether an input projection is present (Table~\ref{tab:planes}).
+
+\begin{table}[htb]
+\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{L{34mm}L{52mm}L{58mm}}
+\toprule
+ & single anchors & anchor pairs \\
+\midrule
+no input projection & $x[a]>0$: a plane along a coordinate axis of the raw input & $x[a]-x[b]>0$: coefficients $\pm1$ and zero bias, the form of the Manifesto \\
+with input projection & $w_a^\top x+b_a>0$: an arbitrary learned hyperplane & $(w_a-w_b)^\top x+(b_a-b_b)>0$: also arbitrary, with up to $\binom{d_\text{in}}{2}$ distinct planes per head \\
+\bottomrule
+\end{tabular}
+\caption{The hyperplane that one probe tests. Here $w_a$ and $b_a$ are row $a$ of the input-projection
+matrix and the corresponding bias, so that $z[a]=w_a^\top x+b_a$.}
+\label{tab:planes}
+\end{table}
+
+Without an input projection, a probe on a single anchor can only test the sign of one coordinate of the
+raw input. Such a test splits the input space along one coordinate axis. A probe on an anchor pair
+compares two coordinates, so anchor pairs are much stronger in this case. With an input projection, every
+coordinate of $z$ is itself a learned linear function of $x$. A probe on a single anchor then tests an
+arbitrary learned hyperplane. This is the ``hyperplane LSH'' of the Manifesto, with learnable anchor
+vectors (\citealp[Section VIII-H]{manifesto}). A probe on an anchor pair tests the difference of two such
+functions, which is also an arbitrary hyperplane. With an input projection, the two kinds of probe
+therefore test hyperplanes of the same type, and they differ only in the number of hyperplanes that are
+available. The $d_\text{in}$ coordinates of a head give $d_\text{in}$ different hyperplanes to single
+anchors, but up to $\binom{d_\text{in}}{2}$ different hyperplanes to anchor pairs. When more hyperplanes
+are available, different tables are less likely to use the same few bits. Single anchors are therefore
+somewhat weaker than anchor pairs even with an input projection, but the difference is not large.
+
+\textbf{With a learned input projection, are anchor pairs still needed?} In principle, they are not
+needed. A pair comparison $x[a]-x[b]>0$ is a hyperplane test in which the coefficient is $+1$ at position
+$a$, $-1$ at position $b$, and zero at all other positions. A single anchor behind an input projection
+could test the same hyperplane if the corresponding row of the projection matrix had this form. In
+practice, the rows of the matrix do not take this form, because ordinary training has no reason to turn
+a dense row into a row with one $+1$, one $-1$, and zeros. To obtain the pair form from a learned
+projection, the library would need additional methods that it does not have. Examples are a strict
+regularizer, or a straight-through estimator that maps the matrix entries to $\pm1$. (A straight-through
+estimator is a training method that rounds a value in the forward pass, and computes the gradient in the
+backward pass as if the value had not been rounded.)
+
+For this reason, the library keeps both kinds of probe. The anchor pair is the mechanism of the Manifesto
+in its original form: it compares the order of two coordinates. The anchor pair is also a special case
+that is cheap to compute, and the whole design is built to take advantage of it. One address bit costs
+two memory reads (one coordinate each) and one subtraction. The anchors are stored as integer positions,
+and the bit has no trainable parameters of its own. The kernels of the library (the low-level routines
+that carry out the computation) work in this way. A general hyperplane for every bit would instead cost a
+dot product of length $d_\text{in}$, and it would need $d_\text{in}$ parameters. In the example of
+Section~\ref{sec:heads}, with $d_\text{in}=48$, anchor pairs need about 4{,}000 subtractions per token and
+layer, whereas general hyperplanes would need about 200{,}000 multiply-adds. The single anchor was added
+to the library later, for flexibility. It is even cheaper than the anchor pair, but it is also somewhat
+weaker.
+
+\subsection{The output projection}
+
+\textbf{The output projection keeps the rows narrow.} Section~\ref{sec:heads} showed that the number of
+rows is determined by the numbers of heads, tables and probes. The size of the tables then depends on the
+row width $d_\text{out}$. If the rows had the full width of the model, $d_\text{out}=384$, the tables of
+that example would hold $50$ million values per layer. With $d_\text{out}=48$ they hold $6.3$ million
+values. The rows are therefore kept narrow, and the output projection afterwards maps the concatenated
+outputs of the heads to the model width. The cost of the output projection is one small dense matrix per
+layer, with $0.15$ million parameters.
+
+\textbf{Switching a projection off.} When the widths already match, one of the two projections can be
+replaced by the identity map. The library does not allow both projections to be replaced at the same
+time. By default, both projections are present. The output projection is initialized to zero, and the
+input projection is initialized with random values from $\mathcal{N}(0,0.02)$.
+
+\subsection{In code}
+
+The classes of the library correspond to the levels of Figure~\ref{fig:levels}
+(Table~\ref{tab:classes}). Each lookup variant is a class. An object of this class is a complete multi-head LUT
+that uses one rule for the contribution of a table. All lookup variants have the same interface, which is
+defined by the shapes of the arrays: a lookup variant maps an array of shape $[B,h_\text{in},d_\text{in}]$ to an
+array of shape $[B,h_\text{out},d_\text{out}]$. The class \code{MultiHeadLUT} defines this interface. The
+wrapper relies only on these shapes, and it does not use the internals of a lookup variant.
+
+All lookup variants are also derived from one base class, \code{ManifestoLUT}. The base class holds the tables,
+in an array $W$ of shape $G\times\code{tph}\times K\times d_\text{out}$, and the anchors. It also
+provides the things that every lookup variant needs: the selected row, the margins, the neighbor row, and the
+routing of the result of each head to its position in the output. The class of a lookup variant then defines two things
+of its own. The first is the choice of the coefficients in Equation~\eqref{eq:retrieval}. The second is
+the function that training differentiates (Section~\ref{sec:gradient}). Each of these classes, the
+\term{reference} classes, is written in plain PyTorch and runs on the CPU and on CUDA. Each also exists
+in a version whose name begins with \code{Fused}. A fused class computes the same mathematics in
+hand-written CUDA kernels. It needs a CUDA input, and it never falls back to PyTorch: an input that its
+kernels do not cover raises an error.
+
+\begin{table}[htb]
+\centering\small
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{@{}L{36mm}L{50mm}L{62mm}@{}}
+\toprule
+level & class & role \\
+\midrule
+lookup variant, Manifesto & \code{ManifestoHardLUT}, \code{ManifestoSoftLUT} & hard lookup, weighted retrieval; \code{uncertainty\_func="rational"} (the default) or \code{"softsign"} \\
+lookup variant, confidence & \code{ConfidenceLUT}, \code{QuantisedConfidenceLUT} & weighted retrieval with $n=1$ or $n=2$ rows (\code{read\_top\_n}); the second trained for int8 tables (Section~\ref{sec:quant}) \\
+lookup variant, fused & the prefix \code{Fused} before any of these four class names, for example \code{FusedManifestoHardLUT} & the same mathematics in hand-written CUDA kernels; CUDA input only \\
+lookup variant, int8 decode & \code{Deployed\allowbreak QuantisedConfidenceLUT} & inference only, built from an export of \code{QuantisedConfidenceLUT} (Section~\ref{sec:quant}) \\
+multi-head LUT & \code{MultiHeadLUT} & the interface of every lookup variant: $[B,h_\text{in},d_\text{in}]\to[B,h_\text{out},d_\text{out}]$ \\
+ & \code{ManifestoLUT} & the base class of every lookup variant: tables, anchors, addresses, margins, routing of the head outputs \\
+ & \code{LUTSpec} & the sizes of a multi-head LUT: the numbers of heads, tables per head and probes per table, and the widths \\
+wrapper & \code{ProjectionMHL} & input projection, multi-head LUT, output projection \\
+\bottomrule
+\end{tabular}
+\caption{The classes of the library, by level.}
+\label{tab:classes}
+\end{table}
+
+The wrapper accepts any lookup variant, and the example below uses \code{ConfidenceLUT}. The wrapper maps an
+array of shape $[N,D_\text{in}]$ to an array of shape $[N,D_\text{out}]$, so a batch of sequences must
+first be flattened into a list of vectors:
+
+\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+import torch
+from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
+
+spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)  # 8 heads of 64 tables
+mhl  = ConfidenceLUT(spec, seed=1, read_top_n=2)                    # the cartridge (lookup variant); 2 rows per table
+ffn  = ProjectionMHL(mhl, d_model=384)           # or input_dim=..., output_dim=... (may differ)
+x = torch.randn(4, 128, 384)                     # (B, T, D) activations
+y = ffn(x.reshape(-1, 384)).reshape(x.shape)     # torch.Size([4, 128, 384])
+\end{lstlisting}
+\end{minipage}
+
+Any other lookup variant class can be used in place of \code{ConfidenceLUT}; a fused class needs the
+input on a CUDA device.
+
+% ======================================================================================================
+\section{Training: gradients and regularizers}
+\label{sec:training}
+
+Sections~\ref{sec:table} to~\ref{sec:projection} describe the forward computation, that is, how the
+output is computed from the input. This section describes what training needs in addition: a way to
+compute the gradient through a lookup, and two regularizers. Both topics concern the inner boxes of
+Figure~\ref{fig:levels}, that is, the tables and their lookup variants.
+
+\subsection{How the gradient reaches the input}
+\label{sec:gradient}
+
+Training needs the derivative of the contribution of a table, Equation~\eqref{eq:retrieval}, with respect
+to the input $z$ of the table. The addresses $c$ and $c'$ are integers, and an integer-valued quantity
+has no useful derivative. The coefficients $a$ and $b$, however, are smooth functions of $z$, because
+they depend on $z$ through the margins. The gradient can therefore pass through the coefficients.
+
+\textbf{Weighted retrieval.} In a weighted retrieval, the gradient with respect to the input passes
+through $a$ and $b$ only. The selected row and the neighbor row both contribute to the output, so both
+rows are updated by training.
+
+\textbf{Hard lookup.} In a hard lookup, the coefficients are constants ($a=1$, $b=0$), so the output has
+no useful derivative with respect to the input. A hard lookup therefore uses a different function in the
+backward pass. In the backward pass, and only there, it uses Equation~\eqref{eq:retrieval} with the
+coefficients of the weighted retrieval with the same uncertainty function. A function that is used in this way is
+called a \term{surrogate}: it is a smooth function that replaces a function without a useful derivative.
+The surrogate provides the gradient with respect to the input. The update of the table itself goes to
+the selected row $c$ only.
+
+\textbf{Manifesto.} With the coefficients $a=1-U$ and $b=U$ of Table~\ref{tab:matrix},
+differentiating Equation~\eqref{eq:retrieval} gives
 \[
-  \rho=\frac{u^\star}{T_\text{soft}+u^\star}\in[0,1),\qquad
-  w=\sigma\!\big(-2\rho/T_\text{sel}\big)\in(0,\tfrac12].
+  \frac{\partial\tilde f}{\partial z[a_{j^\star}]}=-\frac{\partial\tilde f}{\partial z[b_{j^\star}]}
+  =U'(u^\star)\,\sgn(u_{j^\star})\,\big(W[c']-W[c]\big).
 \]
-\code{SoftSignSmoothLUT} reads with $a=1-w$, $b=w$; \code{SoftSignHardLUT} reads $a=1$, $b=0$ and uses
-$a=1-w$, $b=w$ as its surrogate.
+Here $j^\star$ is the deciding probe, $a_{j^\star}$ and $b_{j^\star}$ are its two anchors, and the tilde
+indicates the surrogate. The gradient with respect to the input is therefore nonzero only at the two
+anchors of the deciding probe, and it has opposite signs at the two anchors (Eqs.~4 and~5 of the
+Manifesto). This holds for both uncertainty functions, because both depend on the input only through the
+deciding margin. With \code{"softsign"}, the two temperatures receive a gradient as well.
 
-\subsection{Gen-3 Confidence}
-\label{sec:confidence}
-Gen-3 weights each table by a \emph{confidence score} $s$, the score of LookupFFN~\citep{lookupffn},
-computed from all \code{nap} margins $m_j=|u_j|$ of the table's address:
+\textbf{Confidence.} In a confidence lookup variant, the gradient reaches the input only through the score $s$, which
+depends on all \code{nap} margins, and for $n=2$ also through $v$, which depends on the deciding margin.
+In this way, a table learns how much confidence to assign to its output. The gradient never tells the
+table that a different row would have been a better choice.
+
+\subsection{Regularizers}
+\label{sec:reg}
+
+Two regularizers are implemented in the base class \code{ManifestoLUT}, so every lookup variant with a
+trainable table can use them (all except \code{DeployedQuantisedConfidenceLUT}, the inference-only int8 form
+of Section~\ref{sec:quant}).
+Both are switched off by default. The first regularizer acts on the rows of a table, and the second acts
+on whole tables.
+
+\textbf{Row total variation.} The $K=2^{\text{nap}}$ rows of a table can be pictured as the corners of a
+cube with \code{nap} dimensions, with one dimension for each address bit. Two rows are neighbors when
+their addresses differ in a single bit, as the addresses $c$ and $c'$ do. When the input changes so that
+one bit changes its value, the input moves from one row to a neighbor of that row. This is the smallest
+change of the input that changes the address. It is therefore reasonable to require that such a change
+alters the output only slightly. The regularizer expresses this requirement as a penalty on the mean
+squared difference between neighboring rows:
 \[
-  s=\Big(\sum_j m_j\Big)\exp\!\Big(\gamma\sum_j\log\sigma(\beta m_j)\Big),\qquad
-  v=\sigma(-2u^\star/\tau)\in(0,\tfrac12].
+  \mathcal R_\text{TV}=\frac{1}{T\cdot\text{nap}\cdot2^{\text{nap}-1}}
+  \sum_{t=1}^{T}\ \sum_{(c,c')}\big\|W_t[c]-W_t[c']\big\|_2^2 .
 \]
-The sum of the margins grows with how far the input sits from the bit boundaries; the second factor is
-the product of $\sigma(\beta m_j)^\gamma$ over the margins, near $1$ for a margin far from its boundary
-and $2^{-\gamma}$ for a margin of zero, so every uncertain bit discounts the table. $\beta$ sets what
-counts as a large margin, $\gamma$ how strong the discount is. $\beta$, $\gamma$ (and $\tau$) are learned scalars, one each per layer,
-shared by all its tables and stored in log form (init $2,1,0.5$). With $n{=}1$ the scored cell is the whole read,
-$a=s$, $b=0$, no blend. With $n{=}2$ the score multiplies a two-cell blend by uncertainty, as in Gen-2:
-$a=s(1-v)$, $b=s\,v$, where the neighbour weight $v$ depends only on the deciding margin $u^\star$ and
-$\tau$. The key property: the input
-gradient reaches $z$ \emph{only} through $s$ (all \code{nap} margins) and, for $n{=}2$, through $v$ (the
-deciding margin). A table learns how confident to be, never that a different row would have been better.
+Here $T=G\cdot\code{tph}$ is the number of tables. The inner sum runs over all pairs of rows whose
+addresses differ in a single bit, and each pair is counted once. A table has
+$\text{nap}\cdot2^{\text{nap}-1}$ such pairs, which explains the normalization factor. The method
+\code{ManifestoLUT.cell\_tv} computes this penalty for one multi-head LUT. The function
+\code{cell\_tv\_penalty(model)} averages the penalty over the multi-head LUTs of the model, and the
+training loss adds $\lambda$ times this average. The penalty acts only on the values in the tables, and
+it does not change the forward pass.
 
-\subsection{The int8 read and deployment}
+\textbf{Table dropout.} When the dropout rate $p$ is greater than zero (the argument
+\code{table\_dropout\_rate}), training removes whole tables at random. For every sample, every head and
+every table, an independent random decision keeps the table with probability $1-p$. The outputs of the
+tables that are kept are multiplied by $1/(1-p)$, so the expected output does not change. A table that is
+removed contributes nothing to the output or to the gradient for that sample. In a confidence lookup
+variant, the dropout mask multiplies the score $s$, which has the same effect. In decode, and whenever gradients are
+switched off, no table is removed and no output is rescaled.
+
+% ======================================================================================================
+\section{The int8 lookup and decode}
 \label{sec:quant}
-\textbf{Why.} The tables are most of a LUT model: in the example of \S\ref{sec:projection}, $6.3$M table
-parameters per layer, $37.7$M of the model's $68.2$M. Stored as int8 instead of fp32 they take a quarter of
-the memory. \code{QuantisedConfidenceLUT} (\code{quant\_mode="p2\_int8"}) is the
-Gen-3 cartridge ($n{=}2$) trained for that deployed form.
 
-\textbf{What p2\_int8 is.} Two roundings turn the read $s(1-v)\,W[c]+s\,v\,W[c']$ into integer work:
-\begin{enumerate}\itemsep1pt
-\item \textbf{int8 cells.} Each row is stored as $\hat W=\operatorname{clamp}(\operatorname{round}(W/2^{e}),-128,127)$,
-  with one power-of-two scale per group and output channel, $e=\lceil\log_2\max|W|\rceil-7$ (the maximum over
-  all of the group's tables and cells), so the largest entry just fits in eight bits.
-\item \textbf{Power-of-two weights.} Write the read as $s(1-v)\,(W[c]+r\,W[c'])$ with
-  $r=v/(1-v)=e^{-2u^\star/\tau}$. Round $r$ to $2^{-q}$, $q=\operatorname{round}\big(2u^\star/(\tau\ln2)\big)$,
-  and $s(1-v)=s/(1+r)$ to $2^{k'}$, $k'=\operatorname{round}(\log_2 s-c_q)$ with $c_q=\log_2(1+2^{-q})$. A
-  table then adds $2^{k'}\hat W[c]+2^{k'-q}\hat W[c']$: two shifts and an add, no multiply.
-\item \textbf{Integer sum.} Shifts are counted in units of $2^{-6}$, so all are left shifts into an int32
-  accumulator; the only float left is the per-channel $2^{e-6}$, applied once after the table sum.
+Sections~\ref{sec:table} to~\ref{sec:projection} describe the computation in floating point. This section
+shows how the same computation is carried out with 8-bit tables and integer arithmetic, and how a trained
+model is stored for decode. The change affects every level of Figure~\ref{fig:levels} from the table to
+the wrapper: the rows of a table, the coefficients of the lookup variant, the sum of a head, and the output
+projection.
+
+\textbf{Why quantize?} Most of the parameters of a LUT model are in its tables. In the example of
+Section~\ref{sec:heads}, the tables hold $6.3$ million values per layer. In the whole model, they hold
+$37.7$ million of the $68.2$ million parameters. When the tables are stored as 8-bit integers (int8)
+instead of 32-bit floating-point numbers (fp32), they need only a quarter of the memory.
+\code{QuantisedConfidenceLUT} is the confidence lookup variant, with $n=1$ or $n=2$, that is trained so
+that it can be decoded in this form; \code{FusedQuantisedConfidenceLUT} computes the same in CUDA
+kernels. Its quantization mode is named \code{p2\_int8}, which stands for powers of two and
+int8. The mode is selected by the argument \mbox{\code{quant\_mode="p2\_int8"}}.
+
+\textbf{What \code{p2\_int8} does.} The mode converts the weighted retrieval
+$s(1-v)\,W[c]+s\,v\,W[c']$ into integer arithmetic. It does this in three steps, one for each of the
+three inner levels of Figure~\ref{fig:levels}.
+\begin{enumerate}\itemsep2pt
+\item \textbf{The rows of a table become int8.} Each row is stored as
+  \[
+    \hat W=\operatorname{clamp}\big(\operatorname{round}(W/2^{e}),\,-128,\,127\big),
+    \qquad e=\lceil\log_2\max|W|\rceil-7 .
+  \]
+  The integer $e$ is called the \term{shared exponent}. There is one shared exponent for each head and
+  each output component, and the maximum is taken over all tables and all rows of the head. This choice
+  of $e$ makes the largest entry as large as an 8-bit integer allows.
+\item \textbf{The coefficients of the lookup variant become powers of two.} The retrieval can be written as
+  $s(1-v)\,(W[c]+r\,W[c'])$ with the ratio $r=v/(1-v)=e^{-2u^\star/\tau}$. The ratio is rounded to a
+  power of two, $2^{-q}$, with $q=\operatorname{round}\big(2u^\star/(\tau\ln2)\big)$. The common factor
+  $s(1-v)=s/(1+r)$ is rounded to $2^{k'}$, with $k'=\operatorname{round}(\log_2 s-c_q)$ and
+  $c_q=\log_2(1+2^{-q})$. A table then adds $2^{k'}\hat W[c]+2^{k'-q}\hat W[c']$. This operation needs
+  two shifts and one addition, and it needs no multiplication. With $n=1$ there is no neighbor row: the
+  score itself is rounded, $k'=\operatorname{round}(\log_2 s)$, and a table adds $2^{k'}\hat W[c]$.
+\item \textbf{The sum of a head becomes an integer sum.} The shifts are counted in units of $2^{-6}$, so
+  that every shift is a shift to the left. The sum over the tables is kept in a 32-bit integer
+  accumulator. Only one floating-point operation remains: the shared exponent is applied once, after the
+  sum over the tables, as the factor $2^{e-6}$ for each output component.
 \end{enumerate}
-The exponents $q$ and $k'$ are computed from the margins in floating point; the table read itself is
-integer. $q$ is capped at $64$ and $c_q$ taken as $0$ for $q\ge8$; $k'$ is kept in $[-3,4]$ (below,
-the table is skipped but keeps its gradient; above, $k'$ is clamped); the neighbour cell is dropped when
-$q>3$.
 
-\textbf{Training is quant-aware.} The training forward already reads the rounded tables with the rounded
-weights. Both roundings are straight-through:
-the value is the rounded read, while the gradient is that of the float master tables and of the exact
-weights $s(1-v)$, $s\,v$, so $\beta,\gamma,\tau$ keep learning.
+The scheme has a few limits. The exponents $q$ and $k'$ are computed from the margins in floating point.
+Only the table lookup and the sum use integer arithmetic. The exponent $q$ is limited to at most $64$,
+and $c_q$ is set to $0$ when $q\ge8$. The exponent $k'$ is kept between $-3$ and $4$. If $k'$ is below
+this range, the table is skipped for that input, but it still receives its gradient. If $k'$ is above
+this range, it is set to $4$. The neighbor row is omitted when $q>3$, that is, when its coefficient is
+less than $\tfrac18$ of the coefficient of the selected row.
 
-\textbf{Deployment.} Because training is quant-aware, the deployed numbers are the trained numbers, up to
-round-off: every training forward already computes with the int8 tables $\hat W$ and scales $2^e$ derived
-from the float masters. Export is a change of storage, not of the model: \code{export\_deployment} stores those int8
-values, drops the float masters, and bakes the scale $2^{e-6}$ \emph{statically} into a copy of the layer's
-\code{decompress} weight --- exact, since a power of two changes only a float's exponent; no runtime hook
-applies a scale afterwards. The file holds the int8 tables, the anchors and the three scalars: $24$~MiB $\to$ $6$~MiB per layer in the example. \code{load\_deployment} builds the model on
-PyTorch's \code{meta} device and fills it from the file, so the float tables are never allocated. The
-deployed layer returns the integer accumulator, and \code{decompress} applies the folded scale.
+\textbf{Training is quantization-aware.} The model is trained with the rounding already applied: the
+forward pass in training uses the rounded tables and the rounded coefficients. Rounding has no useful
+derivative, so both roundings use a straight-through estimator. Like the surrogate of
+Section~\ref{sec:gradient}, a straight-through estimator uses one function in the forward pass and
+another function in the backward pass. The forward pass computes with the rounded values, and the
+backward pass computes the gradient as if the values had not been rounded. The gradient therefore goes to
+the floating-point \term{master tables}, from which the int8 tables are derived, and to the exact
+coefficients $s(1-v)$ and $s\,v$. For this reason, the scalars $\beta$, $\gamma$ and $\tau$ continue to
+be trained.
+
+\textbf{Decode.} Because the rounding is already applied during training, decode computes the same
+numbers as training, except for round-off errors. Preparing a trained model for decode therefore changes
+only the way in which the model is stored. The function \code{export\_deployment} writes the int8 tables
+to a file and discards the floating-point master tables. It also multiplies a copy of the
+output-projection matrix by the factor $2^{e-6}$, so that the shared exponent becomes part of that
+matrix. This multiplication is exact, because multiplying a floating-point number by a power of two
+changes only its exponent. As a result, no separate step has to apply the shared exponent at run time.
+The file contains the int8 tables, the anchors, the scalars $\beta$ and $\gamma$ (and $\tau$ when $n=2$)
+and the two projections; the rest of the model is stored as it is. In the example, the tables of one
+layer shrink from $24$~MiB to $6$~MiB (a MiB is $2^{20}$ bytes). The function \code{load\_deployment}
+first calls a function supplied by the user, \code{make\_skeleton}, which builds the model on PyTorch's
+\code{meta} device, a placeholder device on which arrays have shapes but occupy no memory. It then fills
+the model from the file, so the floating-point tables are never allocated in memory. Each quantized
+multi-head LUT becomes a \code{DeployedQuantisedConfidenceLUT}. In decode, it returns the integer
+accumulator, and the output projection applies the shared exponent that was included in it. On a CUDA
+input, the integer lookup is one hand-written kernel; on a CPU input, it is the PyTorch definition of the
+same integer arithmetic.
 \begin{lstlisting}
 export_deployment(model, "m.lxq")
 dep = load_deployment("m.lxq", make_skeleton, device="cuda").eval()
 \end{lstlisting}
 
-\subsection{Which to use}
-\label{sec:which}
-For accuracy, \code{ConfidenceLUT} $n{=}2$. For deployment, its int8 twin \code{QuantisedConfidenceLUT}.
-Gen-1 and Gen-2 are reference points; a hard read is the cheapest possible inference, at a cost in
-accuracy against its soft twin.
-
 % ======================================================================================================
-\section{Regularisers}
-\label{sec:reg}
-Two regularisers live in the shared base class \code{ManifestoLUT}, so every cartridge has them; both
-are off by default.
-
-\paragraph{Cell total variation.} The $K=2^{\text{nap}}$ cells of a table are the corners of an
-\code{nap}-dimensional cube: two cells are neighbours when their addresses differ in one bit, as $c$ and
-$c'$ do. The penalty of a layer is the mean squared difference between neighbouring rows,
-\[
-  \mathcal R_\text{TV}=\frac{1}{T\cdot\text{nap}\cdot2^{\text{nap}-1}}
-  \sum_{t=1}^{T}\ \sum_{(c,c')\,\text{Hamming-1}}\big\|W_t[c]-W_t[c']\big\|_2^2,
-\]
-over all $T=G\cdot\text{tph}$ tables and every neighbouring pair, each counted once
-(\code{ManifestoLUT.cell\_tv}). \code{cell\_tv\_penalty(model)} averages it over the model's LUT layers,
-and the training loss adds $\lambda$ times that. It acts on the table weights only and leaves the forward
-pass unchanged. The prior it encodes: a one-bit change of address, the smallest change of input, should
-change the read only a little.
-
-\paragraph{Table dropout.} With \code{table\_dropout\_rate} $p>0$, training drops whole tables: one
-Bernoulli draw per sample, head and table keeps each table with probability $1-p$, and the survivors
-are scaled by $1/(1-p)$, so the expected read is unchanged. A dropped table contributes nothing to that
-sample's value or gradient; in Gen-3 the mask multiplies the score $s$, to the same effect. At evaluation,
-or whenever gradients are off, nothing is dropped and nothing is rescaled.
-
-% ======================================================================================================
-\section{Experiments: the seven-configuration sweep}
+\section{Experiments: eight lookup variants and the dense FFN}
 \label{sec:ml}
-\suppressfloats[t]% keep the results table from floating above this heading
 
-\paragraph{Setup.} A six-block GPT ($d_\text{model}=384$, 6 attention heads, $68.2$M parameters) with the
-feed-forward layer of every block replaced by a \code{ProjectionMHL} around the cartridge under test.
-Every configuration here is square: the wrapper's input and output widths both equal the model width,
-$D_\text{in}=D_\text{out}=d_\text{model}=384$. All
-seven runs\footnote{Configs, full metric histories and summaries (including wall-clock hours and peak
-memory) of every run are on the branch, under
-\url{https://github.com/anatoli-starostin/spiky/tree/feature/lutorch_ex_report/experiments/lutorch_ex}.}
-share the same topology --- $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
-$d_\text{in}=d_\text{out}=48$, anchor pairs --- seed~1, the default init (per-head Uniform$[\pm10^{-3}]$
-tables, \code{decompress} zeroed), cell TV $\lambda=10$ and table dropout $p=0.2$ (\S\ref{sec:reg}), AdamW ($3\!\times\!10^{-4}$, weight decay $0.1$, none on the tables),
-48{,}000 steps, cosine schedule with $10\%$ warm-up to a $0.1\times$ floor, sequence length 512, 24{,}576
-tokens per step (device batch 12, accumulation 4), evaluation every 500 steps; the backbone runs in bf16,
-the LUT layers in fp32. Data and tokenisation are the \emph{NanoChat} setup: the ClimbMix text corpus as
-prepared by nanochat's data script, streamed and tokenised on the fly by nanochat's RustBPE tokenizer
-(32{,}768-entry vocabulary, trained by nanochat on the same corpus) into BOS-aligned 512-token rows;
-\code{val\_bpb} is the validation cross-entropy in bits divided by the number of \emph{bytes} of the
-decoded text (nanochat's bits-per-byte evaluation on a fixed held-out set), so it is comparable across
-tokenisers.
+This section describes the outermost box of Figure~\ref{fig:levels}, the full model. It answers two
+questions. How well do the lookup variants learn, compared with each other and with the dense FFN that
+they replace? And how fast do they run?
 
-\begin{table}[t]
-\centering\footnotesize
-\setlength{\tabcolsep}{4pt}
-\begin{tabular}{@{}l l r r r@{}}
+\subsection{Setup}
+
+The test model is a six-layer GPT. In every layer, the FFN is replaced by a \code{ProjectionMHL} wrapper
+that contains the lookup variant under test. Eight configurations were trained, and they differ only in
+the lookup variant. Each of them uses the fused class of its lookup variant. A ninth run, the baseline,
+keeps the dense FFN. Table~\ref{tab:setup} lists the settings. The configuration files, the training
+scripts, and a summary of every run (including the training time and the peak memory) are available on the
+branch at
+\url{https://github.com/anatoli-starostin/spiky/tree/research/lutorch_ex_fused_ablations/experiments/lutorch_ex_fused}.
+
+\begin{table}[htb]
+\centering\small
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{L{30mm}L{118mm}}
 \toprule
-feed-forward layer & read & params & best \code{val\_bpb} & $\Delta$ vs.\ dense \\
+item & value \\
 \midrule
-dense FFN, $384\!\to\!1536\!\to\!384$, GELU & --- & 35.8M & 1.11509 & --- \\
-\midrule
-\code{ConfidenceLUT} $n{=}2$        & scored two-cell blend, float   & 68.2M & \textbf{1.10606} & $-0.0090$ \\
-\code{QuantisedConfidenceLUT} $n{=}2$ & the same, int8 + power-of-two & 68.2M & 1.10724 & $-0.0079$ \\
-\code{ConfidenceLUT} $n{=}1$        & scored single cell             & 68.2M & 1.11737 & $+0.0023$ \\
-\code{QuantisedConfidenceLUT} $n{=}1$ & the same, int8 + power-of-two & 68.2M & 1.11982 & $+0.0047$ \\
-\code{FusedSoftSignSmoothLUT}       & learned-temperature blend      & 68.2M & 1.12941 & $+0.0143$ \\
-\code{FusedManifestoSoftLUT}        & $U$-blend                      & 68.2M & 1.13949 & $+0.0244$ \\
-\code{FusedManifestoHardLUT}        & hard read                      & 68.2M & 1.15152 & $+0.0364$ \\
-\code{FusedSoftSignHardLUT}         & hard read                      & 68.2M & 1.15647 & $+0.0414$ \\
+model & six-layer GPT (pre-norm blocks, rotary position embeddings, untied output layer), $d_\text{model}=384$, 6 attention heads; $68.2$M parameters with the multi-head LUTs, $35.8$M with the dense FFN \\
+dense FFN & $384\!\to\!1536\!\to\!384$ with GELU, no bias, no dropout \\
+wrapper & square: $D_\text{in}=D_\text{out}=d_\text{model}=384$ \\
+multi-head LUT & $h_\text{in}=h_\text{out}=8$ heads, \code{tph}$=64$, \code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, anchor pairs \\
+initialization & seed 1; tables uniform in $[-10^{-3},10^{-3}]$ per head, input projection $\mathcal{N}(0,0.02)$, output projection zero \\
+regularizers & multi-head LUTs only: row total variation with $\lambda=10$, and table dropout with $p=0.2$ (Section~\ref{sec:reg}) \\
+optimizer & AdamW, learning rate $3\times10^{-4}$, $\beta=(0.9,0.95)$, weight decay $0.1$ (none on the tables and on the parameters with fewer than two dimensions), gradient clipping at $1.0$ \\
+schedule & 48{,}000 steps; cosine schedule, $10\%$ warm-up, floor at $0.1\times$ the peak rate \\
+batch & sequences of 512 tokens; 24{,}576 tokens per step (LUT runs: device batch 12, gradient accumulation 4; dense run: device batch 48), $1.18$ billion tokens in all \\
+precision & fp32 throughout \\
+validation & every 500 steps, on a fixed held-out set of 4{,}788 sequences \\
+data & the \emph{NanoChat} setup: the ClimbMix text corpus as prepared by nanochat's data script, 170 shards; the runs read less than one pass of it \\
+tokenizer & nanochat's RustBPE tokenizer, with a vocabulary of 32{,}768 entries trained by nanochat on the same corpus; the text is streamed and tokenized on the fly into sequences of 512 tokens, aligned to the beginning-of-sequence (BOS) token \\
 \bottomrule
 \end{tabular}
-\caption{The 48k sweep, one seed, against the dense feed-forward baseline: the same backbone (6 blocks,
-$d_\text{model}=384$, 6 attention heads), data, tokenizer, schedule, 24{,}576-token batches and seed, with
-the dense $384\!\to\!1536\!\to\!384$ GELU layer in the feed-forward slot (run
-\code{exp\_n\_0177\_vanilla48k\_corrected} on branch \code{research/ffn\_replacement\_fix}).}
+\caption{The settings of the nine runs.}
+\label{tab:setup}
+\end{table}
+
+The metric is \code{val\_bpb}, the validation loss in bits per byte (bpb). It is the cross-entropy on a
+fixed held-out set, measured in bits and divided by the number of \emph{bytes} of the text that the
+tokens represent. (This is the bits-per-byte measure of nanochat.) Because the loss is divided by the
+number of bytes and not by the number of tokens, the metric can be compared between models with different
+tokenizers. A lower value is better.
+
+\subsection{Results}
+
+\begin{table}[!htb]
+\centering\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}L{60mm}L{40mm}rrr@{}}
+\toprule
+FFN replacement & lookup & params & \code{val\_bpb} & $\Delta$ vs.\ dense \\
+\midrule
+dense FFN, $384\!\to\!1536\!\to\!384$, GELU & none & 35.8M & 1.08936 & \\
+\midrule
+\code{FusedConfidenceLUT} $n=2$           & scored weighted retrieval & 68.2M & \textbf{1.08653} & $-0.0028$ \\
+\code{FusedQuantisedConfidenceLUT} $n=2$  & the same, in int8 & 68.2M & 1.08986 & $+0.0005$ \\
+\code{FusedConfidenceLUT} $n=1$           & scored single row & 68.2M & 1.09698 & $+0.0076$ \\
+\code{FusedQuantisedConfidenceLUT} $n=1$  & the same, in int8 & 68.2M & 1.09928 & $+0.0099$ \\
+\code{FusedManifestoSoftLUT}, soft-sign   & weighted retrieval with $U$ & 68.2M & 1.10954 & $+0.0202$ \\
+\code{FusedManifestoSoftLUT}, rational    & weighted retrieval with $U$ & 68.2M & 1.11863 & $+0.0293$ \\
+\code{FusedManifestoHardLUT}, rational    & hard lookup & 68.2M & 1.13242 & $+0.0431$ \\
+\code{FusedManifestoHardLUT}, soft-sign   & hard lookup & 68.2M & 1.13780 & $+0.0484$ \\
+\bottomrule
+\end{tabular}
+\caption{The nine runs at 48{,}000 steps, one seed each. Every run improves until its last evaluation, so
+\code{val\_bpb} is both the final and the best value. ``Soft-sign'' and ``rational'' are the values of
+\code{uncertainty\_func}. The baseline has the same backbone (6 layers, $d_\text{model}=384$, 6 attention
+heads), data, tokenizer, schedule, batches of 24{,}576 tokens and seed, with a dense
+$384\!\to\!1536\!\to\!384$ GELU network as the FFN and no regularizer (run \code{00\_vanilla}). The int8
+lookup variants are trained with int8 rows and power-of-two coefficients (Section~\ref{sec:quant}). Each
+fused class has the mathematics of its reference class.}
 \label{tab:results}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure}[!htb]
 \centering
-\includegraphics[width=\linewidth]{fig_curves.pdf}
-\caption{Validation bpb of the seven runs (left: full run; right: the last half, with each run's best value).
-Colour is the generation (red Confidence, blue SoftSign, green Manifesto); dotted lines are the
-one-cell reads (the two hard reads and Confidence $n{=}1$), dashed is the int8 cartridge.}
+\includegraphics[width=\linewidth]{fig_curves_v2.pdf}
+\caption{Validation loss in bits per byte for the nine runs. Left: the full run. Right: the second half,
+with the final value of each run. Color marks the family (red confidence, blue Manifesto with the
+soft-sign uncertainty function, green Manifesto with the rational one, black the dense FFN). Solid lines
+retrieve two rows per table, and dotted lines one row (the two hard lookups, and confidence with $n=1$).
+The dashed and the dash-dotted lines are the int8 lookup variants with $n=2$ and $n=1$.}
 \label{fig:curves}
 \end{figure}
 
-\paragraph{Reading the results.} Five things are visible in Table~\ref{tab:results} and
-Figure~\ref{fig:curves}; each is one run per configuration. (i) In the two generations that come in a
-hard and a soft form, the \emph{soft} read is better: by $0.012$ bpb for Manifesto and $0.027$ for
-SoftSign. (ii) Within Gen-3, also reading the neighbour cell ($n{=}2$) beats the single scored cell
-($n{=}1$) by $0.011$. Both are soft, scored reads, so this compares one cell with two, not hard with soft.
-It holds after quantisation too: Quantised $n{=}1$ trails Quantised $n{=}2$ by $0.013$, an order of magnitude
-more than the $0.0007$--$0.0014$ by which re-running the two $n{=}2$ configurations moved their best values.
-(iii) Adding the \emph{confidence score} beats a blend by uncertainty alone: Confidence $n{=}2$ leads the
-best SoftSign run by $0.023$ and the best Manifesto run by $0.033$. The order of all seven runs is fixed
-from step 7{,}500 on. (iv) \emph{Quantisation is nearly free}: int8 rows and power-of-two weights cost $+0.0012$ bpb,
-for tables one quarter the size; at $n{=}1$ the cost is $+0.0025$. (v) Against the
-dense feed-forward layer, the two scored two-cell cartridges \emph{win} ($-0.009$ and $-0.008$ bpb), the
-single-cell scored read is within $0.002$ (its int8 twin trails by $0.005$), and the blend-only generations
-trail by $0.014$--$0.041$; the
-LUT models carry $1.9\times$ the parameters of the dense one, but a LUT layer touches only two 48-wide rows
-per table per token.
+Table~\ref{tab:results} and Figure~\ref{fig:curves} show five results. Each configuration was run once.
+\code{FusedConfidenceLUT} with $n=1$ was also run with seeds 2 and 3, which gave $1.09682$ and $1.09460$
+bpb. The standard deviation of the three runs, $0.0013$ bpb, shows how much a result can vary from one run
+to the next.
+\begin{enumerate}\itemsep0pt
+\item \textbf{A weighted retrieval is better than a hard lookup.} With both uncertainty functions, the
+  weighted retrieval has the lower loss: by $0.014$ bpb with the rational one, and by $0.028$ bpb with the
+  soft-sign one. The soft-sign function, with its learnable temperatures, helps the weighted retrieval (by $0.009$ bpb), but not
+  the hard lookup, which it makes worse by $0.005$ bpb.
+\item \textbf{Two rows are better than one.} Among the confidence lookup variants, the form that also
+  retrieves the neighbor row ($n=2$) is better than the form with a single scored row ($n=1$), by $0.010$
+  bpb. Both forms multiply their rows by the score. This result therefore compares one row with two rows,
+  and it does not compare a hard lookup with a weighted retrieval. The same result holds after
+  quantization, by $0.009$ bpb. Both differences are seven to eight times the variation from run to run.
+\item \textbf{The confidence score improves the result.} The Manifesto lookup variants weight the two rows
+  according to the uncertainty of one bit only. The confidence lookup variants add the confidence score,
+  and they do better: \code{FusedConfidenceLUT} with $n=2$ is ahead of the best Manifesto run (the weighted
+  retrieval with the soft-sign function) by $0.023$ bpb, and even the single scored row ($n=1$) is ahead
+  of it by $0.013$ bpb. The order of the eight lookup variants does not change after step 6{,}500.
+\item \textbf{Quantization costs little.} With int8 rows and power-of-two coefficients, the loss
+  increases by $0.0033$ bpb at $n=2$ and by $0.0023$ bpb at $n=1$, and the tables need only a quarter of
+  the memory.
+\item \textbf{Only the best lookup variant is better than the dense FFN.} \code{FusedConfidenceLUT} with
+  $n=2$ has a lower loss than the dense FFN, by $0.003$ bpb, which is about twice the variation from run
+  to run. Its curve crosses below the curve of the dense FFN only after step 38{,}500. Its int8
+  counterpart ends $0.0005$ bpb above the dense FFN, which is within the variation from run to run. The
+  other lookup variants are worse by $0.008$ to $0.048$ bpb. The LUT models have $1.9$ times as many
+  parameters as the dense model. For each token, however, a multi-head LUT uses only one or two rows of 48
+  values from each table.
+\end{enumerate}
 
-\subsection{Benchmarks: CPU, RTX 5090, H100}
+\textbf{Arithmetic per token.} For one token, the dense FFN of the baseline performs $1.18$ million
+multiply-adds in its two matrix products ($384\times1536$ and $1536\times384$). The FFN of
+\code{FusedConfidenceLUT} with $n=2$ performs $0.29$ million in its two projections ($384\times384$ each),
+four times fewer. Its lookup reads two rows of 48 values from each of the 512 tables, that is $49{,}152$ of
+the $6.3$ million table values, and multiplies each value by its coefficient, which adds $0.05$ million
+multiply-adds. Forming the addresses and the scores takes about $37{,}000$ further element-wise operations.
+In all, the LUT FFN needs $3.4$ times fewer multiply-adds than the dense FFN. In exchange, it reads
+different table rows for every token, whereas the dense FFN applies the same two matrices to every token.
+
+\subsection{Benchmarks: RTX 5090 and H100}
 \label{sec:bench}
-Table~\ref{tab:bench} times the layer alone, at the sweep geometry, for eight optimised configurations, the
-seven the sweep used and Quantised $n{=}1$: the four fused twins and the four Gen-3 configurations (which have no separate twin:
-their \code{embedding\_bag} read with a compiled forward is already the fast path). Gen-1 and Gen-2 also
-exist as plain-PyTorch \emph{reference} cartridges (\code{ManifestoHardLUT} and so on): written for
-readability, and the oracle the fused twins are tested against for equal results. They are not tuned for
-speed and the sweep did not train with them, so the table leaves them out. The CPU and RTX 5090 columns
-were measured for this report with the library's benchmark harness, the module
-\code{spiky.lutorch\_ex.bench} (\code{src/spiky/lutorch\_ex/bench.py}), driven by a small script that
-runs the configurations at the sweep geometry.
 
-\begin{table}[h]
+Table~\ref{tab:bench} gives the timings of a single multi-head LUT, measured without the model around it,
+for the classes that the sweep trained: the eight fused classes, and \code{DeployedQuantisedConfidenceLUT},
+the int8 form that is used for decode. Two reference classes are added for comparison. The numbers are
+taken from the benchmark records in the repository, \code{src/spiky/lutorch\_ex/benchmarks/results\_2026-10-15/}
+(\code{rtx5090.md} and \code{h100.md}). They were measured on an RTX 5090 and on an H100 with the same code
+and the same settings, using the benchmark module of the library,
+\code{spiky.lutorch\_ex.benchmarks.bench\_snapshot}. The table uses the large batch of the records,
+32{,}768 input vectors, with 16 heads.
+
+The reference classes are written in plain PyTorch, to be easy to understand, and the fused classes are
+tested against them. The Manifesto reference classes are not in the table: their training step runs
+without compilation, so it is not comparable with the others. The fused classes run only on CUDA, and the
+records contain no CPU timings.
+
+\begin{table}[!htb]
 \centering\footnotesize
 \setlength{\tabcolsep}{3.6pt}
-\begin{tabular}{@{}l r rrr rrr@{}}
+\begin{tabular}{@{}l rr rr r@{}}
 \toprule
-& CPU (measured) & \multicolumn{3}{c}{RTX 5090 (measured)} & \multicolumn{3}{c}{H100 (recorded, PR \#138)} \\
-\cmidrule(lr){2-2}\cmidrule(lr){3-5}\cmidrule(l){6-8}
-cartridge & step ms, $B{=}1024$ & eval ms & step ms & peak GB & eval ms & step ms & peak GB \\
+& \multicolumn{2}{c}{RTX 5090} & \multicolumn{2}{c}{H100} & \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+lookup variant & decode ms & step ms & decode ms & step ms & peak MiB \\
 \midrule
-\code{FusedManifestoHardLUT}        & 62.9 & 1.04 & 20.2 & 3.8 & 1.61 & 21.3 & 4.0 \\
-\code{FusedManifestoSoftLUT}        & 92.3 & 3.50 & 22.5 & 2.3 & 3.84 & 23.6 & 2.5 \\
-\code{FusedSoftSignHardLUT}         & 68.8 & 1.03 & 24.6 & 4.2 & 1.61 & 23.8 & 4.2 \\
-\code{FusedSoftSignSmoothLUT}       & 60.8 & 2.13 & 28.8 & 2.9 & 4.10 & 28.4 & 3.0 \\
-\code{ConfidenceLUT} $n{=}1$        & 35.8 & 1.51 & 11.5 & 1.1 & 2.40 & 12.9 & 1.2 \\
-\code{ConfidenceLUT} $n{=}2$        & 66.7 & 4.59 & 21.5 & 1.9 & 4.17 & 24.7 & 2.1 \\
-\code{QuantisedConfidenceLUT} $n{=}2$ & 83.4 & 4.12 & 23.9 & 1.8 & 4.23 & 24.5 & 2.0 \\
-\code{QuantisedConfidenceLUT} $n{=}1$ & 52.7 & 2.04 & 11.8 & 1.1 & --- & --- & --- \\
+\code{FusedManifestoHardLUT}, rational           & 1.026 & 5.778 & 1.599 & 7.643 & 240.0 \\
+\code{FusedManifestoHardLUT}, soft-sign          & 1.042 & 7.265 & 2.199 & 11.351 & 240.0 \\
+\code{FusedManifestoSoftLUT}, rational           & 1.899 & 8.030 & 2.488 & 8.971 & 240.0 \\
+\code{FusedManifestoSoftLUT}, soft-sign          & 1.921 & 8.715 & 2.614 & 11.597 & 240.0 \\
+\code{FusedConfidenceLUT} $n=1$                  & 1.075 & 5.697 & 1.443 & 7.289 & 241.5 \\
+\code{FusedConfidenceLUT} $n=2$                  & 1.981 & 9.205 & 2.765 & 11.712 & 241.5 \\
+\code{FusedQuantisedConfidenceLUT} $n=1$         & 1.274 & 5.383 & 2.449 & 6.829 & 369.5 \\
+\code{FusedQuantisedConfidenceLUT} $n=2$         & 2.131 & 9.072 & 3.558 & 10.197 & 369.5 \\
+\code{DeployedQuantisedConfidenceLUT} $n=1$      & 0.909 & --    & 1.296 & --    & -- \\
+\code{DeployedQuantisedConfidenceLUT} $n=2$      & 1.291 & --    & 1.763 & --    & -- \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{reference classes, for comparison}} \\
+\code{ConfidenceLUT} $n=2$                       & 5.179 & 21.281 & 6.782 & 26.222 & 3216.0 \\
+\code{QuantisedConfidenceLUT} $n=2$              & 9.997 & 49.497 & 17.107 & 74.765 & 4269.4 \\
 \bottomrule
 \end{tabular}
-\caption{Layer-only timings at $h_\text{in}=h_\text{out}=8$, \code{tph}$=64$, \code{nap}$=8$,
-$d_\text{in}=d_\text{out}=48$, fp32, random input. \emph{eval} = no-grad forward; \emph{step} = training
-forward + backward. GPU columns at $B=24{,}576$ (the sweep's training batch). \textbf{Measured here:}
-one workstation, torch 2.9.1 (cu130), CUDA 13.3 toolkit for the JIT kernels, driver 595; RTX 5090 (32\,GB,
-native kernels active): medians of 10 repeats after 3 warm-ups; CPU (24-thread desktop part, the fused
-twins' \code{embedding\_bag} path, $B=1{,}024$): medians of 15 repeats after 5 warm-ups, with the
-fastest repeat within $15\%$ of the median. H100 column measured on an H100 VM provided by Nebius. The
-\code{QuantisedConfidenceLUT} $n{=}1$ row was measured later with the same harness and settings (median of three
-runs); its H100 numbers are pending.}
+\caption{Timings of one multi-head LUT alone, with $h_\text{in}=h_\text{out}=16$, \code{tph}$=64$,
+\code{nap}$=8$, $d_\text{in}=d_\text{out}=48$, in fp32, on 32{,}768 random input vectors, from the
+benchmark records \code{benchmarks/results\_2026-10-15/} of the library (torch 2.9.1, CUDA 13.0).
+\emph{Decode} is a forward pass in evaluation mode without gradients. \emph{Step} is one training step, a
+forward and a backward pass. Each time is the median wall-clock time of 100 steps, after 20 warm-up steps
+and with the L2 cache flushed before each step; the median is taken over 3 rounds and averaged over the
+passes of the record (3 on the RTX 5090, 2 on the H100). \emph{Peak} is the peak memory of a training step
+above what is allocated before it; it is the same on both GPUs. The deployed class has no training step.}
 \label{tab:bench}
 \end{table}
 
-Three readings. On either GPU the training step of every blend or hard cartridge is $20$--$29$ ms at the
-training batch and is dominated by the backward ($17$--$19$ ms), the scatter into the $6.3$M-entry table;
-\code{ConfidenceLUT} $n{=}1$ is both the cheapest step ($11.5$ ms) and, with its int8 twin, the smallest
-footprint ($1.1$ GB), because its compiled forward fuses the score's chain of small kernels and reads one cell. Reading two
-cells ($n{=}2$, the soft forms) roughly doubles the eval forward ($1.0\to3.5$ ms for Manifesto,
-$1.5\to4.6$ ms for Confidence, $2.0\to4.1$ ms for its int8 twin). The quantised cartridge's eval forward is not consistently faster than the float
-one ($4.1$ against $4.6$ ms at $n{=}2$, but $2.0$ against $1.5$ at $n{=}1$) --- its training-time read still fetches float rows for the straight-through estimator; the integer read
-belongs to the deployed cartridge (\S\ref{sec:quant}). On a GPU, then, quantisation buys memory rather than
-speed: the deployed int8 tables take a quarter of the fp32 storage ($24$ to $6$~MiB per layer). On hardware where
-low-precision integer arithmetic is natively cheap, we expect the deployed integer read to pay off in speed as
-well; that is not measured here. The fused twins earn their place:
-\code{FusedSoftSignHardLUT}'s native training step is $1.6\times$ faster and uses $2.7\times$ less memory
-than its reference cartridge \code{SoftSignHardLUT} at the training batch (recorded when the twin landed;
-the reference cartridges are not in Table~\ref{tab:bench}). The two GPUs agree to within $15\%$ on every row:
-these layers are bound by memory traffic, not arithmetic. On the CPU, at a batch $24\times$ smaller, the
-same layers take $36$--$92$ ms per step --- roughly two orders of magnitude slower per row --- with the
-same ordering: the one-cell scored read is the cheapest, the two-cell blends cost $1.7$--$2.6\times$ more.
+\needlines{5}
+The table shows the following.
+\begin{itemize}\itemsep0pt
+\item \textbf{Most of a training step is the backward pass.} A fused training step takes $5.4$ to $9.2$
+  ms on the RTX 5090 and $6.8$ to $11.7$ ms on the H100. According to the records, the backward pass takes
+  $74$ to $84\%$ of it on the RTX 5090.
+\item \textbf{A second row costs time in decode.} On the RTX 5090, the decode time grows by a factor of
+  $1.7$ to $1.85$ from one row to two rows (from $1.03$ to $1.90$ ms for Manifesto, from $1.08$ to $1.98$
+  ms for confidence, and from $1.27$ to $2.13$ ms for its int8 counterpart in training form).
+\item \textbf{The int8 decode is the fastest decode of the confidence lookup variants.}
+  \code{DeployedQuantisedConfidenceLUT} reads the int8 tables with one kernel. On the RTX 5090 it takes
+  $0.91$ ms with one row and $1.29$ ms with two rows, against $1.08$ and $1.98$ ms for the floating-point
+  \code{FusedConfidenceLUT}; the H100 shows the same order. Its tables also need a quarter of the memory
+  ($6$~MiB instead of $24$~MiB per layer of the sweep).
+\item \textbf{The soft-sign uncertainty function costs training time.} It makes the training step of the
+  Manifesto classes longer by $9$ to $26\%$ on the RTX 5090, and by $29$ to $49\%$ on the H100. On the
+  RTX 5090 it changes the decode time by $2\%$ or less; on the H100 it makes the decode of the hard lookup
+  $38\%$ longer.
+\item \textbf{The fused classes are faster and need less memory.} At $n=2$, the training step of
+  \code{FusedConfidenceLUT} is $2.2$ to $2.3$ times faster than that of the compiled reference class
+  \code{ConfidenceLUT}, and it needs $13$ times less memory. For the int8 lookup variant the training step
+  is $5.5$ to $7.3$ times faster, with $12$ times less memory.
+\item \textbf{The RTX 5090 is faster than the H100 here.} On every line of the table, the RTX 5090 takes
+  less time, by a factor of $1.1$ to $2.1$.
+\end{itemize}
 
-\begin{thebibliography}{9}\small
+\subsection{Which lookup variant to use}
+\label{sec:which}
+
+For the best accuracy, use the confidence lookup variant with $n=2$ (\code{ConfidenceLUT}, or
+\code{FusedConfidenceLUT} on a GPU). In the sweep it is the only lookup variant with a lower loss than the
+dense FFN, by a small margin. For decode with int8 tables, train \code{QuantisedConfidenceLUT} with $n=2$
+(\code{FusedQuantisedConfidenceLUT} on a GPU), export it, and decode with
+\code{DeployedQuantisedConfidenceLUT}; in the sweep it matches the dense FFN within the variation from run
+to run. The Manifesto lookup variants are useful mainly as points of reference. A hard lookup reads one
+row per table without a multiplication, but it is less accurate than the weighted retrieval with the same
+uncertainty function (Table~\ref{tab:results}), and in the benchmarks the int8 decode with one row is
+faster still.
+
+\begin{thebibliography}{9}\small\setlength{\itemsep}{1pt}
+\bibitem{lsh} P.~Indyk and R.~Motwani. ``Approximate nearest neighbors: towards removing the curse of
+  dimensionality.'' Proceedings of the 30th ACM Symposium on Theory of Computing (STOC), 1998,
+  pp.~604--613.
 \bibitem{manifesto} E.~M.~Izhikevich. ``Spiking Manifesto.'' arXiv:2512.11843, v2, December 2025.
 \bibitem{lookupffn} Z.~Zeng, M.~Davies, P.~Pulijala, K.~Sankaralingam, V.~Singh. ``LookupFFN: Making
   Transformers Compute-lite for CPU Inference.'' ICML 2024.
