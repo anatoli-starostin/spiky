@@ -833,7 +833,6 @@ precision & fp32 throughout \\
 validation & every 500 steps, on a fixed held-out set of 4{,}788 sequences \\
 data & the \emph{NanoChat} setup: the ClimbMix text corpus as prepared by nanochat's data script, 170 shards; the runs read less than one pass of it \\
 tokenizer & nanochat's RustBPE tokenizer, with a vocabulary of 32{,}768 entries trained by nanochat on the same corpus; the text is streamed and tokenized on the fly into sequences of 512 tokens, aligned to the beginning-of-sequence (BOS) token \\
-library & \code{lutorch\_ex} of 12--14 October 2026, in which \code{uncertainty\_func} was still called \code{weight}; the mathematics is the one described here \\
 \bottomrule
 \end{tabular}
 \caption{The settings of the nine runs.}
