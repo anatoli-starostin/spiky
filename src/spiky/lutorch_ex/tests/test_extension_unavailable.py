@@ -26,8 +26,11 @@ def _clean():
 
 @pytest.fixture
 def cuda_present(monkeypatch):
-    """classify() checks for a CUDA device first; pretend one exists so the other causes are reachable on any host."""
+    """classify() checks for a CUDA device and the CUDA toolkit first; pretend both exist so the other causes are
+    reachable on any host."""
+    import torch.utils.cpp_extension as ce
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(ce, "CUDA_HOME", "/usr/local/cuda")
 
 
 # -- cause classification: each from its own evidence -------------------------------------------------------------
