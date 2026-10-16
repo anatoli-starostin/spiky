@@ -68,7 +68,7 @@ PY
 # --- keep only the newest $KEEP_CKPTS step sets (never touches the one being written: it is newest) ---
 prune_checkpoints() {
     ls "$CKPT_DIR"/model_*.pt 2>/dev/null | sed -E 's/.*model_([0-9]+)\.pt/\1/' | sort -n | head -n -"$KEEP_CKPTS" |
-    while read -r s; do rm -f "$CKPT_DIR/model_$s.pt" "$CKPT_DIR/meta_$s.json" "$CKPT_DIR"/optim_"$s"_rank*.pt; done
+    while read -r s; do rm -f "$CKPT_DIR/model_$s.pt" "$CKPT_DIR/meta_$s.json" "$CKPT_DIR"/optim_"$s"_rank*.pt; done || true   # tolerate "no checkpoints yet": without this, ls exits 2 under pipefail and errexit kills the background pruner on its first pass
 }
 
 # Smoke-run hooks (runs/smoke_run_d24.sh). All default to empty/off, so the real run is unaffected.
