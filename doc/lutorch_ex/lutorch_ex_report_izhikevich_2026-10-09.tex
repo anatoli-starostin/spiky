@@ -293,7 +293,7 @@ Table~\ref{tab:classes} lists the classes.}
 \label{tab:matrix}
 \end{table}
 
-\textbf{Manifesto, rational uncertainty.} The coefficient of the neighbor row is the fixed uncertainty function
+\textbf{Manifesto, rational uncertainty.} The neighbor row is weighted by the fixed uncertainty function
 $U$ of the Spiking Manifesto~\citep{manifesto}, applied to the deciding margin. $U$ equals $\tfrac12$
 when the deciding margin is zero. In that case the two rows are equally plausible. $U$ decreases toward
 zero as the margin grows. The hard lookup with this $U$, \code{ManifestoHardLUT}, is the rule of the
@@ -301,10 +301,10 @@ Manifesto as it was published. The weighted retrieval, \code{ManifestoSoftLUT}, 
 Manifesto. In the Manifesto, $U$ is used only to compute gradients during training, and inference uses
 the plain sum of the selected rows (its Eq.~3 and Section III-A).
 
-\textbf{Manifesto, soft-sign uncertainty.} This uncertainty function has the same role, but it is
-learnable. Two parameters, the temperatures $T_\text{soft}$ and $T_\text{sel}$,
+\textbf{Manifesto, soft-sign uncertainty.} This uncertainty function has the same role, but it has
+learnable parameters. Two parameters, the temperatures $T_\text{soft}$ and $T_\text{sel}$,
 replace the fixed constants of $U$. The first temperature rescales the deciding margin into a number
-$\rho$ between 0 and 1. The second temperature turns $\rho$ into the coefficient $U$, which is at most
+$\rho$ between 0 and 1. The second temperature turns $\rho$ into the uncertainty $U$, which is at most
 $\tfrac12$. Both temperatures are learned. There is one pair of temperatures for each multi-head LUT
 (Section~\ref{sec:heads}), and both start at the value $0.5$. They can also be kept fixed. The same two
 classes, \code{ManifestoHardLUT} (hard lookup) and \code{ManifestoSoftLUT} (weighted retrieval), use
@@ -620,7 +620,7 @@ import torch
 from spiky.lutorch_ex import LUTSpec, ConfidenceLUT, ProjectionMHL
 
 spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48)  # 8 heads of 64 tables
-mhl  = ConfidenceLUT(spec, seed=1, read_top_n=2)                    # the cartridge; 2 rows per table
+mhl  = ConfidenceLUT(spec, seed=1, read_top_n=2)                    # the cartridge (lookup variant); 2 rows per table
 ffn  = ProjectionMHL(mhl, d_model=384)           # or input_dim=..., output_dim=... (may differ)
 x = torch.randn(4, 128, 384)                     # (B, T, D) activations
 y = ffn(x.reshape(-1, 384)).reshape(x.shape)     # torch.Size([4, 128, 384])
@@ -680,7 +680,8 @@ table that a different row would have been a better choice.
 \label{sec:reg}
 
 Two regularizers are implemented in the base class \code{ManifestoLUT}, so every lookup variant with a
-trainable table can use them (all except \code{DeployedQuantisedConfidenceLUT}, which is inference only).
+trainable table can use them (all except \code{DeployedQuantisedConfidenceLUT}, the inference-only int8 form
+of Section~\ref{sec:quant}).
 Both are switched off by default. The first regularizer acts on the rows of a table, and the second acts
 on whole tables.
 
@@ -894,7 +895,7 @@ to the next.
 \begin{enumerate}\itemsep0pt
 \item \textbf{A weighted retrieval is better than a hard lookup.} With both uncertainty functions, the
   weighted retrieval has the lower loss: by $0.014$ bpb with the rational one, and by $0.028$ bpb with the
-  soft-sign one. The learnable soft-sign function helps the weighted retrieval (by $0.009$ bpb), but not
+  soft-sign one. The soft-sign function, with its learnable temperatures, helps the weighted retrieval (by $0.009$ bpb), but not
   the hard lookup, which it makes worse by $0.005$ bpb.
 \item \textbf{Two rows are better than one.} Among the confidence lookup variants, the form that also
   retrieves the neighbor row ($n=2$) is better than the form with a single scored row ($n=1$), by $0.010$
@@ -917,6 +918,15 @@ to the next.
   parameters as the dense model. For each token, however, a multi-head LUT uses only one or two rows of 48
   values from each table.
 \end{enumerate}
+
+\textbf{Arithmetic per token.} For one token, the dense FFN of the baseline performs $1.18$ million
+multiply-adds in its two matrix products ($384\times1536$ and $1536\times384$). The FFN of
+\code{FusedConfidenceLUT} with $n=2$ performs $0.29$ million in its two projections ($384\times384$ each),
+four times fewer. Its lookup reads two rows of 48 values from each of the 512 tables, that is $49{,}152$ of
+the $6.3$ million table values, and multiplies each value by its coefficient, which adds $0.05$ million
+multiply-adds. Forming the addresses and the scores takes about $37{,}000$ further element-wise operations.
+In all, the LUT FFN needs $3.4$ times fewer multiply-adds than the dense FFN. In exchange, it reads
+different table rows for every token, whereas the dense FFN applies the same two matrices to every token.
 
 \subsection{Benchmarks: RTX 5090 and H100}
 \label{sec:bench}
