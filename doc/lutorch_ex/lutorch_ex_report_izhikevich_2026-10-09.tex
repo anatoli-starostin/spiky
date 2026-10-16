@@ -928,7 +928,7 @@ taken from the benchmark records in the repository, \code{src/spiky/lutorch\_ex/
 (\code{rtx5090.md} and \code{h100.md}). They were measured on an RTX 5090 and on an H100 with the same code
 and the same settings, using the benchmark module of the library,
 \code{spiky.lutorch\_ex.benchmarks.bench\_snapshot}. The table uses the large batch of the records,
-32{,}768 input vectors, with 16 heads, twice as many as the model of the sweep.
+32{,}768 input vectors, with 16 heads.
 
 The reference classes are written in plain PyTorch, to be easy to understand, and the fused classes are
 tested against them. The Manifesto reference classes are not in the table: their training step runs
