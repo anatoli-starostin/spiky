@@ -1,0 +1,84 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ REPO=/home/nebius-h100/projects/spiky
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ export PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ export NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat OMP_NUM_THREADS=1
++ NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
++ OMP_NUM_THREADS=1
++ LUT_PROFILE_H=32
++ LUT_PROFILE_TPH=32
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python /home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py --variants lut-fp32 --passes profile memory --batch 16 --fp32-matmul-precision high --out-dir /home/nebius-h100/prof_r1536_km --allow-dirty-lib
++ echo PROF_KM_RC=0
+PROF_KM_RC=0
++ echo '=== profile buckets ==='
+=== profile buckets ===
++ sed -n /profile/,/done/p /home/nebius-h100/prof_r1536_km/summary.md
++ head -60
+## profile [HW-dep]
+
+```json
+{
+ "lut-fp32": {
+  "tokens": 32768,
+  "op_calls_per_iter_fwd": {
+   "triton_poi_fused__to_copy_view_0": 2.0,
+   "cuLaunchKernel": 3.0,
+   "aten::addmm": 2.0,
+   "cudaLaunchKernelExC": 2.0,
+   "aten::_unsafe_view": 1.0,
+   "aten::randint": 1.0,
+   "aten::resize_": 1.0,
+   "aten::random_": 1.0,
+   "cudaLaunchKernel": 2.0,
+   "triton_poi_fused_lt_rand_0": 1.0,
+   "aten::view": 1.0,
+   "aten::empty": 1.0
+  },
+  "op_calls_per_iter_fwdbwd": {
+   "triton_poi_fused__to_copy_view_0": 2.0,
+   "cuLaunchKernel": 9.0,
+   "aten::addmm": 2.0,
+   "cudaLaunchKernelExC": 6.0,
+   "aten::_unsafe_view": 1.0,
+   "aten::randint": 1.0,
+   "aten::resize_": 1.0,
+   "aten::random_": 1.0,
+   "cudaLaunchKernel": 7.0,
+   "triton_poi_fused_lt_rand_0": 1.0,
+   "aten::view": 3.0,
+   "aten::empty": 4.0,
+   "triton_poi_fused__to_copy_0": 2.0,
+   "triton_red_fused_sum_0": 1.0,
+   "triton_red_fused_sum_1": 1.0,
+   "aten::mm": 4.0,
+   "aten::detach": 7.0,
+   "aten::reshape": 1.0,
+   "aten::to": 2.0,
+   "aten::zeros": 2.0,
+   "aten::zero_": 2.0,
+   "aten::fill_": 2.0,
+   "aten::sum": 1.0,
+   "aten::as_strided": 3.0,
+   "aten::view_as": 1.0,
+   "aten::select": 2.0,
+   "triton_red_fused_sum_view_0": 1.0,
+   "triton_red_fused_sum_view_1": 1.0,
+   "aten::add_": 1.0
+  },
+  "fwd": {
+   "cuda_time_per_iter_ms": 3.115851666666668,
+   "buckets_ms": {
+    "elementwise/other": 2.041,
+    "gemm": 0.778,
+    "fused_triton (addressing/score/casts)": 0.297
+   },
+   "top_kernels_ms": [
+    {
++ echo NEWBOX_PROF2_FINISHED
+NEWBOX_PROF2_FINISHED

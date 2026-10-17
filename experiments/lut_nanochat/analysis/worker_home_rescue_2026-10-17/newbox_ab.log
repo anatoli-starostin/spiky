@@ -1,0 +1,56 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ REPO=/home/nebius-h100/projects/spiky
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ cd /home/nebius-h100/projects/spiky
+++ git rev-parse HEAD
++ echo HEAD_BEFORE=783010da0071111f1c021bb3e4dc1c92fbb6a2fb
+HEAD_BEFORE=783010da0071111f1c021bb3e4dc1c92fbb6a2fb
++ git branch -f backup/pre-f1d5d03a-d7a96c28 HEAD
++ git fetch origin
++ tail -2
+ * [new tag]           archive/research-lut2spnet-quantised-amplitude -> archive/research-lut2spnet-quantised-amplitude
+ * [new tag]           archive/walker2d-lut    -> archive/walker2d-lut
++ echo '=== CHERRY-PICK f1d5d03a (LOCAL ONLY, no push) ==='
+=== CHERRY-PICK f1d5d03a (LOCAL ONLY, no push) ===
++ git cherry-pick f1d5d03a
+Auto-merging src/spiky/lutorch_ex/README.md
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/README.md
+Auto-merging src/spiky/lutorch_ex/cartridges/_cuda_ext.py
+Auto-merging src/spiky/lutorch_ex/cartridges/_fused_manifesto_cuda.py
+Auto-merging src/spiky/lutorch_ex/cartridges/_fused_quantised_cuda.py
+Auto-merging src/spiky/lutorch_ex/cartridges/csrc/fused_confidence.cu
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/cartridges/csrc/fused_confidence.cu
+Auto-merging src/spiky/lutorch_ex/cartridges/csrc/fused_manifesto.cu
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/cartridges/csrc/fused_manifesto.cu
+Auto-merging src/spiky/lutorch_ex/cartridges/csrc/pow2_int8_read.cu
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/cartridges/csrc/pow2_int8_read.cu
+Auto-merging src/spiky/lutorch_ex/cartridges/deployed_quantised_confidence.py
+Auto-merging src/spiky/lutorch_ex/tests/test_cta_order.py
+CONFLICT (add/add): Merge conflict in src/spiky/lutorch_ex/tests/test_cta_order.py
+Auto-merging src/spiky/lutorch_ex/tests/test_fused_vs_reference.py
+error: could not apply f1d5d03a... lutorch_ex: group-major CTA order for L2 locality (backward always, forward per arch)
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
++ CP_RC=1
++ echo CHERRY_PICK_RC=1
+CHERRY_PICK_RC=1
++ '[' 1 -ne 0 ']'
++ echo CHERRY_PICK_CONFLICT
+CHERRY_PICK_CONFLICT
++ git diff --name-only --diff-filter=U
+src/spiky/lutorch_ex/README.md
+src/spiky/lutorch_ex/cartridges/csrc/fused_confidence.cu
+src/spiky/lutorch_ex/cartridges/csrc/fused_manifesto.cu
+src/spiky/lutorch_ex/cartridges/csrc/pow2_int8_read.cu
+src/spiky/lutorch_ex/tests/test_cta_order.py
++ git cherry-pick --abort
++ echo STOPPED_NO_BENCH
+STOPPED_NO_BENCH
++ exit 3

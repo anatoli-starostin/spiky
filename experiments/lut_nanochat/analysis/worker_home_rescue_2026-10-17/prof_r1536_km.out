@@ -1,0 +1,39 @@
+{
+ "timestamp": "2026-10-15T16:21:23",
+ "repo_commit": "783010da0071111f1c021bb3e4dc1c92fbb6a2fb",
+ "lutorch_ex_src": null,
+ "lutorch_ex_src_commit": "783010da0071111f1c021bb3e4dc1c92fbb6a2fb",
+ "lutorch_ex_src_describe": "v1.0-633-g783010da",
+ "lutorch_ex_src_dirty_files": [],
+ "repo_tracked_changes": false,
+ "driver": "580.173.02",
+ "host_platform": "Linux-6.11.0-1016-nvidia-x86_64-with-glibc2.39",
+ "python": "3.10.22",
+ "gpu_name": "NVIDIA H100 80GB HBM3",
+ "gpu_vram_gib": 79.18,
+ "compute_capability": "9.0",
+ "sm_count": 132,
+ "torch": "2.9.1+cu128",
+ "cuda_runtime": "12.8",
+ "cudnn": 91002,
+ "triton": "3.5.1",
+ "fp32_matmul_precision": "high",
+ "fp8_usable": true,
+ "fp8_probe": "torch._scaled_mm (e4m3, tensorwise) ran on this device",
+ "macs_per_token": {
+  "dense": 18874368,
+  "lut_projections": 4718592,
+  "lut_read": 49152,
+  "lut": 4767744
+ }
+}
+== memory
+  [memory] lut-fp32    tokens=32768: held after fwd 0.69 GiB, peak 1.61 GiB
+== profile
+/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/_dynamo/variables/functions.py:1598: UserWarning: Dynamo does not know how to trace the builtin `lutorch_ex_fused_confidence.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.confidence_fwd.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+  [profile] lut-fp32 fwd: 3.12 ms GPU/iter; buckets {'elementwise/other': 2.041, 'gemm': 0.778, 'fused_triton (addressing/score/casts)': 0.297}
+  [profile] lut-fp32 bwd: 11.57 ms GPU/iter; buckets {'elementwise/other': 8.854, 'gemm': 2.37, 'fused_triton (addressing/score/casts)': 0.337, 'reduce': 0.008}
+done -> /home/nebius-h100/prof_r1536_km/results.json, /home/nebius-h100/prof_r1536_km/summary.md

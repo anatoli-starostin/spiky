@@ -1,0 +1,5 @@
+2026-10-16T19:23:18Z WATCH START target=3750 parent=181713 torchrun=181753 base_train=181763 start_epoch=1792136002 | step 02207/05568 (39.64%) | loss: 2.796007 | lrm: 0.93 | dt: 17861.72ms | tok/se
+2026-10-16T19:23:18Z STATUS step 02207/05568 (39.64%) | loss: 2.796007 | lrm: 0.93 | dt: 17861.72ms | tok/se | Step 02000 | Validation bpb: 0.853073
+2026-10-16T20:03:18Z STATUS step 02328/05568 (41.81%) | loss: 2.771489 | lrm: 0.90 | dt: 17860.10ms | tok/se | Step 02250 | Validation bpb: 0.843396
+2026-10-16T20:43:18Z STATUS step 02462/05568 (44.22%) | loss: 2.740588 | lrm: 0.87 | dt: 17857.56ms | tok/se | Step 02250 | Validation bpb: 0.843396
+2026-10-16T21:23:19Z STATUS step 02569/05568 (46.14%) | loss: 2.773384 | lrm: 0.84 | dt: 17854.27ms | tok/se | Step 02500 | Validation bpb: 0.835659

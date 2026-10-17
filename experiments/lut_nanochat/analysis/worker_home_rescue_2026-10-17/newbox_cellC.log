@@ -1,0 +1,129 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ REPO=/home/nebius-h100/projects/spiky
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ cd /home/nebius-h100/projects/spiky
++ git fetch origin research/lut_nanochat
+From github.com:anatoli-starostin/spiky
+ * branch            research/lut_nanochat -> FETCH_HEAD
+   4328185..783010d  research/lut_nanochat -> origin/research/lut_nanochat
++ git reset --hard origin/research/lut_nanochat
+HEAD is now at 783010d [lut_nanochat] setup_unified_env: fused build-check uses _fused_confidence_cuda.EXT
+++ git rev-parse HEAD
++ echo HEAD=783010da0071111f1c021bb3e4dc1c92fbb6a2fb
+HEAD=783010da0071111f1c021bb3e4dc1c92fbb6a2fb
++ rm -rf src/spiky/lutorch_ex/cartridges/wandb
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ export PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ command -v uv
++ UV=/home/nebius-h100/.local/bin/uv
++ '[' -z /home/nebius-h100/.local/bin/uv ']'
++ export NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
++ NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
+++ python3 -c 'import json;print(json.load(open("../pins.json"))["fa3"]["revision"])'
++ export NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ export OMP_NUM_THREADS=1
++ OMP_NUM_THREADS=1
++ echo '=== install pytest ==='
+=== install pytest ===
++ /home/nebius-h100/.local/bin/uv pip install --python .venv/bin/python pytest
++ echo PYTEST_INSTALL_RC=0
+PYTEST_INSTALL_RC=0
++ echo '=== LUTORCH_EX TESTS ==='
+=== LUTORCH_EX TESTS ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -m pytest /home/nebius-h100/projects/spiky/src/spiky/lutorch_ex/tests -q
++ tail -45
+........................................................................ [  8%]
+...............................F........................................ [ 12%]
+........................................................................ [ 17%]
+........................................................................ [ 21%]
+........................................................................ [ 25%]
+........................................................................ [ 29%]
+........................................................................ [ 34%]
+........................................................................ [ 38%]
+........................................................................ [ 42%]
+........................................................................ [ 46%]
+........................................................................ [ 51%]
+........................................................................ [ 55%]
+........................................................................ [ 59%]
+........................................................................ [ 63%]
+........................................................................ [ 68%]
+........................................................................ [ 72%]
+........................................................................ [ 76%]
+........................................................................ [ 80%]
+........................................................................ [ 85%]
+........................................................................ [ 89%]
+........................................................................ [ 93%]
+........................................................................ [ 98%]
+.................................                                        [100%]
+=================================== FAILURES ===================================
+______________ test_save_falls_back_when_safetensors_cannot_write ______________
+
+tmp_path = PosixPath('/tmp/pytest-of-nebius-h100/pytest-1/test_save_falls_back_when_safe0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7a9b0c2b1ae0>
+
+    def test_save_falls_back_when_safetensors_cannot_write(tmp_path, monkeypatch):
+        """safetensors importable but unable to write (e.g. numpy missing: ModuleNotFoundError inside save_file):
+        the payload is written with torch.save and loads back unchanged. Needs the [test] extra (safetensors, numpy)."""
+>       import safetensors.torch as st
+E       ModuleNotFoundError: No module named 'safetensors'
+
+../../../src/spiky/lutorch_ex/tests/test_deploy.py:130: ModuleNotFoundError
+=============================== warnings summary ===============================
+src/spiky/lutorch_ex/tests/test_index_dtype.py: 12 warnings
+  /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/autograd/graph.py:841: UserWarning: Deterministic behavior was enabled with either `torch.use_deterministic_algorithms(True)` or `at::Context::setDeterministicAlgorithms(true)`, but this operation is not deterministic because it uses CuBLAS and you have CUDA >= 10.2. To enable deterministic behavior in this case, you must set an environment variable before running your PyTorch application: CUBLAS_WORKSPACE_CONFIG=:4096:8 or CUBLAS_WORKSPACE_CONFIG=:16:8. For more information, go to https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:304.)
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED ../../../src/spiky/lutorch_ex/tests/test_deploy.py::test_save_falls_back_when_safetensors_cannot_write
+1 failed, 1688 passed, 12 warnings in 1031.58s (0:17:11)
++ echo TESTS_DONE
+TESTS_DONE
++ echo '=== CONFIRM fused h32/tph32 ==='
+=== CONFIRM fused h32/tph32 ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -c '
+import torch
+from nanochat.lut_ffn import LUTFFNConfig, LUTFeedForward
+from spiky.lutorch_ex import FusedConfidenceLUT
+m=LUTFeedForward(1536, LUTFFNConfig(enabled=True, h=32, tph=32), device="cuda")
+print("CELLC_CART="+type(m.mhl.cartridge).__name__+" IS_FUSED="+str(isinstance(m.mhl.cartridge, FusedConfidenceLUT)))
+print("CELLC_FWD_FINITE="+str(bool(torch.isfinite(m(torch.randn(1,8,1536,device="cuda")).float()).all().item())))
+'
+CELLC_CART=FusedConfidenceLUT IS_FUSED=True
+CELLC_FWD_FINITE=True
++ echo CELLC_CONFIRM_RC=0
+CELLC_CONFIRM_RC=0
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ echo '=== CELL C re-measure (r1536 fp32+AdamW) ==='
+=== CELL C re-measure (r1536 fp32+AdamW) ===
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bench_C_postrebase
++ echo CELLC_RC=0
+CELLC_RC=0
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ echo '=== CELL C dt (steps>=10) ==='
+=== CELL C dt (steps>=10) ===
++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/newbox_cellC_post.log
++ tr '\n' ' '
++ grep -oE 'dt: [0-9.]+'
+dt: 18097.75 dt: 18116.34 dt: 18121.75 dt: 18118.14 dt: 18116.61 dt: 18117.65 dt: 18125.90 dt: 18125.65 dt: 18131.02 dt: 18134.06 dt: 18125.76 dt: 18126.84 dt: 18133.45 dt: 18127.16 dt: 18129.54 dt: 18131.90 dt: 18136.59 dt: 18135.10 dt: 18128.80 dt: 18129.81 + echo ''
+
++ grep -E 'Peak memory' /home/nebius-h100/newbox_cellC_post.log
+Peak memory usage: 69842.74MiB
+Peak memory reserved: 74082.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/newbox_cellC_post.log
++ echo 'loss_nan_inf: 0'
+loss_nan_inf: 0
++ echo CLK:
+CLK:
++ cat /home/nebius-h100/cellC_post.clk_start /home/nebius-h100/cellC_post.clk_end
+1980 MHz, 38, 121.75 W
+1980 MHz, 50, 138.17 W
++ echo NEWBOX_CELLC_FINISHED
+NEWBOX_CELLC_FINISHED

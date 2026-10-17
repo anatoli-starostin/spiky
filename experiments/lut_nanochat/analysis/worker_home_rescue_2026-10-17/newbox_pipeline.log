@@ -1,0 +1,61 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ REPO=/home/nebius-h100/projects/spiky
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ cd /home/nebius-h100/projects/spiky
++ echo '=== UPDATE REPO ==='
+=== UPDATE REPO ===
++ git fetch origin research/lut_nanochat
+From github.com:anatoli-starostin/spiky
+ * branch            research/lut_nanochat -> FETCH_HEAD
+   a16e086..82681fd  research/lut_nanochat -> origin/research/lut_nanochat
++ git reset --hard origin/research/lut_nanochat
+HEAD is now at 82681fd [lut_nanochat] profile_lut_ffn: LUT_PROFILE_{H,D,TPH,NAP} env override for geometry
+++ git rev-parse HEAD
++ echo HEAD=82681fd71ac36eaef1cc121b194f0cb00a49fd26
+HEAD=82681fd71ac36eaef1cc121b194f0cb00a49fd26
++ rm -rf src/spiky/lutorch_ex/cartridges/wandb
+++ command -v uv
++ UV=/home/nebius-h100/.local/bin/uv
++ '[' -z /home/nebius-h100/.local/bin/uv ']'
++ echo USING_UV=/home/nebius-h100/.local/bin/uv
+USING_UV=/home/nebius-h100/.local/bin/uv
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ echo '=== BUILD: uv sync --extra gpu ==='
+=== BUILD: uv sync --extra gpu ===
++ /home/nebius-h100/.local/bin/uv sync --extra gpu
+Resolving despite existing lockfile due to removal of global exclude newer
+Resolved 105 packages in 1.50s
+Checked 55 packages in 53ms
++ echo SYNC_RC=0
+SYNC_RC=0
++ echo '=== BUILD: setup_unified_env.sh ==='
+=== BUILD: setup_unified_env.sh ===
++ bash runs/setup_unified_env.sh
+Resolved 28 packages in 62ms
+   Building spiky-lutorch-ex @ file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex
+      Built spiky-lutorch-ex @ file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex
+Prepared 1 package in 690ms
+Installed 3 packages in 5ms
+ + ninja==1.13.2
+ + setuptools==84.0.0
+ + spiky-lutorch-ex==0.1.0 (from file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex)
+torch unchanged: 2.9.1+cu128
+nanochat + spiky.lutorch_ex import OK
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+AssertionError: fused_confidence CUDA extension did not build
++ echo SETUP_RC=1
+SETUP_RC=1
++ echo '=== TEST: ensure pytest present ==='
+=== TEST: ensure pytest present ===
++ /home/nebius-h100/.local/bin/uv pip install --python .venv/bin/python pytest
++ echo PYTEST_INSTALL_RC=0
+PYTEST_INSTALL_RC=0
++ echo '=== TEST: lutorch_ex suite ==='
+=== TEST: lutorch_ex suite ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -m pytest /home/nebius-h100/projects/spiky/src/spiky/lutorch_ex/tests -q
++ tail -45

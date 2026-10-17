@@ -1,0 +1,100 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ REPO=/home/nebius-h100/projects/spiky
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ cd /home/nebius-h100/projects/spiky
++ echo '=== UPDATE REPO to rebased tip ==='
+=== UPDATE REPO to rebased tip ===
++ git fetch origin research/lut_nanochat
+From github.com:anatoli-starostin/spiky
+ * branch            research/lut_nanochat -> FETCH_HEAD
+ + ef98e32...4328185 research/lut_nanochat -> origin/research/lut_nanochat  (forced update)
++ git reset --hard origin/research/lut_nanochat
+HEAD is now at 4328185 [lut_nanochat] docs: forward group-major CTA order -- implementation guide (reference note)
+++ git rev-parse HEAD
++ echo HEAD=432818516a1975672abb60113796f6de522c6b40
+HEAD=432818516a1975672abb60113796f6de522c6b40
++ rm -rf src/spiky/lutorch_ex/cartridges/wandb
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ export PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ command -v uv
++ UV=/home/nebius-h100/.local/bin/uv
++ '[' -z /home/nebius-h100/.local/bin/uv ']'
++ echo '=== REBUILD ENV (fresh lutorch_ex) ==='
+=== REBUILD ENV (fresh lutorch_ex) ===
++ /home/nebius-h100/.local/bin/uv sync --extra gpu
++ echo SYNC_RC=0
+SYNC_RC=0
++ bash runs/setup_unified_env.sh
+Resolved 28 packages in 41ms
+   Building spiky-lutorch-ex @ file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex
+      Built spiky-lutorch-ex @ file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex
+Prepared 1 package in 525ms
+Installed 3 packages in 3ms
+ + ninja==1.13.2
+ + setuptools==84.0.0
+ + spiky-lutorch-ex==0.1.0 (from file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex)
+torch unchanged: 2.9.1+cu128
+nanochat + spiky.lutorch_ex import OK
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ImportError: cannot import name 'fused_confidence_ext' from 'spiky.lutorch_ex.cartridges.fused_confidence' (/home/nebius-h100/projects/spiky/src/spiky/lutorch_ex/cartridges/fused_confidence.py)
++ echo SETUP_RC=1
+SETUP_RC=1
++ export NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
++ NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
+++ python3 -c 'import json;print(json.load(open("../pins.json"))["fa3"]["revision"])'
++ export NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ export OMP_NUM_THREADS=1
++ OMP_NUM_THREADS=1
++ echo '=== CONFIRM fused class instantiated (not reference) ==='
+=== CONFIRM fused class instantiated (not reference) ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -c '
+import torch
+from nanochat.lut_ffn import LUTFFNConfig, LUTFeedForward
+from spiky.lutorch_ex import FusedConfidenceLUT
+m=LUTFeedForward(1536, LUTFFNConfig(enabled=True), device="cuda")
+cart=m.mhl.cartridge
+print("CARTRIDGE_CLASS="+type(cart).__name__)
+print("IS_FUSED="+str(isinstance(cart, FusedConfidenceLUT)))
+y=m(torch.randn(1,8,1536,device="cuda")).float()
+print("FWD_FINITE="+str(bool(torch.isfinite(y).all().item())))
+'
+CARTRIDGE_CLASS=FusedConfidenceLUT
+IS_FUSED=True
+FWD_FINITE=True
++ echo CONFIRM_RC=0
+CONFIRM_RC=0
++ echo '=== LUTORCH_EX TEST SUITE (torch pinned 2.9.1) ==='
+=== LUTORCH_EX TEST SUITE (torch pinned 2.9.1) ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -m pytest /home/nebius-h100/projects/spiky/src/spiky/lutorch_ex/tests -q
++ tail -40
+/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin/python: No module named pytest
++ echo TESTS_DONE
+TESTS_DONE
++ echo '=== CALIBRATION CELL A (r768 fp32+AdamW) on UPDATED lutorch_ex ==='
+=== CALIBRATION CELL A (r768 fp32+AdamW) on UPDATED lutorch_ex ===
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bench_A_postrebase
++ echo CALIB_A_RC=0
+CALIB_A_RC=0
++ echo '=== CALIB A dt (steps>=10) ==='
+=== CALIB A dt (steps>=10) ===
++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/newbox_calibA_postrebase.log
++ tr '\n' ' '
++ grep -oE 'dt: [0-9.]+'
+dt: 14128.02 dt: 14177.47 dt: 14198.83 dt: 14182.77 dt: 14165.44 dt: 14198.56 dt: 14199.10 dt: 14193.76 dt: 14203.20 dt: 14204.35 dt: 14203.77 dt: 14205.87 dt: 14206.52 dt: 14197.26 dt: 14202.99 dt: 14197.81 dt: 14210.25 dt: 14203.42 dt: 14211.83 dt: 14216.70 + echo ''
+
++ grep -E 'Peak memory' /home/nebius-h100/newbox_calibA_postrebase.log
+Peak memory usage: 64374.21MiB
+Peak memory reserved: 65378.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/newbox_calibA_postrebase.log
++ echo 'loss_nan_inf: 0'
+loss_nan_inf: 0
++ echo NEWBOX_REBUILD_CALIB_FINISHED
+NEWBOX_REBUILD_CALIB_FINISHED

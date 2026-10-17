@@ -1,0 +1,293 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ export GIT_EDITOR=true
++ GIT_EDITOR=true
++ REPO=/home/nebius-h100/projects/spiky
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ cd /home/nebius-h100/projects/spiky
++ git fetch origin
++ tail -1
++ git branch -f backup/pre-reconcile-88511f2e 783010da
++ git checkout -B trial/reconcile-88511f2e 783010da
++ tail -1
+Switched to a new branch 'trial/reconcile-88511f2e'
+++ git rev-parse HEAD
++ echo BASE=783010da0071111f1c021bb3e4dc1c92fbb6a2fb
+BASE=783010da0071111f1c021bb3e4dc1c92fbb6a2fb
++ echo '=== CHERRY-PICK + RESOLVE (take f1d5d03a kernels verbatim) ==='
+=== CHERRY-PICK + RESOLVE (take f1d5d03a kernels verbatim) ===
++ git cherry-pick f1d5d03a
+Auto-merging src/spiky/lutorch_ex/README.md
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/README.md
+Auto-merging src/spiky/lutorch_ex/cartridges/_cuda_ext.py
+Auto-merging src/spiky/lutorch_ex/cartridges/_fused_manifesto_cuda.py
+Auto-merging src/spiky/lutorch_ex/cartridges/_fused_quantised_cuda.py
+Auto-merging src/spiky/lutorch_ex/cartridges/csrc/fused_confidence.cu
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/cartridges/csrc/fused_confidence.cu
+Auto-merging src/spiky/lutorch_ex/cartridges/csrc/fused_manifesto.cu
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/cartridges/csrc/fused_manifesto.cu
+Auto-merging src/spiky/lutorch_ex/cartridges/csrc/pow2_int8_read.cu
+CONFLICT (content): Merge conflict in src/spiky/lutorch_ex/cartridges/csrc/pow2_int8_read.cu
+Auto-merging src/spiky/lutorch_ex/cartridges/deployed_quantised_confidence.py
+Auto-merging src/spiky/lutorch_ex/tests/test_cta_order.py
+CONFLICT (add/add): Merge conflict in src/spiky/lutorch_ex/tests/test_cta_order.py
+Auto-merging src/spiky/lutorch_ex/tests/test_fused_vs_reference.py
+error: could not apply f1d5d03a... lutorch_ex: group-major CTA order for L2 locality (backward always, forward per arch)
+hint: After resolving the conflicts, mark them with
+hint: "git add/rm <pathspec>", then run
+hint: "git cherry-pick --continue".
+hint: You can instead skip this commit with "git cherry-pick --skip".
+hint: To abort and get back to the state before "git cherry-pick",
+hint: run "git cherry-pick --abort".
++ true
++ for f in cartridges/csrc/fused_confidence.cu cartridges/csrc/fused_manifesto.cu cartridges/csrc/pow2_int8_read.cu tests/test_cta_order.py README.md
++ git checkout --theirs src/spiky/lutorch_ex/cartridges/csrc/fused_confidence.cu
++ for f in cartridges/csrc/fused_confidence.cu cartridges/csrc/fused_manifesto.cu cartridges/csrc/pow2_int8_read.cu tests/test_cta_order.py README.md
++ git checkout --theirs src/spiky/lutorch_ex/cartridges/csrc/fused_manifesto.cu
++ for f in cartridges/csrc/fused_confidence.cu cartridges/csrc/fused_manifesto.cu cartridges/csrc/pow2_int8_read.cu tests/test_cta_order.py README.md
++ git checkout --theirs src/spiky/lutorch_ex/cartridges/csrc/pow2_int8_read.cu
++ for f in cartridges/csrc/fused_confidence.cu cartridges/csrc/fused_manifesto.cu cartridges/csrc/pow2_int8_read.cu tests/test_cta_order.py README.md
++ git checkout --theirs src/spiky/lutorch_ex/tests/test_cta_order.py
++ for f in cartridges/csrc/fused_confidence.cu cartridges/csrc/fused_manifesto.cu cartridges/csrc/pow2_int8_read.cu tests/test_cta_order.py README.md
++ git checkout --theirs src/spiky/lutorch_ex/README.md
++ git add -A src/spiky/lutorch_ex
+++ git ls-files -u
+++ wc -l
++ UNMERGED=0
++ echo UNMERGED_AFTER_RESOLVE=0
+UNMERGED_AFTER_RESOLVE=0
++ '[' 0 -ne 0 ']'
++ git cherry-pick --continue
+[trial/reconcile-88511f2e 0492c249] lutorch_ex: group-major CTA order for L2 locality (backward always, forward per arch)
+ Author: spikyclaudebot <spikyclaudebot@gmail.com>
+ Date: Thu Oct 15 00:19:52 2026 +0300
+ 11 files changed, 718 insertions(+), 449 deletions(-)
+++ git rev-parse HEAD
++ echo RECONCILED_HEAD=0492c2499bbafee2efab456dcab820da50bceadc
+RECONCILED_HEAD=0492c2499bbafee2efab456dcab820da50bceadc
++ echo '=== reconciled .cu identical to exp/group_major_cta? (expect empty) ==='
+=== reconciled .cu identical to exp/group_major_cta? (expect empty) ===
++ git diff HEAD origin/exp/group_major_cta -- src/spiky/lutorch_ex/cartridges/csrc src/spiky/lutorch_ex/tests/test_cta_order.py
+diff --git a/src/spiky/lutorch_ex/cartridges/csrc/pow2_scalars.cuh b/src/spiky/lutorch_ex/cartridges/csrc/pow2_scalars.cuh
+index a0a8a6cb..d2c03797 100644
+--- a/src/spiky/lutorch_ex/cartridges/csrc/pow2_scalars.cuh
++++ b/src/spiky/lutorch_ex/cartridges/csrc/pow2_scalars.cuh
+@@ -1,11 +1,10 @@
+ // The per-table scalars of the power-of-two read -- THE single definition of the forward integers.
+ //
+-// Included by csrc/pow2_int8_read.cu and called, compiled with --fmad=false (no contraction anywhere), by its kernels:
+-// the fused forward (quant_fwd), the deployed int8 read (deploy_fwd) and p2_scalar_kernel, the forward of the
+-// lutorch_ex::p2_scalars test op. (The torch definition in _pow2.py computes the same quantities for the reference
+-// QuantisedConfidenceLUT and the deployed CPU read; there is no fallback from these kernels to it. It is not
+-// bit-identical to this code by construction -- torch.compile's float32 reduction order and libdevice differ -- so
+-// agreement between the two is checked by the tests rather than guaranteed.)
++// Included by csrc/pow2_int8_read.cu and called, compiled with --fmad=false (no contraction anywhere), by p2_scalar_kernel
++// -- the forward of the lutorch_ex::p2_scalars custom op. (The torch implementation in pow2_read.py computes the same
++// quantities; it is the fallback when the extension is unavailable and the path of every read the op does not serve. It is
++// not bit-identical to this code -- torch.compile's float32 reduction order and libdevice differ -- so agreement between the
++// two is checked by the tests rather than guaranteed.)
+ //
+ // For one table with margins d[0..nap-1] (note Sections 2-4):
+ //   m_p = |d_p|,  c1 = sum_p [d_p > 0] 2^(nap-1-p),  mj = first argmin_p m_p,  mv = m_mj,  c2 = c1 ^ 2^(nap-1-mj)
++ echo '--- end cu-vs-exp ---'
+--- end cu-vs-exp ---
++ echo '=== experiments unchanged vs 783010da? (expect empty) ==='
+=== experiments unchanged vs 783010da? (expect empty) ===
++ git diff --stat 783010da..HEAD -- experiments/lut_nanochat
++ echo '=== lutorch_ex net delta vs 783010da ==='
+=== lutorch_ex net delta vs 783010da ===
++ git diff --stat 783010da..HEAD -- src/spiky/lutorch_ex
+ src/spiky/lutorch_ex/README.md                     | 801 ++++++++++++---------
+ src/spiky/lutorch_ex/cartridges/_cuda_ext.py       |  46 ++
+ .../cartridges/_fused_confidence_cuda.py           |   6 +-
+ .../lutorch_ex/cartridges/_fused_manifesto_cuda.py |   4 +-
+ .../lutorch_ex/cartridges/_fused_quantised_cuda.py |   4 +-
+ .../lutorch_ex/cartridges/csrc/fused_confidence.cu |  21 +-
+ .../lutorch_ex/cartridges/csrc/fused_manifesto.cu  |  69 +-
+ .../lutorch_ex/cartridges/csrc/pow2_int8_read.cu   |  40 +-
+ .../cartridges/deployed_quantised_confidence.py    |   4 +-
+ src/spiky/lutorch_ex/tests/test_cta_order.py       | 168 +++--
+ .../lutorch_ex/tests/test_fused_vs_reference.py    |   4 +-
+ 11 files changed, 718 insertions(+), 449 deletions(-)
++ rm -rf src/spiky/lutorch_ex/cartridges/wandb
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ export PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ command -v uv
++ UV=/home/nebius-h100/.local/bin/uv
++ '[' -z /home/nebius-h100/.local/bin/uv ']'
++ echo '=== REBUILD ==='
+=== REBUILD ===
++ bash runs/setup_unified_env.sh
++ grep -iE 'warning|error|builds OK|torch unchanged|ABORT|UNIFIED ENV'
+torch unchanged: 2.9.1+cu128
+lutorch_ex CUDA extension builds OK
+UNIFIED ENV READY: torch 2.9.1+cu128 (pinned) + spiky.lutorch_ex (editable). Baseline unaffected.
++ echo SETUP_RC=0
+SETUP_RC=0
++ echo '=== .cu nvcc warnings (verbose rebuild fused_confidence) ==='
+=== .cu nvcc warnings (verbose rebuild fused_confidence) ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -c '
+import os,torch
+from torch.utils.cpp_extension import load
+from spiky.lutorch_ex.cartridges._cuda_ext import CSRC
+load(name="warn2_fc", sources=[os.path.join(CSRC,"fused_confidence.cu")], extra_cflags=["-std=c++20","-O3"], extra_cuda_cflags=["-std=c++20","-O3"], verbose=True)
+print("WARN2_OK")
+'
++ grep -iE 'warning|error|WARN2_OK'
++ head -25
+WARN2_OK
++ export NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
++ NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
+++ python3 -c 'import json;print(json.load(open("../pins.json"))["fa3"]["revision"])'
++ export NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ export OMP_NUM_THREADS=1
++ OMP_NUM_THREADS=1
++ echo '=== RESOLVED FWD ORDER + FUSED VERIFY ==='
+=== RESOLVED FWD ORDER + FUSED VERIFY ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -c '
+import torch
+from spiky.lutorch_ex.cartridges._cuda_ext import resolve_cta_order, forward_group_major
+from nanochat.lut_ffn import LUTFFNConfig, LUTFeedForward
+from spiky.lutorch_ex import FusedConfidenceLUT
+cap=torch.cuda.get_device_capability(0)
+print("DEVICE_CC="+str(cap)+" CONF_DEFAULT_ORDER="+resolve_cta_order(cap)+" CONF_FWD_GROUP_MAJOR="+str(forward_group_major("CONF",torch.device("cuda:0"))))
+for tag,kw in [("r768",dict()),("r1536",dict(h=32,tph=32))]:
+    m=LUTFeedForward(1536,LUTFFNConfig(enabled=True,**kw),device="cuda"); c=m.mhl.cartridge
+    fin=bool(torch.isfinite(m(torch.randn(1,8,1536,device="cuda")).float()).all().item())
+    print(tag+" CART="+type(c).__name__+" IS_FUSED="+str(isinstance(c,FusedConfidenceLUT))+" FWD_FINITE="+str(fin))
+'
+DEVICE_CC=(9, 0) CONF_DEFAULT_ORDER=group CONF_FWD_GROUP_MAJOR=True
+r768 CART=FusedConfidenceLUT IS_FUSED=True FWD_FINITE=True
+r1536 CART=FusedConfidenceLUT IS_FUSED=True FWD_FINITE=True
++ echo '=== FULL SUITE GATE (incl test_cta_order forward-bit-identical) ==='
+=== FULL SUITE GATE (incl test_cta_order forward-bit-identical) ===
++ /home/nebius-h100/.local/bin/uv pip install --python .venv/bin/python pytest safetensors
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -m pytest /home/nebius-h100/projects/spiky/src/spiky/lutorch_ex/tests -q -rf
++ tee /home/nebius-h100/rec_fulltests.log
++ tail -6
+src/spiky/lutorch_ex/tests/test_index_dtype.py: 12 warnings
+  /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/autograd/graph.py:841: UserWarning: Deterministic behavior was enabled with either `torch.use_deterministic_algorithms(True)` or `at::Context::setDeterministicAlgorithms(true)`, but this operation is not deterministic because it uses CuBLAS and you have CUDA >= 10.2. To enable deterministic behavior in this case, you must set an environment variable before running your PyTorch application: CUBLAS_WORKSPACE_CONFIG=:4096:8 or CUBLAS_WORKSPACE_CONFIG=:16:8. For more information, go to https://docs.nvidia.com/cuda/cublas/index.html#results-reproducibility (Triggered internally at /pytorch/aten/src/ATen/Context.cpp:304.)
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1724 passed, 12 warnings in 815.88s (0:13:35)
+++ grep -E 'passed|failed|error' /home/nebius-h100/rec_fulltests.log
+++ tail -1
++ echo 'FULLTESTS_SUMMARY=1724 passed, 12 warnings in 815.88s (0:13:35)'
+FULLTESTS_SUMMARY=1724 passed, 12 warnings in 815.88s (0:13:35)
++ grep -E '^FAILED|^ERROR' /home/nebius-h100/rec_fulltests.log
+++ grep -E '^FAILED|^ERROR' /home/nebius-h100/rec_fulltests.log
+++ grep -vc test_deploy
++ BADFAIL=0
++ echo NON_SAFETENSORS_FAILURES=0
+NON_SAFETENSORS_FAILURES=0
++ '[' 0 -ne 0 ']'
++ echo '########## CELL C (r1536) A/B ##########'
+########## CELL C (r1536) A/B ##########
++ run_ab C interleaved --lut-ffn-h 32 --lut-ffn-tph 32
++ TAG=C
++ ORDER=interleaved
++ shift 2
++ LOG=/home/nebius-h100/rec_C_interleaved.log
+++ date -Is
++ echo '=== BENCH C order=interleaved START 2026-10-15T15:19:39+00:00 ==='
+=== BENCH C order=interleaved START 2026-10-15T15:19:39+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ LUTORCH_EX_CONF_CUDA_CTA_ORDER=interleaved
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=rec_C_interleaved --lut-ffn-h 32 --lut-ffn-tph 32
++ echo BENCH_C_interleaved_RC=0
+BENCH_C_interleaved_RC=0
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/rec_C_interleaved.log
+++ grep -oE '[0-9.]+ms'
+++ tr '\n' ' '
++ echo 'DTVALS_C_interleaved: 18157.60ms 18192.55ms 18221.00ms 18194.22ms 18178.35ms 18205.78ms 18203.98ms 18197.95ms 18208.60ms 18214.58ms 18209.70ms 18209.37ms 18209.72ms 18212.49ms 18213.46ms 18205.66ms 18213.44ms 18209.12ms 18216.43ms 18215.62ms '
+DTVALS_C_interleaved: 18157.60ms 18192.55ms 18221.00ms 18194.22ms 18178.35ms 18205.78ms 18203.98ms 18197.95ms 18208.60ms 18214.58ms 18209.70ms 18209.37ms 18209.72ms 18212.49ms 18213.46ms 18205.66ms 18213.44ms 18209.12ms 18216.43ms 18215.62ms 
++ grep -E 'Peak memory' /home/nebius-h100/rec_C_interleaved.log
+Peak memory usage: 69842.74MiB
+Peak memory reserved: 74082.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/rec_C_interleaved.log
++ echo 'LOSSNAN_C_interleaved: 0'
+LOSSNAN_C_interleaved: 0
++ run_ab C group --lut-ffn-h 32 --lut-ffn-tph 32
++ TAG=C
++ ORDER=group
++ shift 2
++ LOG=/home/nebius-h100/rec_C_group.log
+++ date -Is
++ echo '=== BENCH C order=group START 2026-10-15T15:29:05+00:00 ==='
+=== BENCH C order=group START 2026-10-15T15:29:05+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ LUTORCH_EX_CONF_CUDA_CTA_ORDER=group
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=rec_C_group --lut-ffn-h 32 --lut-ffn-tph 32
++ echo BENCH_C_group_RC=0
+BENCH_C_group_RC=0
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/rec_C_group.log
+++ grep -oE '[0-9.]+ms'
+++ tr '\n' ' '
++ echo 'DTVALS_C_group: 18135.07ms 18148.23ms 18156.99ms 18153.56ms 18149.33ms 18159.50ms 18161.62ms 18163.78ms 18163.29ms 18163.23ms 18164.18ms 18168.58ms 18166.71ms 18164.90ms 18166.98ms 18165.37ms 18163.36ms 18162.82ms 18164.12ms 18165.57ms '
+DTVALS_C_group: 18135.07ms 18148.23ms 18156.99ms 18153.56ms 18149.33ms 18159.50ms 18161.62ms 18163.78ms 18163.29ms 18163.23ms 18164.18ms 18168.58ms 18166.71ms 18164.90ms 18166.98ms 18165.37ms 18163.36ms 18162.82ms 18164.12ms 18165.57ms 
++ grep -E 'Peak memory' /home/nebius-h100/rec_C_group.log
+Peak memory usage: 69842.74MiB
+Peak memory reserved: 74082.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/rec_C_group.log
++ echo 'LOSSNAN_C_group: 0'
+LOSSNAN_C_group: 0
++ echo '########## CELL A (r768) A/B ##########'
+########## CELL A (r768) A/B ##########
++ run_ab A interleaved
++ TAG=A
++ ORDER=interleaved
++ shift 2
++ LOG=/home/nebius-h100/rec_A_interleaved.log
+++ date -Is
++ echo '=== BENCH A order=interleaved START 2026-10-15T15:38:29+00:00 ==='
+=== BENCH A order=interleaved START 2026-10-15T15:38:29+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ LUTORCH_EX_CONF_CUDA_CTA_ORDER=interleaved
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=rec_A_interleaved
++ echo BENCH_A_interleaved_RC=0
+BENCH_A_interleaved_RC=0
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/rec_A_interleaved.log
+++ grep -oE '[0-9.]+ms'
+++ tr '\n' ' '
++ echo 'DTVALS_A_interleaved: 14205.46ms 14279.24ms 14317.70ms 14274.42ms 14222.66ms 14283.47ms 14286.81ms 14273.82ms 14277.70ms 14291.60ms 14288.29ms 14284.29ms 14289.52ms 14280.24ms 14278.45ms 14274.36ms 14276.40ms 14266.40ms 14287.28ms 14283.86ms '
+DTVALS_A_interleaved: 14205.46ms 14279.24ms 14317.70ms 14274.42ms 14222.66ms 14283.47ms 14286.81ms 14273.82ms 14277.70ms 14291.60ms 14288.29ms 14284.29ms 14289.52ms 14280.24ms 14278.45ms 14274.36ms 14276.40ms 14266.40ms 14287.28ms 14283.86ms 
++ grep -E 'Peak memory' /home/nebius-h100/rec_A_interleaved.log
+Peak memory usage: 64374.21MiB
+Peak memory reserved: 65378.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/rec_A_interleaved.log
++ echo 'LOSSNAN_A_interleaved: 0'
+LOSSNAN_A_interleaved: 0
++ run_ab A group
++ TAG=A
++ ORDER=group
++ shift 2
++ LOG=/home/nebius-h100/rec_A_group.log
+++ date -Is
++ echo '=== BENCH A order=group START 2026-10-15T15:45:57+00:00 ==='
+=== BENCH A order=group START 2026-10-15T15:45:57+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ LUTORCH_EX_CONF_CUDA_CTA_ORDER=group
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=rec_A_group
++ echo BENCH_A_group_RC=0
+BENCH_A_group_RC=0
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/rec_A_group.log
+++ grep -oE '[0-9.]+ms'
+++ tr '\n' ' '
++ echo 'DTVALS_A_group: 14146.00ms 14185.61ms 14196.11ms 14188.38ms 14175.68ms 14190.48ms 14189.73ms 14188.58ms 14191.45ms 14195.61ms 14195.67ms 14197.39ms 14200.24ms 14196.83ms 14201.06ms 14199.03ms 14200.00ms 14196.07ms 14197.24ms 14203.06ms '
+DTVALS_A_group: 14146.00ms 14185.61ms 14196.11ms 14188.38ms 14175.68ms 14190.48ms 14189.73ms 14188.58ms 14191.45ms 14195.61ms 14195.67ms 14197.39ms 14200.24ms 14196.83ms 14201.06ms 14199.03ms 14200.00ms 14196.07ms 14197.24ms 14203.06ms 
++ grep -E 'Peak memory' /home/nebius-h100/rec_A_group.log
+Peak memory usage: 64374.21MiB
+Peak memory reserved: 65378.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/rec_A_group.log
++ echo 'LOSSNAN_A_group: 0'
+LOSSNAN_A_group: 0
++ echo NEWBOX_RECONCILE_FINISHED
+NEWBOX_RECONCILE_FINISHED

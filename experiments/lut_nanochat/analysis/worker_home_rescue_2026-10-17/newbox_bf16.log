@@ -1,0 +1,128 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ export PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat OMP_NUM_THREADS=1
++ PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
++ OMP_NUM_THREADS=1
+++ python3 -c 'import json;print(json.load(open("../pins.json"))["fa3"]["revision"])'
++ export NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ python3 /home/nebius-h100/patch_bf16.py
+LUTFFN_PATCHED
+BASETRAIN_PATCHED
++ echo '=== CONFIRM proj_bf16 flag builds + fused active (r1536) ==='
+=== CONFIRM proj_bf16 flag builds + fused active (r1536) ===
++ PYTHONPATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ .venv/bin/python -c '
+import torch
+from nanochat.lut_ffn import LUTFFNConfig, LUTFeedForward
+from spiky.lutorch_ex import FusedConfidenceLUT
+m=LUTFeedForward(1536, LUTFFNConfig(enabled=True,h=32,tph=32,proj_bf16=True), device="cuda")
+print("BF16FLAG CART="+type(m.mhl.cartridge).__name__+" IS_FUSED="+str(isinstance(m.mhl.cartridge,FusedConfidenceLUT))+" FWD_FINITE="+str(bool(torch.isfinite(m(torch.randn(1,8,1536,device="cuda")).float()).all().item())))
+'
+BF16FLAG CART=FusedConfidenceLUT IS_FUSED=True FWD_FINITE=True
++ echo CONFIRM_RC=0
+CONFIRM_RC=0
++ echo '########## ARM fp32 dbs16 (baseline) ##########'
+########## ARM fp32 dbs16 (baseline) ##########
++ run_arm fp32_dbs16 16
++ TAG=fp32_dbs16
++ DBS=16
++ shift 2
++ LOG=/home/nebius-h100/bf16_fp32_dbs16.log
+++ date -Is
++ echo '=== ARM fp32_dbs16 dbs=16 START 2026-10-15T18:14:38+00:00 ==='
+=== ARM fp32_dbs16 dbs=16 START 2026-10-15T18:14:38+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bf16_fp32_dbs16
++ echo ARM_fp32_dbs16_RC=0
+ARM_fp32_dbs16_RC=0
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/bf16_fp32_dbs16.log
+++ grep -oE '[0-9.]+ms'
+++ tr '\n' ' '
++ echo 'DT_fp32_dbs16: 18077.44ms 18093.84ms 18100.42ms 18098.51ms 18093.85ms 18099.84ms 18097.02ms 18103.41ms 18105.29ms 18104.75ms 18104.82ms 18108.74ms 18105.41ms 18106.98ms 18108.52ms 18104.31ms 18108.47ms 18106.51ms 18108.16ms 18106.88ms '
+DT_fp32_dbs16: 18077.44ms 18093.84ms 18100.42ms 18098.51ms 18093.85ms 18099.84ms 18097.02ms 18103.41ms 18105.29ms 18104.75ms 18104.82ms 18108.74ms 18105.41ms 18106.98ms 18108.52ms 18104.31ms 18108.47ms 18106.51ms 18108.16ms 18106.88ms 
+++ grep -hoE 'step 000[0-2][0-9]/.{0,40}loss: [0-9.]+' /home/nebius-h100/bf16_fp32_dbs16.log
+++ grep -oE 'loss: [0-9.]+'
+++ grep -oE '[0-9.]+'
+++ tr '\n' ' '
++ echo 'LOSS_fp32_dbs16: 10.397440 10.379123 10.344423 10.296880 10.224921 10.121200 9.938491 9.644220 9.390549 9.137320 8.894453 8.660550 8.465224 8.246364 8.067743 7.884644 7.706055 7.545416 7.390747 7.236400 7.106042 6.997048 6.882454 6.784735 6.684526 6.598365 6.516546 6.461163 6.396930 6.327889 '
+LOSS_fp32_dbs16: 10.397440 10.379123 10.344423 10.296880 10.224921 10.121200 9.938491 9.644220 9.390549 9.137320 8.894453 8.660550 8.465224 8.246364 8.067743 7.884644 7.706055 7.545416 7.390747 7.236400 7.106042 6.997048 6.882454 6.784735 6.684526 6.598365 6.516546 6.461163 6.396930 6.327889 
++ grep -E 'Peak memory' /home/nebius-h100/bf16_fp32_dbs16.log
+Peak memory usage: 69842.74MiB
+Peak memory reserved: 74082.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/bf16_fp32_dbs16.log
++ echo 'NAN_fp32_dbs16: 0'
+NAN_fp32_dbs16: 0
++ cat /home/nebius-h100/bf16_fp32_dbs16.clk
+1980 MHz, 35, 118.66 W
++ echo '########## ARM bf16 dbs16 ##########'
+########## ARM bf16 dbs16 ##########
++ run_arm bf16_dbs16 16 --lut-ffn-proj-bf16
++ TAG=bf16_dbs16
++ DBS=16
++ shift 2
++ LOG=/home/nebius-h100/bf16_bf16_dbs16.log
+++ date -Is
++ echo '=== ARM bf16_dbs16 dbs=16 START 2026-10-15T18:24:01+00:00 ==='
+=== ARM bf16_dbs16 dbs=16 START 2026-10-15T18:24:01+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bf16_bf16_dbs16 --lut-ffn-proj-bf16
++ echo ARM_bf16_dbs16_RC=0
+ARM_bf16_dbs16_RC=0
+++ grep -oE '[0-9.]+ms'
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/bf16_bf16_dbs16.log
+++ tr '\n' ' '
++ echo 'DT_bf16_dbs16: 17191.39ms 17209.60ms 17219.11ms 17209.65ms 17210.71ms 17218.18ms 17220.70ms 17225.45ms 17230.60ms 17225.61ms 17224.87ms 17229.07ms 17228.29ms 17236.34ms 17230.57ms 17228.08ms 17220.92ms 17218.20ms 17217.82ms 17235.54ms '
+DT_bf16_dbs16: 17191.39ms 17209.60ms 17219.11ms 17209.65ms 17210.71ms 17218.18ms 17220.70ms 17225.45ms 17230.60ms 17225.61ms 17224.87ms 17229.07ms 17228.29ms 17236.34ms 17230.57ms 17228.08ms 17220.92ms 17218.20ms 17217.82ms 17235.54ms 
+++ grep -hoE 'step 000[0-2][0-9]/.{0,40}loss: [0-9.]+' /home/nebius-h100/bf16_bf16_dbs16.log
+++ grep -oE 'loss: [0-9.]+'
+++ grep -oE '[0-9.]+'
+++ tr '\n' ' '
++ echo 'LOSS_bf16_dbs16: 10.397440 10.379123 10.344423 10.296880 10.224923 10.121205 9.938544 9.644290 9.390619 9.137363 8.894400 8.660476 8.465152 8.246272 8.067592 7.884479 7.705876 7.545272 7.390606 7.236274 7.105904 6.996908 6.882300 6.784582 6.684409 6.598345 6.516642 6.461159 6.396747 6.327684 '
+LOSS_bf16_dbs16: 10.397440 10.379123 10.344423 10.296880 10.224923 10.121205 9.938544 9.644290 9.390619 9.137363 8.894400 8.660476 8.465152 8.246272 8.067592 7.884479 7.705876 7.545272 7.390606 7.236274 7.105904 6.996908 6.882300 6.784582 6.684409 6.598345 6.516642 6.461159 6.396747 6.327684 
++ grep -E 'Peak memory' /home/nebius-h100/bf16_bf16_dbs16.log
+Peak memory usage: 65464.24MiB
+Peak memory reserved: 65812.00MiB
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/bf16_bf16_dbs16.log
++ echo 'NAN_bf16_dbs16: 0'
+NAN_bf16_dbs16: 0
++ cat /home/nebius-h100/bf16_bf16_dbs16.clk
+1980 MHz, 47, 136.41 W
++ echo '########## ARM bf16 dbs32 (memory/microstep) ##########'
+########## ARM bf16 dbs32 (memory/microstep) ##########
++ run_arm bf16_dbs32 32 --lut-ffn-proj-bf16
++ TAG=bf16_dbs32
++ DBS=32
++ shift 2
++ LOG=/home/nebius-h100/bf16_bf16_dbs32.log
+++ date -Is
++ echo '=== ARM bf16_dbs32 dbs=32 START 2026-10-15T18:32:59+00:00 ==='
+=== ARM bf16_dbs32 dbs=32 START 2026-10-15T18:32:59+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=32 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bf16_bf16_dbs32 --lut-ffn-proj-bf16
++ echo ARM_bf16_dbs32_RC=1
+ARM_bf16_dbs32_RC=1
+++ grep -hoE 'step (0001[0-9]|0002[0-9])/.{0,80}dt: [0-9.]+ms' /home/nebius-h100/bf16_bf16_dbs32.log
+++ tr '\n' ' '
+++ grep -oE '[0-9.]+ms'
++ echo 'DT_bf16_dbs32: '
+DT_bf16_dbs32: 
+++ grep -hoE 'step 000[0-2][0-9]/.{0,40}loss: [0-9.]+' /home/nebius-h100/bf16_bf16_dbs32.log
+++ grep -oE 'loss: [0-9.]+'
+++ grep -oE '[0-9.]+'
+++ tr '\n' ' '
++ echo 'LOSS_bf16_dbs32: '
+LOSS_bf16_dbs32: 
++ grep -E 'Peak memory' /home/nebius-h100/bf16_bf16_dbs32.log
+++ grep -cE 'loss: (nan|inf|-inf)' /home/nebius-h100/bf16_bf16_dbs32.log
++ echo 'NAN_bf16_dbs32: 0'
+NAN_bf16_dbs32: 0
++ cat /home/nebius-h100/bf16_bf16_dbs32.clk
+1980 MHz, 48, 136.21 W
++ echo NEWBOX_BF16_FINISHED
+NEWBOX_BF16_FINISHED

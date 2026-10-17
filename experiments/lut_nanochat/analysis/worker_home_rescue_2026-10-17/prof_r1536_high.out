@@ -1,0 +1,60 @@
+{
+ "timestamp": "2026-10-15T16:19:45",
+ "repo_commit": "783010da0071111f1c021bb3e4dc1c92fbb6a2fb",
+ "lutorch_ex_src": null,
+ "lutorch_ex_src_commit": "783010da0071111f1c021bb3e4dc1c92fbb6a2fb",
+ "lutorch_ex_src_describe": "v1.0-633-g783010da",
+ "lutorch_ex_src_dirty_files": [],
+ "repo_tracked_changes": false,
+ "driver": "580.173.02",
+ "host_platform": "Linux-6.11.0-1016-nvidia-x86_64-with-glibc2.39",
+ "python": "3.10.22",
+ "gpu_name": "NVIDIA H100 80GB HBM3",
+ "gpu_vram_gib": 79.18,
+ "compute_capability": "9.0",
+ "sm_count": 132,
+ "torch": "2.9.1+cu128",
+ "cuda_runtime": "12.8",
+ "cudnn": 91002,
+ "triton": "3.5.1",
+ "fp32_matmul_precision": "high",
+ "fp8_usable": true,
+ "fp8_probe": "torch._scaled_mm (e4m3, tensorwise) ran on this device",
+ "macs_per_token": {
+  "dense": 18874368,
+  "lut_projections": 4718592,
+  "lut_read": 49152,
+  "lut": 4767744
+ }
+}
+== block
+/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/_dynamo/variables/functions.py:1598: UserWarning: Dynamo does not know how to trace the builtin `lutorch_ex_fused_confidence.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.confidence_fwd.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+  [block] lut-fp32    tokens= 32768  fwd     3.27 ms  fwd+bwd    15.22 ms  (  2.15 Mtok/s)  24L/step  11.69 s  peak 1.3 GiB
+== components
+  [components] tokens= 32768 cast_in bf16->fp32                 fwd    0.163 ms  fwd+bwd    0.335 ms
+  [components] tokens= 32768 compress_fp32                      fwd    0.423 ms  fwd+bwd    1.799 ms
+  [components] tokens= 32768 compress_bf16                      fwd    0.256 ms  fwd+bwd    0.801 ms
+  [components] tokens= 32768 compress_fp8                       fwd    1.269 ms  fwd+bwd    3.319 ms
+  [components] tokens= 32768 cartridge_whole (compiled, train)  fwd    2.188 ms  fwd+bwd   11.225 ms
+  [components] tokens= 32768   addressing (compiled)            fwd    1.455 ms  fwd+bwd    6.863 ms
+Traceback (most recent call last):
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 1170, in <module>
+    sys.exit(main())
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 1149, in main
+    log("== components");    res["components"] = pass_components(args, args.proj_dtypes); save()
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 526, in pass_components
+    timed("  score (eager)", lambda: cart._score(u), [u])
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 493, in timed
+    tf = cuda_time_ms(lambda: fwd_fn(), args.warmup, args.repeats)
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 143, in cuda_time_ms
+    fn()
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 493, in <lambda>
+    tf = cuda_time_ms(lambda: fwd_fn(), args.warmup, args.repeats)
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/profiling/profile_lut_ffn.py", line 526, in <lambda>
+    timed("  score (eager)", lambda: cart._score(u), [u])
+  File "/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1964, in __getattr__
+    raise AttributeError(
+AttributeError: 'FusedConfidenceLUT' object has no attribute '_score'

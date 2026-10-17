@@ -1,0 +1,142 @@
++ export CUDA_HOME=/usr/local/cuda
++ CUDA_HOME=/usr/local/cuda
++ export PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ REPO=/home/nebius-h100/projects/spiky
++ NC=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ mkdir -p /home/nebius-h100/newbox_bench2
++ rm -f /home/nebius-h100/newbox_bench2/dbs_used.txt
++ cd /home/nebius-h100/projects/spiky
++ echo '=== UPDATE REPO ==='
+=== UPDATE REPO ===
++ git fetch origin research/lut_nanochat
+From github.com:anatoli-starostin/spiky
+ * branch            research/lut_nanochat -> FETCH_HEAD
+   82681fd..ef98e32  research/lut_nanochat -> origin/research/lut_nanochat
++ git reset --hard origin/research/lut_nanochat
+HEAD is now at ef98e32 [lut_nanochat] base_train --max-steps cap + setup_unified_env ninja/nvcc on PATH
+++ git rev-parse HEAD
++ echo HEAD=ef98e32373e8982ee375ae100b34a168b4389ab2
+HEAD=ef98e32373e8982ee375ae100b34a168b4389ab2
++ rm -rf src/spiky/lutorch_ex/cartridges/wandb
++ cd /home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat
++ export PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/bin:/usr/local/cuda/bin:/home/nebius-h100/.local/bin:/home/nebius-h100/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+++ command -v uv
++ UV=/home/nebius-h100/.local/bin/uv
++ '[' -z /home/nebius-h100/.local/bin/uv ']'
++ echo '=== BUILD/VERIFY ENV ==='
+=== BUILD/VERIFY ENV ===
++ /home/nebius-h100/.local/bin/uv sync --extra gpu
++ echo SYNC_RC=0
+SYNC_RC=0
++ bash runs/setup_unified_env.sh
+Resolved 28 packages in 40ms
+   Building spiky-lutorch-ex @ file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex
+      Built spiky-lutorch-ex @ file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex
+Prepared 1 package in 530ms
+Installed 3 packages in 3ms
+ + ninja==1.13.2
+ + setuptools==84.0.0
+ + spiky-lutorch-ex==0.1.0 (from file:///home/nebius-h100/projects/spiky/src/spiky/lutorch_ex)
+torch unchanged: 2.9.1+cu128
+nanochat + spiky.lutorch_ex import OK
+lutorch_ex CUDA extension builds OK
+UNIFIED ENV READY: torch 2.9.1+cu128 (pinned) + spiky.lutorch_ex (editable). Baseline unaffected.
++ echo SETUP_RC=0
+SETUP_RC=0
++ export NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
++ NANOCHAT_BASE_DIR=/home/nebius-h100/.cache/nanochat
+++ python3 -c 'import json;print(json.load(open("../pins.json"))["fa3"]["revision"])'
++ export NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ NANOCHAT_FA3_REVISION=de87b9b5af06dd9984df595bef90b2eba44b181a
++ export OMP_NUM_THREADS=1
++ OMP_NUM_THREADS=1
++ echo FA3REV=de87b9b5af06dd9984df595bef90b2eba44b181a
+FA3REV=de87b9b5af06dd9984df595bef90b2eba44b181a
++ echo '########## CELL A r768 fp32+AdamW ##########'
+########## CELL A r768 fp32+AdamW ##########
++ run_cell A
++ TAG=A
++ shift
++ for DBS in 16 8
++ LOG=/home/nebius-h100/newbox_bench2/A_dbs16.log
+++ date -Is
++ echo '=== CELL A dbs=16 START 2026-10-15T10:11:24+00:00 ==='
+=== CELL A dbs=16 START 2026-10-15T10:11:24+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bench_A
++ RC=0
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ '[' 0 -eq 0 ']'
++ grep -q 'Peak memory reserved' /home/nebius-h100/newbox_bench2/A_dbs16.log
+++ date -Is
++ echo '=== CELL A OK dbs=16 2026-10-15T10:19:28+00:00 ==='
+=== CELL A OK dbs=16 2026-10-15T10:19:28+00:00 ===
++ echo 'A dbs=16 accum=32 rc=0 OK'
++ return 0
++ echo '########## CELL B r768 fp8+Muon ##########'
+########## CELL B r768 fp8+Muon ##########
++ run_cell B --lut-ffn-proj-fp8-muon
++ TAG=B
++ shift
++ for DBS in 16 8
++ LOG=/home/nebius-h100/newbox_bench2/B_dbs16.log
+++ date -Is
++ echo '=== CELL B dbs=16 START 2026-10-15T10:19:28+00:00 ==='
+=== CELL B dbs=16 START 2026-10-15T10:19:28+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bench_B --lut-ffn-proj-fp8-muon
++ RC=0
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ '[' 0 -eq 0 ']'
++ grep -q 'Peak memory reserved' /home/nebius-h100/newbox_bench2/B_dbs16.log
+++ date -Is
++ echo '=== CELL B OK dbs=16 2026-10-15T10:27:06+00:00 ==='
+=== CELL B OK dbs=16 2026-10-15T10:27:06+00:00 ===
++ echo 'B dbs=16 accum=32 rc=0 OK'
++ return 0
++ echo '########## CELL C r1536 fp32+AdamW ##########'
+########## CELL C r1536 fp32+AdamW ##########
++ run_cell C --lut-ffn-h 32 --lut-ffn-tph 32
++ TAG=C
++ shift
++ for DBS in 16 8
++ LOG=/home/nebius-h100/newbox_bench2/C_dbs16.log
+++ date -Is
++ echo '=== CELL C dbs=16 START 2026-10-15T10:27:06+00:00 ==='
+=== CELL C dbs=16 START 2026-10-15T10:27:06+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bench_C --lut-ffn-h 32 --lut-ffn-tph 32
++ RC=0
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ '[' 0 -eq 0 ']'
++ grep -q 'Peak memory reserved' /home/nebius-h100/newbox_bench2/C_dbs16.log
+++ date -Is
++ echo '=== CELL C OK dbs=16 2026-10-15T10:36:36+00:00 ==='
+=== CELL C OK dbs=16 2026-10-15T10:36:36+00:00 ===
++ echo 'C dbs=16 accum=32 rc=0 OK'
++ return 0
++ echo '########## CELL D r1536 fp8+Muon ##########'
+########## CELL D r1536 fp8+Muon ##########
++ run_cell D --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-proj-fp8-muon
++ TAG=D
++ shift
++ for DBS in 16 8
++ LOG=/home/nebius-h100/newbox_bench2/D_dbs16.log
+++ date -Is
++ echo '=== CELL D dbs=16 START 2026-10-15T10:36:36+00:00 ==='
+=== CELL D dbs=16 START 2026-10-15T10:36:36+00:00 ===
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --fp8 --max-seq-len=2048 --total-batch-size=1048576 --num-iterations=5568 --max-steps=30 --no-lr-rescale --lut-ffn --lut-ffn-table-dropout=0.2 --lut-ffn-tv-lambda=10 --lut-ffn-read-top-n=1 --lut-ffn-nap=8 --device-batch-size=16 --run=dummy --eval-every=-1 --core-metric-every=-1 --sample-every=-1 --save-every=-1 --log-every=1 --model-tag=bench_D --lut-ffn-h 32 --lut-ffn-tph 32 --lut-ffn-proj-fp8-muon
++ RC=0
++ nvidia-smi --query-gpu=clocks.sm,temperature.gpu,power.draw --format=csv,noheader
++ '[' 0 -eq 0 ']'
++ grep -q 'Peak memory reserved' /home/nebius-h100/newbox_bench2/D_dbs16.log
+++ date -Is
++ echo '=== CELL D OK dbs=16 2026-10-15T10:45:47+00:00 ==='
+=== CELL D OK dbs=16 2026-10-15T10:45:47+00:00 ===
++ echo 'D dbs=16 accum=32 rc=0 OK'
++ return 0
++ echo NEWBOX_BENCH2_FINISHED
+NEWBOX_BENCH2_FINISHED

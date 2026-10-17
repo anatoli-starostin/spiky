@@ -1,0 +1,64 @@
+2026-10-16T21:26:35Z WATCH START target=3750 parent=181713 torchrun=181753 base_train=181763 start_epoch=1792136002 | step 02580/05568 (46.34%) | loss: 2.775185 | lrm: 0.83 | dt: 17853.73ms | tok/se
+2026-10-16T21:26:35Z TRIGGER=MANUAL | step 02580/05568 (46.34%) | loss: 2.775185 | lrm: 0.83 | dt: 17853.73ms | tok/se
+2026-10-16T21:26:35Z TERM -> launcher bash 181713 (prevents post-train base_eval)
+2026-10-16T21:26:35Z INT -> base_train 181763 (wandb-core 181786)
+2026-10-16T21:27:20Z base_train exited after ~50s
+2026-10-16T21:27:20Z wandb-core exited
+2026-10-16T21:27:25Z PROCS_LEFT: []
+2026-10-16T21:27:25Z GPU: 0 MiB, 0 % | apps: []
+2026-10-16T21:27:25Z LAST: step 02580/05568 (46.34%) | loss: 2.775185 | lrm: 0.83 | dt: 17853.73ms | tok/se
+2026-10-16T21:27:25Z WALL: start=1792136002 end=1792186045 hours=13.90
+wandb: Currently logged in as: anatoli-starostin (anatoli-starostin-relocation) to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+WANDB state= killed | tags= ['arch=lut_ffn_confidence_n1_h32_tph32_nap9', 'cells=512', 'd=48', 'dbs=16', 'ffn=confidenceLUT', 'gpus=1xH100', 'h=32', 'nap=9', 'precision=fp8', 'r=1536', 'read_top_n=1', 'seed=42', 'stopped-early-at-2580', 'tph=32'] | _step= 2596
+2026-10-16T21:27:53Z === DATA ===
+--- val bpb ---
+Step 00000 | Validation bpb: 3.180825
+Step 00250 | Validation bpb: 1.063603
+Step 00500 | Validation bpb: 0.959777
+Step 00750 | Validation bpb: 0.919477
+Step 01000 | Validation bpb: 0.895263
+Step 01250 | Validation bpb: 0.880244
+Step 01500 | Validation bpb: 0.869063
+Step 01750 | Validation bpb: 0.860238
+Step 02000 | Validation bpb: 0.853073
+Step 02250 | Validation bpb: 0.843396
+Step 02500 | Validation bpb: 0.835659
+--- CORE ---
+Step 00500 | CORE metric: 0.1101
+Step 01000 | CORE metric: 0.1365
+Step 01500 | CORE metric: 0.1427
+Step 02000 | CORE metric: 0.1606
+Step 02500 | CORE metric: 0.1526
+--- train loss every 250 ---
+step 00250 loss: 3.508568 
+step 00500 loss: 3.148147 
+step 00750 loss: 3.026545 
+step 01000 loss: 2.934119 
+step 01250 loss: 2.898523 
+step 01500 loss: 2.880907 
+step 01750 loss: 2.834391 
+step 02000 loss: 2.787068 
+step 02250 loss: 2.789390 
+step 02500 loss: 2.705227 
+
+
+
+
+
+
+
+
+
+
+
+
+--- dt last 20 train steps ---
+17853.95 17858.10 17858.27 17856.34 17853.84 17854.46 17854.23 17859.84 17854.27 17854.01 17853.73 17854.04 17851.31 17854.37 17855.43 17852.92 17854.62 17852.17 17852.98 17853.73 
+--- sizes ---
+140G	/home/nebius-h100/projects/spiky/experiments/lut_nanochat/results/d24-lutffn-confn1-h32-tph32-nap9-1xh100-s0
+460K	/home/nebius-h100/projects/spiky/experiments/lut_nanochat/results/nap9_h32tph32.nohup.log
+7.2M	/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/wandb/run-20261016_073329-d24-lutffn-confn1-h32-tph32-nap9-1xh100-s0-04a80c7b
+ckpt dir resolves to: /home/nebius-h100/projects/spiky/experiments/lut_nanochat/results/d24-lutffn-confn1-h32-tph32-nap9-1xh100-s0/checkpoints
+model ckpts: 10  optim ckpts: 10  newest: /home/nebius-h100/.cache/nanochat/base_checkpoints/d24_lutffn_confn1_h32_tph32_nap9_1xh100/model_002500.pt
+disk: /dev/vda1       495G  309G  187G  63% /
+2026-10-16T21:27:53Z WATCH_FINAL MANUAL

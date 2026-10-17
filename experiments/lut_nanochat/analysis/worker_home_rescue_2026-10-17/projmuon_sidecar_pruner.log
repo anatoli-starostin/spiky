@@ -1,0 +1,115 @@
+2026-10-16T22:28:17Z PASS(dry): 0 complete set(s) [], all steps [] -> nothing to delete
+2026-10-16T22:28:17Z PASS(once): 0 complete set(s) [], all steps [] -> nothing to delete
+2026-10-16T22:28:17Z LOOP START pid=571238 every 300s, keep=2, dir=/home/nebius-h100/projects/spiky/experiments/lut_nanochat/results/d24-lutffn-confn1-projmuonfp8-lrrs-1xh100-s0/checkpoints
+2026-10-16T22:28:17Z PASS(loop): 0 complete set(s) [], all steps [] -> nothing to delete
+2026-10-16T22:33:17Z PASS(loop): 0 complete set(s) [], all steps [] -> nothing to delete
+2026-10-16T22:38:17Z PASS(loop): 0 complete set(s) [], all steps [] -> nothing to delete
+2026-10-16T22:43:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T22:48:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T22:53:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T22:58:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:03:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:08:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:13:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:18:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:23:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:28:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:33:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:38:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:43:17Z PASS(loop): 1 complete set(s) [000250], all steps [000250] -> nothing to delete
+2026-10-16T23:48:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-16T23:53:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-16T23:58:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:03:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:08:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:13:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:18:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:23:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:28:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:33:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:38:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:43:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500] -> nothing to delete
+2026-10-17T00:48:17Z PASS(loop): 2 complete set(s) [000250 000500], all steps [000250 000500 000750] -> nothing to delete
+2026-10-17T00:53:17Z PASS(loop): complete [000250 000500 000750] keep [000500 000750] -> delete sets with step < 000500
+2026-10-17T00:53:18Z   DELETED step 000250: model_000250.pt meta_000250.json optim_000250_rank0.pt freed=10423641626 bytes (10.42 GB)
+2026-10-17T00:53:18Z   df after: /dev/vda1       495G  329G  167G  67% /
+2026-10-17T00:58:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:03:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:08:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:13:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:18:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:23:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:28:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:33:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:38:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:43:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:48:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:53:18Z PASS(loop): 2 complete set(s) [000500 000750], all steps [000500 000750] -> nothing to delete
+2026-10-17T01:58:18Z PASS(loop): complete [000500 000750 001000] keep [000750 001000] -> delete sets with step < 000750
+2026-10-17T01:58:19Z   DELETED step 000500: model_000500.pt meta_000500.json optim_000500_rank0.pt freed=10423641755 bytes (10.42 GB)
+2026-10-17T01:58:19Z   df after: /dev/vda1       495G  329G  167G  67% /
+2026-10-17T02:03:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:08:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:13:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:18:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:23:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:28:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:33:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:38:19Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:43:20Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:48:20Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:53:20Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000] -> nothing to delete
+2026-10-17T02:58:20Z PASS(loop): 2 complete set(s) [000750 001000], all steps [000750 001000 001250] -> nothing to delete
+2026-10-17T03:03:20Z PASS(loop): complete [000750 001000 001250] keep [001000 001250] -> delete sets with step < 001000
+2026-10-17T03:03:21Z   DELETED step 000750: model_000750.pt meta_000750.json optim_000750_rank0.pt freed=10423641756 bytes (10.42 GB)
+2026-10-17T03:03:21Z   df after: /dev/vda1       495G  329G  167G  67% /
+2026-10-17T03:08:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:13:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:18:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:23:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:28:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:33:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:38:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:43:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:48:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:53:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T03:58:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T04:03:21Z PASS(loop): 2 complete set(s) [001000 001250], all steps [001000 001250] -> nothing to delete
+2026-10-17T04:08:21Z PASS(loop): complete [001000 001250 001500] keep [001250 001500] -> delete sets with step < 001250
+2026-10-17T04:08:22Z   DELETED step 001000: model_001000.pt meta_001000.json optim_001000_rank0.pt freed=10423641756 bytes (10.42 GB)
+2026-10-17T04:08:22Z   df after: /dev/vda1       495G  329G  167G  67% /
+2026-10-17T04:13:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:18:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:23:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:28:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:33:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:38:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:43:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:48:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:53:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T04:58:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T05:03:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500] -> nothing to delete
+2026-10-17T05:08:22Z PASS(loop): 2 complete set(s) [001250 001500], all steps [001250 001500 001750] -> nothing to delete
+2026-10-17T05:13:22Z PASS(loop): complete [001250 001500 001750] keep [001500 001750] -> delete sets with step < 001500
+2026-10-17T05:13:23Z   DELETED step 001250: model_001250.pt meta_001250.json optim_001250_rank0.pt freed=10423641756 bytes (10.42 GB)
+2026-10-17T05:13:23Z   df after: /dev/vda1       495G  329G  167G  67% /
+2026-10-17T05:18:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:23:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:28:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:33:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:38:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:43:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:48:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:53:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T05:58:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T06:03:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T06:08:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T06:13:23Z PASS(loop): 2 complete set(s) [001500 001750], all steps [001500 001750] -> nothing to delete
+2026-10-17T06:18:23Z PASS(loop): complete [001500 001750 002000] keep [001750 002000] -> delete sets with step < 001750
+2026-10-17T06:18:24Z   DELETED step 001500: model_001500.pt meta_001500.json optim_001500_rank0.pt freed=10423641755 bytes (10.42 GB)
+2026-10-17T06:18:24Z   df after: /dev/vda1       495G  329G  167G  67% /
+2026-10-17T06:23:24Z PASS(loop): 2 complete set(s) [001750 002000], all steps [001750 002000] -> nothing to delete
+2026-10-17T06:28:24Z PASS(loop): 2 complete set(s) [001750 002000], all steps [001750 002000] -> nothing to delete
+2026-10-17T06:33:24Z PASS(loop): 2 complete set(s) [001750 002000], all steps [001750 002000] -> nothing to delete
+2026-10-17T06:38:24Z PASS(loop): 2 complete set(s) [001750 002000], all steps [001750 002000] -> nothing to delete
+2026-10-17T06:39:42Z PASS(once): 2 complete set(s) [001750 002000], all steps [001750 002000] -> nothing to delete

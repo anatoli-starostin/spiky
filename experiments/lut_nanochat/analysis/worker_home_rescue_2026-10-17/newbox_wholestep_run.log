@@ -1,0 +1,110 @@
+
+                                                       █████                █████
+                                                      ░░███                ░░███
+     ████████    ██████   ████████    ██████   ██████  ░███████    ██████  ███████
+    ░░███░░███  ░░░░░███ ░░███░░███  ███░░███ ███░░███ ░███░░███  ░░░░░███░░░███░
+     ░███ ░███   ███████  ░███ ░███ ░███ ░███░███ ░░░  ░███ ░███   ███████  ░███
+     ░███ ░███  ███░░███  ░███ ░███ ░███ ░███░███  ███ ░███ ░███  ███░░███  ░███ ███
+     ████ █████░░████████ ████ █████░░██████ ░░██████  ████ █████░░███████  ░░█████
+    ░░░░ ░░░░░  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░   ░░░░░░  ░░░░ ░░░░░  ░░░░░░░░   ░░░░░
+    
+Autodetected device type: cuda
+2026-10-15 16:24:50,708 - nanochat.common - [32m[1mINFO[0m - Distributed world size: 1
+GPU: NVIDIA H100 80GB HBM3 | Peak FLOPS (BF16): 9.89e+14
+COMPUTE_DTYPE: torch.bfloat16 (auto-detected: CUDA SM 90 (bf16 supported))
+✓ Using Flash Attention 3: efficient, new and awesome.
+Vocab size: 32,768
+Model config:
+{
+  "sequence_len": 2048,
+  "vocab_size": 32768,
+  "n_layer": 24,
+  "n_head": 12,
+  "n_kv_head": 12,
+  "n_embd": 1536,
+  "window_pattern": "SSSL"
+}
+[lut_nanochat] LUT-FFN enabled: replaced 24 block MLPs (h=32 d=48 tph=32 nap=8 read_top_n=1); LUT-FFN params total = 415,309,872; tv_lambda=10.0
+✓ FP8 training enabled (tensorwise scaling) - converted 97/158 linear layers, skipped 61 (too small)
+[lut_nanochat] dynamo: force_parameter_static_shapes=False, cache_size_limit>=256 (LUT heterogeneous-rank params)
+Parameter counts:
+wte                     : 50,331,648
+value_embeds            : 603,979,776
+lm_head                 : 50,331,648
+transformer_matrices    : 641,804,016
+scalars                 : 74
+total                   : 1,346,447,162
+Estimated FLOPs per token: 3.963722e+08
+[lut_nanochat] --no-lr-rescale: batch_lr_scale forced to 1.0 (would have been 1.4142 for batch 1,048,576 vs ref 524,288)
+Scaling weight decay from 0.280000 to 0.062990 for depth 24
+Scaling the LR for the AdamW parameters ∝1/√(1536/768) = 0.707107
+Using user-provided number of iterations: 5,568
+Total number of training tokens: 5,838,471,168
+Tokens : Scaling params ratio: 8.44
+Total training FLOPs estimate: 2.314208e+18
+Tokens / micro-batch / rank: 16 x 2048 = 32,768
+Tokens / micro-batch: 32,768
+Total batch size 1,048,576 => gradient accumulation steps: 32
+/home/nebius-h100/projects/spiky/experiments/lut_nanochat/nanochat/.venv/lib/python3.10/site-packages/torch/_dynamo/variables/functions.py:1598: UserWarning: Dynamo does not know how to trace the builtin `lutorch_ex_fused_confidence.pybind11_detail_function_record_v1_system_libstdcpp_gxx_abi_1xxx_use_cxx11_abi_1.confidence_fwd.` This function is either a Python builtin (e.g. _warnings.warn) or a third-party C/C++ Python extension (perhaps created with pybind).
+If it is a Python builtin, please file an issue on GitHub so the PyTorch team can add support for it and see the next case for a workaround.
+If it is a third-party C/C++ Python extension, please either wrap it into a PyTorch-understood custom operator (see https://pytorch.org/tutorials/advanced/custom_ops_landing_page.html for more details) or, if it is traceable, use `torch.compiler.allow_in_graph`.
+  torch._dynamo.utils.warn_once(explanation + "\n" + "\n".join(hints))
+step 00000/05568 (0.00%) | loss: 10.397440 | lrm: 0.03 | dt: 24840.38ms | tok/sec: 42,212 | bf16_mfu: 1.69 | epoch: 1 pq: 0 rg: 2 | total time: 0.00m
+step 00001/05568 (0.02%) | loss: 10.379123 | lrm: 0.05 | dt: 18118.01ms | tok/sec: 57,874 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 4 | total time: 0.00m
+step 00002/05568 (0.04%) | loss: 10.344422 | lrm: 0.07 | dt: 18133.16ms | tok/sec: 57,826 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 6 | total time: 0.00m
+step 00003/05568 (0.05%) | loss: 10.296880 | lrm: 0.10 | dt: 18131.66ms | tok/sec: 57,831 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 8 | total time: 0.00m
+step 00004/05568 (0.07%) | loss: 10.224920 | lrm: 0.12 | dt: 18126.57ms | tok/sec: 57,847 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 11 | total time: 0.00m
+step 00005/05568 (0.09%) | loss: 10.121202 | lrm: 0.15 | dt: 18119.78ms | tok/sec: 57,869 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 13 | total time: 0.00m
+step 00006/05568 (0.11%) | loss: 9.938472 | lrm: 0.17 | dt: 18119.10ms | tok/sec: 57,871 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 15 | total time: 0.00m
+step 00007/05568 (0.13%) | loss: 9.644112 | lrm: 0.20 | dt: 18108.36ms | tok/sec: 57,905 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 17 | total time: 0.00m
+step 00008/05568 (0.14%) | loss: 9.390440 | lrm: 0.23 | dt: 18130.35ms | tok/sec: 57,835 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 19 | total time: 0.00m
+step 00009/05568 (0.16%) | loss: 9.137251 | lrm: 0.25 | dt: 18095.59ms | tok/sec: 57,946 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 21 | total time: 0.00m
+step 00010/05568 (0.18%) | loss: 8.894429 | lrm: 0.28 | dt: 18094.10ms | tok/sec: 57,951 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 23 | total time: 0.00m
+step 00011/05568 (0.20%) | loss: 8.660561 | lrm: 0.30 | dt: 18107.75ms | tok/sec: 57,907 | bf16_mfu: 2.32 | epoch: 1 pq: 0 rg: 25 | total time: 0.30m | eta: 1677.1m
+step 00012/05568 (0.22%) | loss: 8.465209 | lrm: 0.33 | dt: 18245.39ms | tok/sec: 57,470 | bf16_mfu: 2.30 | epoch: 1 pq: 0 rg: 28 | total time: 0.61m | eta: 1683.2m
+step 00013/05568 (0.23%) | loss: 8.246383 | lrm: 0.35 | dt: 18239.55ms | tok/sec: 57,489 | bf16_mfu: 2.30 | epoch: 1 pq: 0 rg: 30 | total time: 0.91m | eta: 1684.8m
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                                  Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               FusedConfidenceBackward         0.23%     118.387ms         2.32%        1.179s     767.424us       13.529s        37.63%       13.569s       8.834ms          1536  
+void (anonymous namespace)::confidence_bwd_kernel<1, 4, float>((ano...         0.00%       0.000us         0.00%       0.000us       0.000us       13.529s        37.63%       13.529s       8.808ms          1536  
+                                                              aten::mm         0.60%     304.992ms         1.86%     942.843ms     109.125us        3.691s        10.27%        3.691s     427.200us          8640  
+                                           Torch-Compiled Region: 12/0         0.21%     104.513ms         0.36%     180.999ms     117.838us        3.097s         8.61%        3.099s       2.018ms          1536  
+void (anonymous namespace)::confidence_fwd_kernel<1, 4, float>((ano...         0.00%       0.000us         0.00%       0.000us       0.000us        3.097s         8.61%        3.097s       2.016ms          1536  
+                                                      aten::_scaled_mm         0.97%     490.869ms         2.56%        1.299s      69.753us        2.578s         7.17%        2.578s     138.444us         18624  
+## Call CompiledFxGraph f56q6wonse4dljuwyy5wuho2655wc26gawhvwp2rsaj...         0.00%       0.000us         0.00%       0.000us       0.000us        2.536s         7.05%        2.536s       3.302ms           768  
+sm90_xmma_gemm_f32f32_tf32f32_f32_nt_n_tilesize128x128x32_warpgroup...         0.00%       0.000us         0.00%       0.000us       0.000us        2.248s         6.25%        2.248s     731.856us          3072  
+## Call CompiledFxGraph fgxjqijv3ik6yfzbn3ghcmiqsamzqzv2zots6tj7vww...         0.00%       0.000us         0.00%       0.000us       0.000us        1.976s         5.50%        1.976s       1.286ms          1536  
+## Call CompiledFxGraph fnqa6eit5qku5xok66resknrorc4pfotw3pcvzorq5c...         0.00%       0.000us         0.00%       0.000us       0.000us        1.944s         5.41%        1.944s       1.266ms          1536  
+                                                             aten::mul         0.21%     106.780ms         0.94%     475.184ms      47.882us        1.878s         5.22%        1.878s     189.217us          9924  
+sm90_xmma_gemm_f32f32_tf32f32_f32_nn_n_tilesize128x128x32_warpgroup...         0.00%       0.000us         0.00%       0.000us       0.000us        1.417s         3.94%        1.417s     461.331us          3072  
+## Call CompiledFxGraph fvq6at3vo2scyai7dzwommlq6u5o25k6wiomminghjq...         0.00%       0.000us         0.00%       0.000us       0.000us        1.370s         3.81%        1.370s       3.568ms           384  
+                                                     flash_attn_3::bwd         0.14%      73.379ms         0.36%     182.347ms     118.716us        1.345s         3.74%        1.345s     875.805us          1536  
+## Call CompiledFxGraph fyy23zbw2oyyjzun5j4he33mrhgrnenynbsgc2po4yp...         0.00%       0.000us         0.00%       0.000us       0.000us        1.226s         3.41%        1.226s       3.194ms           384  
+                                                           aten::addmm         0.31%     158.753ms         0.45%     226.610ms      73.766us        1.219s         3.39%        1.219s     396.819us          3072  
+sm90_xmma_gemm_f32f32_tf32f32_f32_tn_n_tilesize128x128x32_warpgroup...         0.00%       0.000us         0.00%       0.000us       0.000us        1.216s         3.38%        1.216s     395.863us          3072  
+void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_...         0.00%       0.000us         0.00%       0.000us       0.000us        1.168s         3.25%        1.168s     190.089us          6144  
+## Call CompiledFxGraph fy3pzwvlolwxya3l73p2grrnldnidgmgfnvyhsd3wkw...         0.00%       0.000us         0.00%       0.000us       0.000us        1.115s         3.10%        1.115s       1.452ms           768  
+                    nvjet_qrtst_128x160_128x5_2x1_v_bz_coopA_algo2_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.027s         2.86%        1.027s     163.731us          6272  
+                          nvjet_qqtst_192x192_128x4_1x2_h_bz_coopB_TNN         0.00%       0.000us         0.00%       0.000us       0.000us     745.035ms         2.07%     745.035ms     121.262us          6144  
+## Call CompiledFxGraph f4e4azkdxybqfjdncwvoz3tsr2jhqdiolpsoomg5g5g...         0.00%       0.000us         0.00%       0.000us       0.000us     684.694ms         1.90%     684.694ms       1.783ms           384  
+                    nvjet_qrtst_144x128_128x6_1x2_h_bz_coopA_algo2_TNN         0.00%       0.000us         0.00%       0.000us       0.000us     640.000ms         1.78%     640.000ms     104.167us          6144  
+## Call CompiledFxGraph f43ji2ro66upsdsgqf76l2tvt2abgtfyvriiy4weoox...         0.00%       0.000us         0.00%       0.000us       0.000us     637.841ms         1.77%     637.841ms       1.661ms           384  
+void cutlass::device_kernel<flash::enable_sm90_or_later<flash::Flas...         0.00%       0.000us         0.00%       0.000us       0.000us     636.291ms         1.77%     636.291ms     552.336us          1152  
+## Call CompiledFxGraph fvfoc2efcuagyjmbx26qxl7pcfu5jnkbp5vg7w3uv2m...         0.00%       0.000us         0.00%       0.000us       0.000us     615.262ms         1.71%     615.262ms     400.561us          1536  
+## Call CompiledFxGraph fhztuiipbxarcxv6akudyywxuykv7crvwg7zxis6ght...         0.00%       0.000us         0.00%       0.000us       0.000us     609.667ms         1.70%     609.667ms     396.918us          1536  
+## Call CompiledFxGraph fyw4g3agbw52x6xrztqaha2mvwwwqftdzfejo4nubqo...         0.00%       0.000us         0.00%       0.000us       0.000us     463.485ms         1.29%     463.485ms       7.242ms            64  
+                                                            aten::add_         0.26%     133.208ms         2.66%        1.354s      58.660us     432.019ms         1.20%     432.019ms      18.723us         23074  
+                                        aten::embedding_dense_backward         0.16%      79.026ms        11.84%        6.012s       7.226ms     430.400ms         1.20%     457.116ms     549.418us           832  
+void at::native::vectorized_elementwise_kernel<8, at::native::CUDAF...         0.00%       0.000us         0.00%       0.000us       0.000us     397.922ms         1.11%     397.922ms      94.789us          4198  
+                                                           aten::copy_         0.12%      60.933ms        16.82%        8.547s     587.245us     380.700ms         1.06%     380.700ms      26.158us         14554  
+                                                     flash_attn_3::fwd         0.11%      54.901ms         0.26%     131.584ms      85.666us     378.352ms         1.05%     379.985ms     247.386us          1536  
+                                                             aten::div         0.01%       5.598ms         0.02%       9.669ms      31.807us     361.279ms         1.00%     361.279ms       1.188ms           304  
+void at::native::vectorized_elementwise_kernel<4, at::native::BUnar...         0.00%       0.000us         0.00%       0.000us       0.000us     361.279ms         1.00%     361.279ms     836.294us           432  
+----------------------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 50.798s
+Self CUDA time total: 35.953s
+
+Peak memory usage: 69842.74MiB
+Peak memory reserved: 74082.00MiB
+Total training time: 0.91m
