@@ -1,0 +1,12 @@
+{
+  "name": "hybrid_n32_F256_nap4_gap2_k4_ap_s0",
+  "final_acc": 0.004150390625,
+  "best_acc": 0.004608154296875,
+  "params": 604674,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 893.6,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 83.1,
+  "device": "mps"
+}

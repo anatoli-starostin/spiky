@@ -1,0 +1,12 @@
+{
+  "name": "lm_softmax_F256_s0",
+  "final_val_bpc": 2.2506,
+  "best_val_bpc": 2.2506,
+  "params": 1070080,
+  "train_s": 471.0,
+  "thermal_pause_s": 210.1,
+  "max_cpu_temp": 89.0,
+  "device": "mps",
+  "final_acc": 2.2506,
+  "best_acc": 2.2506
+}

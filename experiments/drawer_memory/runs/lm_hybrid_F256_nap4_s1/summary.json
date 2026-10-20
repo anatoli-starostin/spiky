@@ -1,0 +1,12 @@
+{
+  "name": "lm_hybrid_F256_nap4_s1",
+  "final_val_bpc": 2.2876,
+  "best_val_bpc": 2.284,
+  "params": 955396,
+  "train_s": 1189.5,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.9,
+  "device": "mps",
+  "final_acc": 2.2876,
+  "best_acc": 2.284
+}

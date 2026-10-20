@@ -1,0 +1,12 @@
+{
+  "name": "lm_softmax_rope_F256_s0",
+  "final_val_bpc": 2.286,
+  "best_val_bpc": 2.2632,
+  "params": 1070080,
+  "train_s": 590.8,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.2,
+  "device": "mps",
+  "final_acc": 2.286,
+  "best_acc": 2.2632
+}

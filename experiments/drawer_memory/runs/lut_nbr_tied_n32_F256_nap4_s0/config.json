@@ -1,0 +1,15 @@
+{
+  "mixer": "lut_nbr_tied",
+  "n_pairs": 32,
+  "feat": 256,
+  "nap": 4,
+  "d": 128,
+  "steps": 3000,
+  "bs": 64,
+  "lr": 0.001,
+  "seed": 0,
+  "eval_every": 250,
+  "hot": 85.0,
+  "resume_at": 70.0,
+  "name": "lut_nbr_tied_n32_F256_nap4_s0"
+}

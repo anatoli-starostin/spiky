@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drawer memory — how it reads, writes and learns</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --surface-0: #f4f3ef; --surface-1: #fcfcfb; --surface-2: #ecebe6;
+  --border: #d9d8d2; --grid: #e6e5df;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-5: #e87ba4;
+  --hl: #2a78d6; --hl-soft: #dbe8f8; --warn-soft: #fbe3d8; --good-soft: #d6f1e6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-0: #111110; --surface-1: #1a1a19; --surface-2: #262624;
+    --border: #3a3a37; --grid: #2e2e2b;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
+    --hl: #3987e5; --hl-soft: #1d3150; --warn-soft: #4a2a1c; --good-soft: #163d2f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.viz-root { background: var(--surface-0); color: var(--text-primary); min-height: 100vh; padding: 24px; }
+main { max-width: 980px; margin: 0 auto; }
+h1 { font-size: 26px; margin: 0 0 6px; }
+h2 { font-size: 20px; margin: 0 0 4px; }
+h3 { font-size: 16px; margin: 18px 0 6px; }
+.sub { color: var(--text-secondary); margin: 0 0 18px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin: 0 0 22px; }
+.tabs { display: flex; gap: 8px; margin: 0 0 16px; }
+.tabs button, .btn { font: inherit; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--hl); border-color: var(--hl); color: #fff; }
+.btn:disabled { opacity: .4; cursor: default; }
+.muted { color: var(--text-muted); }
+.sec { color: var(--text-secondary); }
+
+/* sequence strip */
+.strip { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0 16px; }
+.tok { min-width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 7px; display: grid; place-items: center;
+  font-weight: 600; background: var(--surface-2); color: var(--text-secondary); }
+.tok.key { border-style: dashed; }
+.tok.now { background: var(--hl); border-color: var(--hl); color: #fff; }
+.tok.done { color: var(--text-primary); background: var(--surface-1); }
+.sep { width: 2px; height: 38px; background: var(--border); margin: 0 6px; }
+
+.flow { display: grid; grid-template-columns: 1fr 1.6fr; gap: 20px; align-items: start; }
+@media (max-width: 760px) { .flow { grid-template-columns: 1fr; } }
+.box { border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--surface-1); }
+.box h4 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.q { display: flex; justify-content: space-between; gap: 8px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; padding: 2px 0; }
+.bit { font-weight: 700; }
+.addr { margin-top: 6px; font-size: 14px; }
+
+.cab { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.drawers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.drawer { border: 1px solid var(--border); border-radius: 6px; min-height: 54px; padding: 4px 6px; background: var(--surface-2); font-size: 12px; position: relative; }
+.drawer .n { color: var(--text-muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+.drawer .c { font-weight: 700; font-size: 15px; }
+.drawer.w { outline: 2px solid var(--series-2); background: var(--warn-soft); }
+.drawer.r { outline: 2px solid var(--series-3); background: var(--good-soft); }
+.drawer.miss { outline: 2px dashed var(--text-muted); }
+.explain { margin-top: 14px; padding: 12px 14px; border-left: 4px solid var(--hl); background: var(--hl-soft); border-radius: 0 8px 8px 0; }
+.nav { display: flex; gap: 8px; align-items: center; margin-top: 12px; }
+.answer { font-size: 18px; font-weight: 700; margin-top: 8px; }
+
+/* training */
+.loop { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+@media (max-width: 760px) { .loop { grid-template-columns: 1fr 1fr; } }
+.loop .box { min-height: 110px; }
+.loop .num { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--hl); color: #fff; font-weight: 700; font-size: 13px; margin-right: 6px; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.sliders label { display: grid; grid-template-columns: 120px 1fr 60px; gap: 8px; align-items: center; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.bars { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; align-items: center; margin-top: 14px; }
+.barrow { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; height: 90px; align-items: end; }
+.bar { background: var(--series-1); border-radius: 4px 4px 0 0; min-height: 1px; position: relative; }
+.bar.soft { background: var(--series-5); }
+.barlab { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text-muted); text-align: center; }
+
+/* chart */
+.chart-wrap { position: relative; }
+svg text { fill: var(--text-secondary); font-size: 12px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0 4px; font-size: 13px; color: var(--text-secondary); }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; border-radius: 2px; background: var(--c); vertical-align: middle; margin-right: 6px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.12); display: none; min-width: 190px; }
+.tip .row { display: flex; justify-content: space-between; gap: 12px; }
+.tip .sw { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+details summary { cursor: pointer; color: var(--text-secondary); margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+<main>
+  <h1>Drawer memory: how it reads, writes and learns</h1>
+  <p class="sub">A replacement for attention: every token files its information into drawers picked by its own yes/no answers,
+    and later tokens open the drawer that matches what they are looking for.</p>
+
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-tab="inf">1 · Inference (using it)</button>
+    <button role="tab" aria-selected="false" data-tab="train">2 · Training (learning it)</button>
+    <button role="tab" aria-selected="false" data-tab="res">3 · Our results</button>
+  </div>
+
+  <!-- ================= INFERENCE ================= -->
+  <section id="tab-inf">
+    <div class="card">
+      <h2>The puzzle</h2>
+      <p class="sec">The model reads pairs “key → value”, then gets asked for some keys. It must answer with the value that was
+        stored with that key. Here: <b>A→1, B→7, C→3</b>, then “<b>B?</b>” and “<b>A?</b>”.</p>
+      <div class="strip" id="strip"></div>
+
+      <div class="flow">
+        <div class="box">
+          <h4 id="trTitle">Translator (projection) + 3 fixed questions per table</h4>
+          <div id="trBody" class="muted">Press “Next” to start.</div>
+        </div>
+        <div>
+          <div class="cab">
+            <div class="box"><h4>Table 1 · 8 drawers</h4><div class="drawers" id="t0"></div></div>
+            <div class="box"><h4>Table 2 · 8 drawers</h4><div class="drawers" id="t1"></div></div>
+          </div>
+          <div class="answer" id="answer"></div>
+        </div>
+      </div>
+
+      <div class="explain" id="explain"></div>
+      <div class="nav">
+        <button class="btn" id="prev">◀ Back</button>
+        <button class="btn" id="next">Next ▶</button>
+        <span class="muted" id="stepno"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>The 4 things to remember</h3>
+      <ol>
+        <li><b>Drawers start empty for every new text.</b> They are a scratchpad for this text only, not stored knowledge.</li>
+        <li><b>Address = answers to yes/no questions</b> (“is number #2 bigger than number #7?”). 3 answers → a number 0…7 → one drawer.</li>
+        <li><b>Writing and reading use the same translator</b> (“shared projection”), so the same key always lands in the same drawer.</li>
+        <li><b>Several tables, each with different questions,</b> vote together. If two keys collide in one table, the other tables break the tie.</li>
+      </ol>
+      <p class="muted">Simplified for the picture: 2 tables × 8 drawers. The real run used 4 tables × 64 drawers per head, 4 heads, 2 layers.</p>
+    </div>
+  </section>
+
+  <!-- ================= TRAINING ================= -->
+  <section id="tab-train" hidden>
+    <div class="card">
+      <h2>What is learned — and what is not</h2>
+      <table>
+        <thead><tr><th>Part</th><th>Learned?</th><th>Plain words</th></tr></thead>
+        <tbody>
+          <tr><td>Translator (projection)</td><td><b>Yes</b></td><td>Learns which features of a token matter, so that the right things end up with the same yes/no answers.</td></tr>
+          <tr><td>Value maker</td><td><b>Yes</b></td><td>Learns what to put into the drawer (here: “which value is this?”).</td></tr>
+          <tr><td>The yes/no questions</td><td>No — random, fixed</td><td>Which two numbers each question compares. Chosen once at random, like in spiky.</td></tr>
+          <tr><td>Drawer contents</td><td><b>No — filled while reading</b></td><td>Empty at the start of every text, filled by the text itself. <i>This is the new part.</i> In spiky’s original tables the drawer contents are the learned weights.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>The training loop (repeated 3,000 times)</h2>
+      <div class="loop">
+        <div class="box"><span class="num">1</span><b>New random puzzle</b><p class="sec">64 random texts like “A 1 B 7 … B? A?”, 16 pairs each.</p></div>
+        <div class="box"><span class="num">2</span><b>Run inference</b><p class="sec">Exactly the process from tab 1: write, then read, answer.</p></div>
+        <div class="box"><span class="num">3</span><b>Check answers</b><p class="sec">Compare with the right values. How wrong were we?</p></div>
+        <div class="box"><span class="num">4</span><b>Nudge</b><p class="sec">Slightly adjust the translator and value maker so next time it is a bit less wrong.</p></div>
+      </div>
+      <p class="sec">The drawers themselves are never “trained”: they are thrown away after each text. Training only teaches the model
+        <i>how to file</i> and <i>how to search</i>.</p>
+    </div>
+
+    <div class="card">
+      <h2>The hard part: a drawer number has no “almost”</h2>
+      <p class="sec">To learn, the model needs a hint like “you were close — go a bit this way”. But a drawer is either the right one or
+        not; there is no “almost right drawer”. The trick (borrowed from spiky): <b>forward we use the hard drawer</b>, but when
+        computing the hint we <b>pretend the choice was soft</b> — a probability spread over drawers. Close-call questions spread
+        the probability; clear-cut ones concentrate it.</p>
+      <p class="sec">Move the sliders: each is one question’s margin (how much bigger the first number is than the second).</p>
+      <div class="sliders" id="sliders"></div>
+      <div class="bars">
+        <div class="sec">Hard (used for the answer)</div>
+        <div><div class="barrow" id="hardBars"></div></div>
+        <div class="sec">Soft shadow (used only for the learning hint)</div>
+        <div><div class="barrow" id="softBars"></div></div>
+        <div></div><div class="barlab" id="barLab"></div>
+      </div>
+      <p class="sec" id="softNote"></p>
+    </div>
+
+    <div class="card">
+      <h2>Why shared vs separate translator decides everything</h2>
+      <div class="flow" style="grid-template-columns:1fr 1fr">
+        <div class="box">
+          <h4>Separate (failed: 0.5%)</h4>
+          <p>Filing “B”: <b>writer</b> translator → drawers 3 / 6.<br>Asking “B?”: <b>reader</b> translator → drawers 1 / 4.</p>
+          <p class="sec">Different drawers → finds nothing useful. At the start the two translators are random and never agree,
+            so the learning hint is almost zero: the model never discovers that they should agree.</p>
+        </div>
+        <div class="box">
+          <h4>Shared (worked: 99.9%)</h4>
+          <p>Filing “B” and asking “B?” both go through the <b>same</b> translator → drawers 3 / 6 both times.</p>
+          <p class="sec">The match is automatic from step one. The model only has to learn <i>what</i> to file —
+            and after ~1,300 steps it “clicks”.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= RESULTS ================= -->
+  <section id="tab-res" hidden>
+    <div class="card">
+      <h2>Recall accuracy during training</h2>
+      <p class="sec">16 key→value pairs per text, memory size 256 per head, 1 seed. Random guessing = 0.4%.</p>
+      <div class="legend" id="legend"></div>
+      <div class="chart-wrap" id="chartWrap">
+        <svg id="chart" width="100%" viewBox="0 0 900 360" role="img" aria-label="Accuracy vs training step for five models"></svg>
+        <div class="tip" id="tip"></div>
+      </div>
+      <details><summary>Show as table</summary><div id="dataTable"></div></details>
+    </div>
+    <div class="card">
+      <h2>Summary</h2>
+      <table>
+        <thead><tr><th>Model</th><th>Q/K translator</th><th class="num">Final recall</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr><td>Softmax attention</td><td>separate</td><td class="num">100.0%</td><td>✅ solves</td></tr>
+          <tr><td>Linear attention (same memory)</td><td>separate</td><td class="num">99.99%</td><td>✅ solves</td></tr>
+          <tr><td>Drawers, hard</td><td>separate</td><td class="num">0.3%</td><td>❌ chance</td></tr>
+          <tr><td>Drawers + neighbour + confidence</td><td>separate</td><td class="num">0.4%</td><td>❌ chance</td></tr>
+          <tr><td><b>Drawers, hard</b></td><td><b>shared</b></td><td class="num"><b>99.9%</b></td><td>✅ solves</td></tr>
+          <tr><td>Drawers + neighbour + confidence</td><td>shared</td><td class="num">3.2%</td><td>❌ only started learning</td></tr>
+        </tbody>
+      </table>
+      <p class="sec">Not yet tested: the harder settings (32 pairs, smaller memory) where linear attention is expected to struggle —
+        that is where “better than linear attention” can be decided.</p>
+    </div>
+  </section>
+</main>
+</div>
+
+<script>
+/* ---------- tabs ---------- */
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
+  ['inf', 'train', 'res'].forEach(t => document.getElementById('tab-' + t).hidden = t !== b.dataset.tab);
+  if (b.dataset.tab === 'res') drawChart();
+});
+
+/* ---------- inference walkthrough ---------- */
+const TOKS = [['A','key'],['1',''],['B','key'],['7',''],['C','key'],['3',''],['|','sep'],['B?','key'],['A?','key']];
+// shared translator: key -> 3 answers per table
+const BITS = { A: [[1,0,1],[0,1,0]], B: [[0,1,1],[1,1,0]], C: [[1,0,1],[0,0,0]] };
+const SEP_BITS_B = [[0,0,1],[1,0,0]]; // what a *separate* reader translator would give for B
+const QS = [['#2 > #7', '#5 > #1', '#9 > #3'], ['#4 > #8', '#6 > #2', '#1 > #11']];
+const addr = b => b[0]*4 + b[1]*2 + b[2];
+const STEPS = [
+  { at: -1, text: 'A new text begins. <b>All drawers are empty.</b> Nothing has been filed yet.' },
+  { at: 1, key: 'A', val: '1', mode: 'w', text: 'Token “1” arrives. It also sees its left neighbour “A”. The <b>translator</b> turns “A” into numbers and each table asks its 3 yes/no questions. Table 1 answers <b>1 0 1</b> = drawer 5, table 2 answers <b>0 1 0</b> = drawer 2. The value <b>1</b> is <b>written</b> into both drawers.' },
+  { at: 3, key: 'B', val: '7', mode: 'w', text: '“7” arrives with “B”. Same translator, same questions → drawers <b>3</b> and <b>6</b>. Value <b>7</b> is written there.' },
+  { at: 5, key: 'C', val: '3', mode: 'w', text: '“3” arrives with “C” → drawers <b>5</b> and <b>0</b>. Note: in table 1, C lands in drawer 5 — <b>the same drawer as A</b> (a collision). Drawer 5 now holds a mix of 1 and 3.' },
+  { at: 7, key: 'B', mode: 'r', text: 'Question “B?”. The <b>same translator</b> turns B into the same answers as before → drawers <b>3</b> and <b>6</b>. Both contain 7. <b>Answer: 7 ✓</b> — found without comparing B with every earlier token.' },
+  { at: 8, key: 'A', mode: 'r', text: 'Question “A?” → drawers <b>5</b> and <b>2</b>. Table 1’s drawer 5 is mixed (1 and 3), but table 2’s drawer 2 holds a clean 1. Everything found is pooled: <b>1, 3, 1</b> → 1 makes up two thirds, 3 one third. <b>Answer: 1 ✓</b>. This is why we use several tables: one table’s collision is outvoted by the others.' },
+  { at: 7, key: 'B', mode: 'miss', text: 'What went wrong in the first attempt: with a <b>separate reader translator</b>, “B?” gets different answers (0 0 1 / 1 0 0) → drawers 1 and 4, which are <b>empty</b>. Nothing found — the model scored like random guessing.' },
+];
+let step = 0;
+function drawerState(upto) {
+  const d = [Array.from({length: 8}, () => []), Array.from({length: 8}, () => [])];
+  STEPS.slice(0, upto + 1).forEach(s => { if (s.mode === 'w') BITS[s.key].forEach((b, t) => d[t][addr(b)].push(s.val)); });
+  return d;
+}
+function renderInf() {
+  const s = STEPS[step];
+  document.getElementById('strip').innerHTML = TOKS.map(([t, k], i) =>
+    k === 'sep' ? '<div class="sep" title="questions start"></div>' :
+    `<div class="tok ${k} ${i === s.at ? 'now' : (i < s.at || (s.at === -1 && false) ? 'done' : '')}">${t}</div>`).join('');
+  const d = drawerState(step);
+  const bits = s.mode === 'miss' ? SEP_BITS_B : (s.key ? BITS[s.key] : null);
+  [0, 1].forEach(t => {
+    const hit = bits ? addr(bits[t]) : -1;
+    document.getElementById('t' + t).innerHTML = d[t].map((c, i) => {
+      const cls = i === hit ? (s.mode === 'w' ? 'w' : s.mode === 'r' ? 'r' : 'miss') : '';
+      return `<div class="drawer ${cls}"><div class="n">#${i}</div><div class="c">${c.join(' + ') || ''}</div></div>`;
+    }).join('');
+  });
+  const tb = document.getElementById('trBody');
+  document.getElementById('trTitle').textContent = s.mode === 'miss' ? 'SEPARATE reader translator (the failed design)' : 'Translator (projection) + 3 fixed questions per table';
+  if (!bits) tb.innerHTML = '<span class="muted">Waiting for the first token.</span>';
+  else tb.innerHTML = `<div class="sec" style="margin-bottom:6px">${s.mode === 'w' ? 'Filing' : 'Looking up'} key <b>${s.key}</b></div>` +
+    bits.map((b, t) => `<div style="margin-bottom:8px"><b>Table ${t + 1}</b>` +
+      b.map((x, j) => `<div class="q"><span>${QS[t][j]} ?</span><span class="bit">${x ? 'yes (1)' : 'no (0)'}</span></div>`).join('') +
+      `<div class="addr">→ ${b.join('')} = drawer <b>#${addr(b)}</b></div></div>`).join('');
+  document.getElementById('answer').textContent = s.mode === 'r' ? (s.key === 'B' ? 'Answer: 7 ✓' : 'Answer: 1 ✓') : s.mode === 'miss' ? 'Answer: ? (empty drawers) ✗' : '';
+  document.getElementById('explain').innerHTML = s.text;
+  document.getElementById('prev').disabled = step === 0;
+  document.getElementById('next').disabled = step === STEPS.length - 1;
+  document.getElementById('stepno').textContent = `step ${step + 1} / ${STEPS.length}`;
+}
+document.getElementById('prev').onclick = () => { step--; renderInf(); };
+document.getElementById('next').onclick = () => { step++; renderInf(); };
+renderInf();
+
+/* ---------- soft shadow demo ---------- */
+const margins = [1.2, -0.15, 0.8];
+const sig = x => 1 / (1 + Math.exp(-x));
+function renderSoft() {
+  const hardBits = margins.map(u => u > 0 ? 1 : 0), h = addr(hardBits);
+  const soft = [...Array(8).keys()].map(c => [4, 2, 1].reduce((p, w, j) => {
+    const bit = (c & w) ? 1 : 0; return p * (bit ? sig(margins[j] / 0.5) : sig(-margins[j] / 0.5));
+  }, 1));
+  document.getElementById('hardBars').innerHTML = [...Array(8).keys()].map(c =>
+    `<div class="bar" style="height:${c === h ? 100 : 0.5}%" title="drawer ${c}: ${c === h ? 1 : 0}"></div>`).join('');
+  document.getElementById('softBars').innerHTML = soft.map((p, c) =>
+    `<div class="bar soft" style="height:${Math.max(p * 100, 0.5)}%" title="drawer ${c}: ${(p * 100).toFixed(0)}%"></div>`).join('');
+  document.getElementById('barLab').innerHTML = [...Array(8).keys()].map(c => `<span>#${c}</span>`).join('');
+  const shaky = margins.map(Math.abs).indexOf(Math.min(...margins.map(Math.abs)));
+  const alt = h ^ [4, 2, 1][shaky];
+  document.getElementById('softNote').innerHTML = `The answer reads drawer <b>#${h}</b>. The shakiest question is Q${shaky + 1} (margin ${margins[shaky].toFixed(2)}), so the soft shadow also puts
+    <b>${(soft[alt] * 100).toFixed(0)}%</b> on drawer #${alt}. If drawer #${alt} would have given a better answer, the learning hint says
+    “push Q${shaky + 1} the other way” — that is the “you were close” signal a hard choice cannot give.`;
+}
+document.getElementById('sliders').innerHTML = margins.map((m, j) =>
+  `<label>Q${j + 1} margin<input type="range" min="-2" max="2" step="0.05" value="${m}" data-j="${j}"><span id="mv${j}">${m.toFixed(2)}</span></label>`).join('');
+document.querySelectorAll('#sliders input').forEach(inp => inp.oninput = () => {
+  margins[+inp.dataset.j] = +inp.value; document.getElementById('mv' + inp.dataset.j).textContent = (+inp.value).toFixed(2); renderSoft();
+});
+renderSoft();
+
+/* ---------- results chart ---------- */
+const STEPS_X = [250,500,750,1000,1250,1500,1750,2000,2250,2500,2750,3000];
+const SERIES = [
+  { name: 'Softmax attention', c: '--series-1', y: [0.0066,0.9998,1,1,1,1,1,1,1,1,1,1] },
+  { name: 'Linear attention', c: '--series-2', y: [0.0038,0.0156,0.9973,0.9991,0.9993,0.9995,0.9997,0.9999,0.9999,0.9999,0.9999,0.9999] },
+  { name: 'Drawers, shared', c: '--series-3', y: [0.0043,0.0031,0.0043,0.0043,0.0051,0.8748,0.9934,0.9974,0.9984,0.9988,0.9988,0.9988] },
+  { name: 'Drawers + nbr + conf, shared', c: '--series-4', y: [0.0043,0.0032,0.0043,0.0040,0.0043,0.0032,0.0096,0.0142,0.0241,0.0310,0.0313,0.0320] },
+  { name: 'Drawers, separate', c: '--series-5', y: [0.0018,0.0047,0.0040,0.0038,0.0041,0.0042,0.0041,0.0032,0.0034,0.0034,0.0031,0.0032] },
+];
+let drawn = false;
+function drawChart() {
+  if (drawn) return; drawn = true;
+  const css = getComputedStyle(document.querySelector('.viz-root'));
+  const col = v => css.getPropertyValue(v).trim();
+  const W = 900, H = 360, L = 52, R = 228, T = 14, B = 40;
+  const x = s => L + (s - 0) / 3000 * (W - L - R), y = v => T + (1 - v) * (H - T - B);
+  let g = '';
+  for (let v = 0; v <= 1.0001; v += 0.25) g += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="${col('--grid')}"/><text x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${v * 100}%</text>`;
+  for (let s = 0; s <= 3000; s += 500) g += `<text x="${x(s)}" y="${H - B + 18}" text-anchor="${s === 3000 ? 'end' : 'middle'}">${s}</text>`;
+  g += `<text x="${(L + W - R) / 2}" y="${H - 4}" text-anchor="middle">training step</text>`;
+  g += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="${col('--text-muted')}"/>`;
+  SERIES.forEach(s => {
+    const pts = [[0, 0.004], ...STEPS_X.map((st, i) => [st, s.y[i]])];
+    g += `<polyline fill="none" stroke="${col(s.c)}" stroke-width="2" stroke-linejoin="round" points="${pts.map(([a, b]) => x(a) + ',' + y(b)).join(' ')}"/>`;
+  });
+  // direct labels at line ends, de-collided
+  const ends = SERIES.map(s => ({ s, v: s.y[s.y.length - 1], py: y(s.y[s.y.length - 1]) })).sort((a, b) => a.py - b.py);
+  for (let i = 1; i < ends.length; i++) if (ends[i].py - ends[i - 1].py < 16) ends[i].py = ends[i - 1].py + 16;
+  const over = ends[ends.length - 1].py - (H - B - 2); if (over > 0) ends.forEach((e, i) => { if (i >= ends.length - 2) e.py -= over; });
+  ends.forEach(e => g += `<text x="${W - R + 10}" y="${e.py + 4}" style="fill:${col('--text-primary')}">${e.s.name} · ${(e.v * 100).toFixed(1)}%</text>`);
+  g += `<line id="xh" y1="${T}" y2="${H - B}" stroke="${col('--text-muted')}" stroke-dasharray="3 3" visibility="hidden"/>`;
+  g += `<rect id="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>`;
+  const svg = document.getElementById('chart'); svg.innerHTML = g;
+  document.getElementById('legend').innerHTML = SERIES.map(s => `<span style="--c:${col(s.c)}">${s.name}</span>`).join('');
+  const tip = document.getElementById('tip'), xh = document.getElementById('xh');
+  document.getElementById('hit').addEventListener('mousemove', ev => {
+    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
+    let i = Math.round((sx - x(250)) / (x(500) - x(250))); i = Math.max(0, Math.min(STEPS_X.length - 1, i));
+    xh.setAttribute('x1', x(STEPS_X[i])); xh.setAttribute('x2', x(STEPS_X[i])); xh.setAttribute('visibility', 'visible');
+    tip.innerHTML = `<b>step ${STEPS_X[i]}</b>` + [...SERIES].sort((a, b) => b.y[i] - a.y[i]).map(s =>
+      `<div class="row"><span><span class="sw" style="background:${col(s.c)}"></span>${s.name}</span><span>${(s.y[i] * 100).toFixed(1)}%</span></div>`).join('');
+    tip.style.display = 'block';
+    const px = x(STEPS_X[i]) * r.width / W;
+    tip.style.left = (px > r.width * 0.55 ? px - 230 : px + 14) + 'px'; tip.style.top = '20px';
+  });
+  document.getElementById('hit').addEventListener('mouseleave', () => { tip.style.display = 'none'; xh.setAttribute('visibility', 'hidden'); });
+  document.getElementById('dataTable').innerHTML = '<table><thead><tr><th>step</th>' + SERIES.map(s => `<th class="num">${s.name}</th>`).join('') +
+    '</tr></thead><tbody>' + STEPS_X.map((st, i) => `<tr><td>${st}</td>` + SERIES.map(s => `<td class="num">${(s.y[i] * 100).toFixed(2)}%</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+}
+</script>
+</body>
+</html>

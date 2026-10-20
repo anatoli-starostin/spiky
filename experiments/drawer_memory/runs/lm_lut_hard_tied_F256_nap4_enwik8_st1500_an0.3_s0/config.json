@@ -1,0 +1,22 @@
+{
+  "mixer": "lut_hard_tied",
+  "feat": 256,
+  "nap": 4,
+  "d": 128,
+  "layers": 4,
+  "T": 256,
+  "steps": 1500,
+  "bs": 32,
+  "lr": 0.001,
+  "seed": 0,
+  "shift_k": 4,
+  "eval_every": 250,
+  "hot": 85.0,
+  "resume_at": 70.0,
+  "write": "add",
+  "read_power": 1,
+  "anneal_frac": 0.3,
+  "window": 16,
+  "corpus": "enwik8",
+  "name": "lm_lut_hard_tied_F256_nap4_enwik8_st1500_an0.3_s0"
+}

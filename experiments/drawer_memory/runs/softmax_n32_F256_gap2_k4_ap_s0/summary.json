@@ -1,0 +1,12 @@
+{
+  "name": "softmax_n32_F256_gap2_k4_ap_s0",
+  "final_acc": 0.04254150390625,
+  "best_acc": 0.04254150390625,
+  "params": 662016,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 407.1,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 84.4,
+  "device": "mps"
+}

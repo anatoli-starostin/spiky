@@ -1,0 +1,12 @@
+{
+  "name": "lut_hard_tied_n64_F64_nap2_ap_s0",
+  "final_acc": 0.276763916015625,
+  "best_acc": 0.276763916015625,
+  "params": 526850,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 1104.8,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 85.4,
+  "device": "mps"
+}

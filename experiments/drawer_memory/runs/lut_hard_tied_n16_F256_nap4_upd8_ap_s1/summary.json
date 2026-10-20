@@ -1,0 +1,12 @@
+{
+  "name": "lut_hard_tied_n16_F256_nap4_upd8_ap_s1",
+  "final_acc": 0.9873046875,
+  "best_acc": 0.9873046875,
+  "params": 526850,
+  "final_acc_updated": 0.981689453125,
+  "final_acc_static": 0.992919921875,
+  "train_s": 557.0,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.3,
+  "device": "mps"
+}

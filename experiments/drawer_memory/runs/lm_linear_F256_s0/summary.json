@@ -1,0 +1,12 @@
+{
+  "name": "lm_linear_F256_s0",
+  "final_val_bpc": 2.2168,
+  "best_val_bpc": 2.2168,
+  "params": 1987584,
+  "train_s": 973.9,
+  "thermal_pause_s": 790.6,
+  "max_cpu_temp": 93.8,
+  "device": "mps",
+  "final_acc": 2.2168,
+  "best_acc": 2.2168
+}

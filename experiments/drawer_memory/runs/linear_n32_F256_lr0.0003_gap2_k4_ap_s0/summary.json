@@ -1,0 +1,12 @@
+{
+  "name": "linear_n32_F256_lr0.0003_gap2_k4_ap_s0",
+  "final_acc": 0.005218505859375,
+  "best_acc": 0.00531005859375,
+  "params": 1120768,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 877.8,
+  "thermal_pause_s": 30.0,
+  "max_cpu_temp": 85.7,
+  "device": "mps"
+}

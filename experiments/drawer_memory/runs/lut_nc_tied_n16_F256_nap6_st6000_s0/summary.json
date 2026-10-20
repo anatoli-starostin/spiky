@@ -1,0 +1,10 @@
+{
+  "name": "lut_nc_tied_n16_F256_nap6_st6000_s0",
+  "final_acc": 0.99981689453125,
+  "best_acc": 0.99981689453125,
+  "params": 526856,
+  "train_s": 710.6,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 81.7,
+  "device": "mps"
+}

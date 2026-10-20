@@ -1,0 +1,12 @@
+{
+  "name": "lut_hard_tied_n16_F256_nap4_upd8_decay_ap_s1",
+  "final_acc": 0.97418212890625,
+  "best_acc": 0.97418212890625,
+  "params": 526858,
+  "final_acc_updated": 0.965087890625,
+  "final_acc_static": 0.9832763671875,
+  "train_s": 561.9,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.1,
+  "device": "mps"
+}

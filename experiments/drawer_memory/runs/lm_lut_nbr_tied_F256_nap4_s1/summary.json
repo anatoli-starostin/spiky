@@ -1,0 +1,12 @@
+{
+  "name": "lm_lut_nbr_tied_F256_nap4_s1",
+  "final_val_bpc": 2.2526,
+  "best_val_bpc": 2.2526,
+  "params": 1004552,
+  "train_s": 2172.1,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 84.2,
+  "device": "mps",
+  "final_acc": 2.2526,
+  "best_acc": 2.2526
+}

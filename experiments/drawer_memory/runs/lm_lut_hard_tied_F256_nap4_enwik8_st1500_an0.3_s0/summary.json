@@ -1,0 +1,12 @@
+{
+  "name": "lm_lut_hard_tied_F256_nap4_enwik8_st1500_an0.3_s0",
+  "final_val_bpc": 2.4003,
+  "best_val_bpc": 2.4003,
+  "params": 1053444,
+  "train_s": 865.4,
+  "thermal_pause_s": 30.0,
+  "max_cpu_temp": 85.2,
+  "device": "mps",
+  "final_acc": 2.4003,
+  "best_acc": 2.4003
+}

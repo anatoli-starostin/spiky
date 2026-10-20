@@ -1,0 +1,1 @@
+{"skipped": "scale-up on Tiny Shakespeare overfits massively (softmax: train 0.69 vs val 3.33 bpc); stopped, needs a larger corpus"}

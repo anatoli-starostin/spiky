@@ -1,0 +1,12 @@
+{
+  "name": "lm_linear_F32_s0",
+  "final_val_bpc": 2.2245,
+  "best_val_bpc": 2.2245,
+  "params": 1070080,
+  "train_s": 579.2,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.2,
+  "device": "mps",
+  "final_acc": 2.2245,
+  "best_acc": 2.2245
+}

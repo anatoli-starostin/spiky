@@ -1,0 +1,2 @@
+block,mixer,n_pairs,feat,nap,seed,steps,best_acc,final_acc,train_s,pause_s,max_cpu_temp,name
+E4,linear,LM,256,,1,1500,2.3448,2.3448,493.7,110.1,88.6,lm_linear_F256_enwik8_st1500_s1

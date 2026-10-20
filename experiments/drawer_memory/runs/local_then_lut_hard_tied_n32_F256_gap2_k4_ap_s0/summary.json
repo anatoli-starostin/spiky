@@ -1,0 +1,12 @@
+{
+  "name": "local_then_lut_hard_tied_n32_F256_gap2_k4_ap_s0",
+  "final_acc": 0.004608154296875,
+  "best_acc": 0.004913330078125,
+  "params": 645633,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 903.7,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.8,
+  "device": "mps"
+}

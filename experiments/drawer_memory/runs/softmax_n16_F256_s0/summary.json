@@ -1,0 +1,10 @@
+{
+  "name": "softmax_n16_F256_s0",
+  "final_acc": 1.0,
+  "best_acc": 1.0,
+  "params": 559616,
+  "train_s": 83.4,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 73.9,
+  "device": "mps"
+}

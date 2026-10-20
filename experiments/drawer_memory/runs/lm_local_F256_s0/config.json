@@ -1,0 +1,21 @@
+{
+  "mixer": "local",
+  "feat": 256,
+  "nap": 4,
+  "d": 128,
+  "layers": 4,
+  "T": 256,
+  "steps": 3000,
+  "bs": 32,
+  "lr": 0.001,
+  "seed": 0,
+  "shift_k": 4,
+  "eval_every": 250,
+  "hot": 85.0,
+  "resume_at": 70.0,
+  "write": "add",
+  "read_power": 1,
+  "anneal_frac": 0.0,
+  "window": 16,
+  "name": "lm_local_F256_s0"
+}

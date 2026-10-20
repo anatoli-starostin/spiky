@@ -1,0 +1,10 @@
+{
+  "name": "lut_nbr_tied_n32_F256_nap6_s0",
+  "final_acc": 0.998443603515625,
+  "best_acc": 0.998443603515625,
+  "params": 526852,
+  "train_s": 644.3,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.9,
+  "device": "mps"
+}

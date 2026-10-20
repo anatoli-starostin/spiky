@@ -1,0 +1,3 @@
+block,mixer,n_pairs,feat,nap,seed,steps,best_acc,final_acc,train_s,pause_s,max_cpu_temp,name
+E2,lut_hard_tied,LM,256,4,0,1500,2.3723,2.3723,1440.9,160.1,89.4,lm_lut_hard_tied_F256_nap4_top4_enwik8_st1500_s0
+E2,lut_hard_tied,LM,256,6,0,1500,2.375,2.375,706.6,600.4,93.8,lm_lut_hard_tied_F256_nap6_top4_enwik8_st1500_s0

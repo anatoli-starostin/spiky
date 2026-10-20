@@ -1,0 +1,12 @@
+{
+  "name": "lm_softmax_rope_F256_d256L4T512_s0",
+  "final_val_bpc": 3.33,
+  "best_val_bpc": 2.3027,
+  "params": 4237312,
+  "train_s": 1480.3,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 83.5,
+  "device": "mps",
+  "final_acc": 3.33,
+  "best_acc": 2.3027
+}

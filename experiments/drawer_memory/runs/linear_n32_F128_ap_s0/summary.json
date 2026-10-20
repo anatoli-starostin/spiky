@@ -1,0 +1,12 @@
+{
+  "name": "linear_n32_F128_ap_s0",
+  "final_acc": 0.999359130859375,
+  "best_acc": 0.9993896484375,
+  "params": 756224,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 359.5,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 84.9,
+  "device": "mps"
+}

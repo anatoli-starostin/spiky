@@ -1,0 +1,15 @@
+mixer,memory_F,us_per_token,state_kb_per_seq
+linear F=32,32,6.95,16.5
+linear F=64,64,9.32,33.0
+linear F=128,128,15.97,66.0
+linear F=256,256,29.45,132.0
+drawers 4x4 (F=64),64,2.88,33.0
+drawers 8x4 (F=128),128,4.31,66.0
+drawers 16x4 (F=256),256,5.45,132.0
+drawers 16x2 (F=64),64,5.05,33.0
+drawers 64x2 (F=256),256,16.9,132.0
+drawers 4x6 (F=256),256,3.14,132.0
+drawers 16x4 top-4 soft (F=256),256,30.06,132.0
+drawers 4x6 top-4 soft (F=256),256,13.24,132.0
+drawers 4x6 flip-2 soft (F=256),256,10.94,132.0
+drawers 16x4 flip-2 soft (F=256),256,32.1,132.0

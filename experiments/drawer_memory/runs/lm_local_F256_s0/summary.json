@@ -1,0 +1,12 @@
+{
+  "name": "lm_local_F256_s0",
+  "final_val_bpc": 2.4677,
+  "best_val_bpc": 2.3191,
+  "params": 1070080,
+  "train_s": 536.7,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.3,
+  "device": "mps",
+  "final_acc": 2.4677,
+  "best_acc": 2.3191
+}

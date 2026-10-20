@@ -1,0 +1,12 @@
+{
+  "name": "lut_hard_tied_n32_F256_nap4_lr0.0003_gap2_k4_ap_s0",
+  "final_acc": 0.00372314453125,
+  "best_acc": 0.004486083984375,
+  "params": 629250,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 1414.4,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 83.7,
+  "device": "mps"
+}

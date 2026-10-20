@@ -1,0 +1,12 @@
+{
+  "name": "lm_lut_hard_tied_F256_nap4_s0",
+  "final_val_bpc": 2.2387,
+  "best_val_bpc": 2.2387,
+  "params": 1004548,
+  "train_s": 1682.8,
+  "thermal_pause_s": 400.3,
+  "max_cpu_temp": 92.1,
+  "device": "mps",
+  "final_acc": 2.2387,
+  "best_acc": 2.2387
+}

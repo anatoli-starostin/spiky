@@ -1,0 +1,1 @@
+{"block": "H2", "mixer": "local_then_lut_hard_tied", "nap": 4, "seed": 1, "n_pairs": 32, "feat": 256, "gap": 2, "shift_k": 4, "anchor_per_seed": true, "skipped": "seed 0 ended below 10%"}

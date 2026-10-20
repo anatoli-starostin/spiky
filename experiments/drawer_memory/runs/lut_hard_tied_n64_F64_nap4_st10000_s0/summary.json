@@ -1,0 +1,10 @@
+{
+  "name": "lut_hard_tied_n64_F64_nap4_st10000_s0",
+  "final_acc": 0.9544219970703125,
+  "best_acc": 0.954559326171875,
+  "params": 526850,
+  "train_s": 2623.3,
+  "thermal_pause_s": 850.7,
+  "max_cpu_temp": 92.9,
+  "device": "mps"
+}

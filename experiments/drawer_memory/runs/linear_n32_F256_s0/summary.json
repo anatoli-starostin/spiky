@@ -1,0 +1,10 @@
+{
+  "name": "linear_n32_F256_s0",
+  "final_acc": 0.99981689453125,
+  "best_acc": 0.999847412109375,
+  "params": 1018368,
+  "train_s": 443.1,
+  "thermal_pause_s": 140.1,
+  "max_cpu_temp": 86.0,
+  "device": "mps"
+}

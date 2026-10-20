@@ -1,0 +1,12 @@
+{
+  "name": "linear_n32_F32_ap_s1",
+  "final_acc": 0.974273681640625,
+  "best_acc": 0.974273681640625,
+  "params": 559616,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 230.0,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 82.8,
+  "device": "mps"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "lut_nbr_tied_n64_F64_nap4_s0",
+  "final_acc": 0.64935302734375,
+  "best_acc": 0.64935302734375,
+  "params": 526852,
+  "train_s": 849.9,
+  "thermal_pause_s": 60.1,
+  "max_cpu_temp": 90.0,
+  "device": "mps"
+}

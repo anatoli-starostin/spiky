@@ -1,0 +1,12 @@
+{
+  "name": "softmax_rope_n32_F256_gap2_k4_ap_s1",
+  "final_acc": 0.033782958984375,
+  "best_acc": 0.035614013671875,
+  "params": 662016,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 441.2,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 81.7,
+  "device": "mps"
+}

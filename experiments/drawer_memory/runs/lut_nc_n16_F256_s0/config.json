@@ -1,0 +1,15 @@
+{
+  "mixer": "lut_nc",
+  "n_pairs": 16,
+  "feat": 256,
+  "nap": 6,
+  "d": 128,
+  "steps": 3000,
+  "bs": 64,
+  "lr": 0.001,
+  "seed": 0,
+  "eval_every": 250,
+  "hot": 85.0,
+  "resume_at": 70.0,
+  "name": "lut_nc_n16_F256_s0"
+}
