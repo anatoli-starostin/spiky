@@ -129,7 +129,10 @@ def test_eval_int32_vs_int64(device, name, kw):
             with torch.no_grad():
                 outs.append(m(torch.randn(128, spec.h_in, spec.d_in,
                                           generator=torch.Generator().manual_seed(2)).to(device)))
-    assert torch.equal(*outs)
+    # Bit-identical on torch 2.9.1 (the pinned version); newer Inductor (measured on 2.14.1) lowers the two compiles
+    # slightly differently for ConfidenceLUT n=1 and ManifestoSoftLUT: max |diff| 3.7e-9 on outputs up to 4e-2
+    # (~1 ulp), deterministic. The tolerance is far below any real index-dtype bug (a wrong index changes a whole row).
+    torch.testing.assert_close(outs[1], outs[0], rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize("device", DEVICES)

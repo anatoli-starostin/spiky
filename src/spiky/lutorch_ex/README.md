@@ -22,7 +22,8 @@ other spiky code. In the spiky repository it comes with the `spiky` package: `pi
 root (see the [repository README](../../../README.md)). On its own:
 `pip install "spiky-lutorch-ex @ git+https://github.com/anatoli-starostin/spiky@<commit>#subdirectory=src/spiky/lutorch_ex"`,
 with the extras `[deploy]` (safetensors output) and `[test]`. The import is `spiky.lutorch_ex` either way; install one
-or the other, not both.
+or the other, not both. torch is capped at `<2.10` (developed and tested on 2.9.1 with the CUDA 13.0 wheels,
+`--index-url https://download.pytorch.org/whl/cu130`, which ship Triton 3.5.1).
 
 **What runs where.** Each cartridge is either a *reference* class or a *fused* class:
 
@@ -218,7 +219,8 @@ The tests are pytest, run from the repository root:
 python -m pytest src/spiky/lutorch_ex/tests -q
 ```
 
-With pytest, safetensors and numpy installed, on an RTX 5090 (sm_120, torch 2.9.1+cu130) the suite gives 1689 passed,
+With pytest, safetensors and numpy installed (torch is capped at <2.10: the suite is tied to torch 2.9.1's Inductor
+and Triton 3.5.1; newer versions fuse differently and fail `test_fused_read` fusion tests), on an RTX 5090 (sm_120, torch 2.9.1+cu130) the suite gives 1689 passed,
 0 skipped; with CUDA hidden (`CUDA_VISIBLE_DEVICES=`) it gives 450 passed, 1087 skipped. When CUDA is available, the
 suite needs a writable Triton cache (`TRITON_CACHE_DIR`, else `~/.triton/cache`) and refuses to start, naming the
 directory, if it is read-only; without CUDA it skips the check and says so.
