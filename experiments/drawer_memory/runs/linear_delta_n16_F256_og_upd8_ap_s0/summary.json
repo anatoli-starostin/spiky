@@ -1,0 +1,12 @@
+{
+  "name": "linear_delta_n16_F256_og_upd8_ap_s0",
+  "final_acc": 0.9998779296875,
+  "best_acc": 0.9998779296875,
+  "params": 1052488,
+  "final_acc_updated": 0.999755859375,
+  "final_acc_static": 1.0,
+  "train_s": 4997.7,
+  "thermal_pause_s": 930.7,
+  "max_cpu_temp": 94.2,
+  "device": "mps"
+}

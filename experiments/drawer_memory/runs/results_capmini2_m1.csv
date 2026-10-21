@@ -1,0 +1,2 @@
+block,mixer,n_pairs,feat,nap,seed,steps,best_acc,final_acc,train_s,pause_s,max_cpu_temp,name
+M,linear_delta,32,16,,0,3000,0.31988525390625,0.318634033203125,1438.4,0.0,70.5,linear_delta_n32_F16_og_ap_s0

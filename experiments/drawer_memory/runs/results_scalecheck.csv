@@ -1,0 +1,7 @@
+block,mixer,n_pairs,feat,nap,seed,steps,best_acc,final_acc,train_s,pause_s,max_cpu_temp,name
+G,linear,LM,256,,0,4000,2.0046,2.0046,1419.3,980.7,88.6,lm_linear_F256_og_enwik8_st4000_s0
+L,lut_hard_tied,LM,256,6,0,4000,2.0601,2.0601,1699.9,670.5,90.3,lm_lut_hard_tied_F256_nap6_learned4_og_enwik8_st4000_s0
+S2,linear,LM,256,,0,4000,1.9056,1.9056,1857.8,1201.0,87.1,lm_linear_F256_og_enwik8_st4000_d192L4T256_s0
+S2,lut_hard_tied,LM,256,6,0,4000,1.9602,1.9602,2367.6,760.6,85.9,lm_lut_hard_tied_F256_nap6_og_flip2_enwik8_st4000_d192L4T256_s0
+S2,linear,LM,256,,0,4000,1.8382,1.8382,2252.2,1591.2,92.3,lm_linear_F256_og_enwik8_st4000_d256L4T256_s0
+S2,lut_hard_tied,LM,256,6,0,4000,1.9063,1.9063,2716.3,1201.0,91.0,lm_lut_hard_tied_F256_nap6_og_flip2_enwik8_st4000_d256L4T256_s0

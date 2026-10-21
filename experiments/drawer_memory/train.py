@@ -95,6 +95,11 @@ def main():
     p.add_argument("--updates", type=int, default=0, help="keys re-assigned to new values before the queries")
     p.add_argument("--write", default="add", choices=["add", "decay", "ema"])
     p.add_argument("--read_power", type=int, default=1)
+    p.add_argument("--learned_addr", type=int, default=0, help="control: learned cell keys, top-k cells")
+    p.add_argument("--init_mem", action="store_true", help="drawers: learned initial cell contents")
+    p.add_argument("--out_gate", action="store_true", help="drawers: RMS-norm + gate on the read")
+    p.add_argument("--signed", action="store_true", help="drawers: Count-Sketch +-1 signed writes/reads")
+    p.add_argument("--keycheck", action="store_true", help="drawers: weight tables by query . cell mean address")
     p.add_argument("--bitflip", type=int, default=0, help="drawers: soft read over cells from flipping b least-certain bits")
     p.add_argument("--topk", type=int, default=0, help="drawers: bounded soft read of the k most likely cells")
     p.add_argument("--anneal_frac", type=float, default=0.0, help="ramp drawer hardness 0->1 over this share of steps")
@@ -114,7 +119,7 @@ def main():
     vocab = NK + NV + (NF if a.gap else 0)
     model = Model(vocab, d=a.d, mixer=a.mixer, feat=a.feat, nap=a.nap, shift_k=a.shift_k,
                   anchor_seed=a.seed + 1 if a.anchor_per_seed else 0, write=a.write,
-                  read_power=a.read_power, topk=a.topk, bitflip=a.bitflip, window=a.window).to(dev)
+                  read_power=a.read_power, topk=a.topk, bitflip=a.bitflip, init_mem=a.init_mem, out_gate=a.out_gate, learned_addr=a.learned_addr, signed=a.signed, keycheck=a.keycheck, window=a.window).to(dev)
     batch = ((lambda B, g: update_batch(B, a.n_pairs, a.updates, dev, g)) if a.updates else
              (lambda B, g: mqar_batch(B, a.n_pairs, dev, g, a.gap)))
     n_params = sum(p.numel() for p in model.parameters())
@@ -124,11 +129,25 @@ def main():
     eval_data = [batch(256, ge) for _ in range(4)]  # fixed 1024 sequences
     gt = torch.Generator().manual_seed(a.seed)
 
-    f = open(os.path.join(out, "metrics.csv"), "w", newline="")
-    w = csv.writer(f)
-    w.writerow(["step", "loss", "eval_acc", "cpu_temp", "sys_power", "elapsed_s", "acc_updated", "acc_static"])
+    # resume after a power-off / kill: model, optimiser, schedule, data RNG and counters are saved at every eval
+    rpath, start = os.path.join(out, "resume.pt"), 1
     t0, paused, best, loss_avg = time.time(), 0.0, 0.0, None
-    for step in range(1, a.steps + 1):
+    if os.path.exists(rpath):
+        r = torch.load(rpath, map_location=dev, weights_only=False)
+        model.load_state_dict(r["model"]); opt.load_state_dict(r["opt"]); sched.load_state_dict(r["sched"])
+        gt.set_state(r["gt"].cpu()); start = r["step"] + 1
+        t0, paused, best, loss_avg = time.time() - r["elapsed"], r["paused"], r["best"], r["loss_avg"]
+        lines = open(os.path.join(out, "metrics.csv")).read().splitlines()
+        keep = [l for l in lines[1:] if l and int(l.split(",")[0]) <= r["step"]]
+        open(os.path.join(out, "metrics.csv"), "w").write("\n".join([lines[0]] + keep) + "\n")
+        f = open(os.path.join(out, "metrics.csv"), "a", newline="")
+        print(f"{name} resumed at step {start}", flush=True)
+    else:
+        f = open(os.path.join(out, "metrics.csv"), "w", newline="")
+    w = csv.writer(f)
+    if start == 1:
+        w.writerow(["step", "loss", "eval_acc", "cpu_temp", "sys_power", "elapsed_s", "acc_updated", "acc_static"])
+    for step in range(start, a.steps + 1):
         x, y = batch(a.bs, gt)[:2]
         if a.anneal_frac > 0:
             set_hardness(model, min(1.0, step / (a.anneal_frac * a.steps)))
@@ -141,6 +160,8 @@ def main():
         loss_avg = loss.item() if loss_avg is None else 0.98 * loss_avg + 0.02 * loss.item()
         if step % 25 == 0 and thermal.cpu_temp() and thermal.cpu_temp() > a.hot:  # checked every 25 steps
             paused += thermal.wait_below(a.resume_at, why=f"{name} step {step}")
+        if step % 25 == 0:
+            paused += thermal.wait_power(why=f"{name} step {step}")
         if step % a.eval_every == 0 or step == a.steps:
             acc, acc_u, acc_s = evaluate(model, eval_data)
             best = max(best, acc)
@@ -151,6 +172,10 @@ def main():
             if a.ckpt_every and step % a.ckpt_every == 0:
                 torch.save({"config": vars(a), "model": model.state_dict()}, os.path.join(out, f"model_{step}.pt"))
             f.flush()
+            torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
+                        "gt": gt.get_state(), "step": step, "elapsed": time.time() - t0, "paused": paused,
+                        "best": best, "loss_avg": loss_avg}, rpath + ".tmp")
+            os.replace(rpath + ".tmp", rpath)
             print(f"{name} step {step} loss {loss_avg:.3f} acc {acc:.3f} "
                   f"cpu {th['cpu_temp'] or float('nan'):.1f}C", flush=True)
 
@@ -161,6 +186,8 @@ def main():
                "max_cpu_temp": round(thermal.max_cpu_temp, 1), "device": str(dev)}
     torch.save({"config": vars(a), "model": model.state_dict()}, os.path.join(out, "model.pt"))  # for diagnostics
     json.dump(summary, open(os.path.join(out, "summary.json"), "w"), indent=2)
+    if os.path.exists(rpath):
+        os.remove(rpath)
     print(json.dumps(summary), flush=True)
     thermal.close()
 

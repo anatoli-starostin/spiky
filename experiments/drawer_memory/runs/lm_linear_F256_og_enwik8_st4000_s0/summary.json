@@ -1,0 +1,12 @@
+{
+  "name": "lm_linear_F256_og_enwik8_st4000_s0",
+  "final_val_bpc": 2.0046,
+  "best_val_bpc": 2.0046,
+  "params": 2102656,
+  "train_s": 1419.3,
+  "thermal_pause_s": 980.7,
+  "max_cpu_temp": 88.6,
+  "device": "mps",
+  "final_acc": 2.0046,
+  "best_acc": 2.0046
+}

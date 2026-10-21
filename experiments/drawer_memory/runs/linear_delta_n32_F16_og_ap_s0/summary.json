@@ -1,0 +1,12 @@
+{
+  "name": "linear_delta_n32_F16_og_ap_s0",
+  "final_acc": 0.318634033203125,
+  "best_acc": 0.31988525390625,
+  "params": 560968,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 1438.4,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 70.5,
+  "device": "mps"
+}

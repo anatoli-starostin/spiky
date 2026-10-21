@@ -15,6 +15,7 @@ Address gradients use spiky's recipe: hard forward, soft full-K surrogate backwa
 import math
 
 import torch
+import torch.utils.checkpoint
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -53,24 +54,36 @@ class SoftmaxMixer(nn.Module):
 
 
 class LinearMixer(nn.Module):
-    def __init__(self, d, H, feat=256, **_):
+    def __init__(self, d, H, feat=256, out_gate=False, **_):
         super().__init__()
-        self.H, self.feat = H, feat
+        self.H, self.feat, self.out_gate = H, feat, out_gate
         self.qk = nn.Linear(d, 2 * H * feat, bias=False)
         self.v = nn.Linear(d, d, bias=False)
+        if out_gate:  # same RMS-norm + gate as the drawer mixer, for a fair comparison
+            self.gate = nn.Linear(d, d, bias=True)
+            self.norm = nn.RMSNorm(d // H)
 
     def forward(self, x):
         B, T, d = x.shape
         q, k = self.qk(x).view(B, T, 2, self.H, self.feat).permute(2, 0, 3, 1, 4)
         v = self.v(x).view(B, T, self.H, d // self.H).transpose(1, 2)
         out = kernel_attention(F.elu(q) + 1, F.elu(k) + 1, v)
+        if self.out_gate:
+            out = self.norm(out) * torch.sigmoid(self.gate(x)).view(B, T, self.H, d // self.H).transpose(1, 2)
         return out.transpose(1, 2).reshape(B, T, d)
 
 
 class LutMemMixer(nn.Module):
     def __init__(self, d, H, feat=256, nap=6, dk=32, nbr_conf=False, tie_qk=False, use_nbr=None, use_conf=None,
-                 seed=0, write="add", read_power=1, topk=0, bitflip=0, **_):
+                 seed=0, write="add", read_power=1, topk=0, bitflip=0, init_mem=False, out_gate=False, learned_addr=0, signed=False, keycheck=False, **_):
         super().__init__()
+        # signed: Count-Sketch writes -- per table, each token also gets a +-1 sign from one extra fixed anchor pair;
+        #         it writes sign*value and reads sign*cell, so colliding unrelated items cancel instead of piling up
+        # keycheck: each cell also stores the sum of its writers' address vectors; a token weights each table's read by
+        #           softmax over tables of (its address . the cell's mean address) -- crowded/mismatched cells count less
+        self.signed, self.keycheck = signed, keycheck
+        if keycheck:
+            self.log_kc = nn.Parameter(torch.tensor(-0.5 * math.log(dk)))
         # write: "add" = cells accumulate (sum/count); "decay" = learned per-head exponential forgetting;
         #        "ema" = per-cell exponential moving average with a learned per-token rate beta (beta->1 = overwrite)
         # read_power: weight = (number of tables where q and k share a cell) ** read_power (2 ~ soft intersection)
@@ -80,6 +93,22 @@ class LutMemMixer(nn.Module):
         # bitflip=b: cheap bounded soft read -- the 2**b cells reached by flipping any subset of the b least-certain
         # bits, weighted exp(-sum of flipped margins / tau) (= their probability ratio); no scoring of all cells
         self.bitflip = bitflip
+        # init_mem: learned initial cell contents + learned prior counts (SDM-style parametric memory): every read also
+        #           sees trained per-cell values, like a lutorch_ex table, on top of what the sequence wrote
+        # out_gate: RMS-normalise the read and gate it element-wise from the token (SDM-style read processing)
+        self.init_mem, self.out_gate = init_mem, out_gate
+        # learned_addr=k: SDM-style learned addressing control -- each cell of each table owns a learned key vector;
+        # a token's cells are its top-k cells by score z . key, weighted by softmax over those k scores (no anchors)
+        self.learned_addr = learned_addr
+        if learned_addr:
+            self.cell_keys = nn.Parameter(torch.randn(H, feat // (2 ** nap), 2 ** nap, dk) * 0.5)
+        dh = d // H
+        if init_mem:
+            self.mem0 = nn.Parameter(torch.zeros(H, (feat // (2 ** nap)) * (2 ** nap), dh))
+            self.cnt0 = nn.Parameter(torch.full((H, (feat // (2 ** nap)) * (2 ** nap)), -2.0))  # softplus -> ~0.13
+        if out_gate:
+            self.gate = nn.Linear(d, d, bias=True)
+            self.norm = nn.RMSNorm(dh)
         if write == "decay":
             self.decay_logit = nn.Parameter(torch.full((H,), 4.0))  # sigmoid(4) ~ 0.982 per step
         if write == "ema":
@@ -99,6 +128,10 @@ class LutMemMixer(nn.Module):
                                         for _ in range(self.tph)]) for _ in range(H)])  # [H,tph,nap]
         self.register_buffer("anc_a", pairs[idx, 0].reshape(H, -1))
         self.register_buffer("anc_b", pairs[idx, 1].reshape(H, -1))
+        if signed:  # one extra fixed anchor pair per table for the sign
+            sidx = torch.randint(len(pairs), (H, self.tph), generator=g)
+            self.register_buffer("sgn_a", pairs[sidx, 0])
+            self.register_buffer("sgn_b", pairs[sidx, 1])
         order = torch.arange(nap - 1, -1, -1)
         self.register_buffer("pow2", 2 ** order)
         cells = torch.arange(K)
@@ -115,6 +148,12 @@ class LutMemMixer(nn.Module):
         """z: [B,H,T,dk] -> phi [B,H,T,tph*K]."""
         B, H, T, _ = z.shape
         z = z / (z.abs().mean(-1, keepdim=True) + 1e-6)  # spiky's pre-LUT MeanAbsNorm
+        if self.learned_addr:
+            scores = torch.einsum("bhtd,hckd->bhtck", z, self.cell_keys) / self.log_tau.exp()   # [B,H,T,tph,K]
+            vals, idx = scores.topk(self.learned_addr, dim=-1)
+            w = torch.softmax(vals, -1)
+            phi = torch.zeros_like(scores).scatter(-1, idx, w)
+            return phi.reshape(B, H, T, self.tph * self.K)
         ia = self.anc_a[None, :, None, :].expand(B, H, T, -1)
         ib = self.anc_b[None, :, None, :].expand(B, H, T, -1)
         u = (z.gather(-1, ia) - z.gather(-1, ib)).view(B, H, T, self.tph, self.nap)
@@ -165,10 +204,51 @@ class LutMemMixer(nn.Module):
         u = (z.gather(-1, ia) - z.gather(-1, ib)).view(B, self.H, T, self.tph, self.nap)
         return ((u > 0).long() * self.pow2).sum(-1), u
 
+    def table_read(self, z, v, eps=1e-6):
+        """Per-table drawer read (dense O(T^2) training form) for signed writes and/or key-checked table weighting."""
+        B, H, T, _ = z.shape
+        phi = self.features(z).view(B, H, T, self.tph, self.K)
+        mask = torch.ones(T, T, dtype=torch.bool, device=z.device).tril()
+        M = torch.einsum("bhjtk,bhitk->bhtji", phi, phi) * mask                 # [B,H,tph,T(read),T(write)]
+        den = M.sum(-1, keepdim=True)                                            # cell counts seen by each reader
+        W = M
+        if self.signed:
+            zn = z / (z.abs().mean(-1, keepdim=True) + 1e-6)
+            ia = self.sgn_a[None, :, None, :].expand(B, H, T, -1)
+            ib = self.sgn_b[None, :, None, :].expand(B, H, T, -1)
+            us = zn.gather(-1, ia) - zn.gather(-1, ib)                           # [B,H,T,tph]
+            soft = torch.tanh(us / self.log_tau.exp())
+            s = (torch.sign(us) + soft - soft.detach()).permute(0, 1, 3, 2)      # hard +-1, tanh surrogate gradient
+            W = M * s[..., :, None] * s[..., None, :]
+        num = W @ v[:, :, None]                                                  # [B,H,tph,T,dh]
+        if not self.keycheck:
+            return num.sum(2) / (den.sum(2) + eps)
+        zn = z / (z.abs().mean(-1, keepdim=True) + 1e-6)
+        kbar = (M @ zn[:, :, None]) / (den + eps)                                # mean address stored in the cell
+        score = (kbar * zn[:, :, None]).sum(-1) * self.log_kc.exp()             # [B,H,tph,T]
+        score = score.masked_fill(den.squeeze(-1) == 0, -1e4)
+        a = torch.softmax(score, dim=2)
+        return (a[..., None] * num / (den + eps)).sum(2)
+
     def forward(self, x):
         B, T, d = x.shape
         v = self.v(x).view(B, T, self.H, d // self.H).transpose(1, 2)
-        if self.tie_qk and (self.write != "add" or self.read_power != 1):
+        if self.tie_qk and (self.signed or self.keycheck):
+            assert self.write == "add" and self.read_power == 1 and not self.init_mem
+            out = self.table_read(self.qk(x).view(B, T, self.H, self.dk).transpose(1, 2), v)
+            if self.out_gate:
+                out = self.norm(out) * torch.sigmoid(self.gate(x)).view(B, T, self.H, d // self.H).transpose(1, 2)
+        elif self.tie_qk and (self.init_mem or self.out_gate) and self.write == "add" and self.read_power == 1:
+            phi = self.features(self.qk(x).view(B, T, self.H, self.dk).transpose(1, 2))
+            w = (phi @ phi.transpose(-1, -2)) * torch.ones(T, T, dtype=torch.bool, device=x.device).tril()
+            num, den = w @ v, w.sum(-1, keepdim=True)
+            if self.init_mem:
+                num = num + phi @ self.mem0[None]
+                den = den + (phi * F.softplus(self.cnt0)[None, :, None, :]).sum(-1, keepdim=True)
+            out = num / (den + 1e-6)
+            if self.out_gate:
+                out = self.norm(out) * torch.sigmoid(self.gate(x)).view(B, T, self.H, d // self.H).transpose(1, 2)
+        elif self.tie_qk and (self.write != "add" or self.read_power != 1):
             phi = self.features(self.qk(x).view(B, T, self.H, self.dk).transpose(1, 2))
             out = self.kernel_general(phi, v, x)
         elif self.tie_qk:
@@ -246,6 +326,117 @@ class HybridMixer(nn.Module):
         return torch.cat([self.local(x[..., :h]), self.mem(x[..., h:])], -1)
 
 
+def delta_chunk(KK, QK, KS, QS, V, beta):
+    """One chunk of the delta rule S_t = S_{t-1} + beta_t k_t (v_t - S_{t-1}^T k_t)^T, o_t = S_t^T q_t (WY form).
+    KK, QK: [..., c, c] key-key / query-key products; KS, QS: [..., c, dh] reads of the incoming state.
+    Returns outputs [..., c, dh] and U [..., c, dh] such that S_out = S_in + K^T U."""
+    A = (beta[..., None] * KK).tril(-1)
+    I = torch.eye(A.shape[-1], device=A.device, dtype=A.dtype)
+    U = torch.linalg.solve_triangular(I + A, beta[..., None] * (V - KS), upper=False, unitriangular=True)
+    return QS + QK.tril() @ U, U
+
+
+class DeltaDrawerMixer(LutMemMixer):
+    """Delta drawers = DeltaNet whose key is sparse: the tied LUT address with flip-b weights, scaled to unit norm
+    (each token touches tph * 2**b cells). Cells store values; a token corrects its cells towards its own value:
+    r = k.M; M += beta_t k (v_t - r). With beta = 1 the token reads back exactly v_t. Output = read after the write.
+    Training uses the chunked WY form with sparse gathers/scatters; memory size (tph * 2**nap cells) costs no
+    extra compute per token."""
+    def __init__(self, d, H, bitflip=2, out_gate=True, chunk=16, **kw):
+        super().__init__(d, H, tie_qk=True, bitflip=bitflip, out_gate=out_gate, **kw)
+        assert bitflip > 0, "delta drawers use the flip-b read (weights carry the address gradient)"
+        self.beta = nn.Linear(d, H)  # write strength per token and head
+        self.chunk = chunk
+
+    def sparse_addr(self, z):
+        """z: [B,H,T,dk] -> global cell ids [B,H,T,n] and unit-norm key weights [B,H,T,n]."""
+        B, H, T, _ = z.shape
+        z = z / (z.abs().mean(-1, keepdim=True) + 1e-6)
+        ia = self.anc_a[None, :, None, :].expand(B, H, T, -1)
+        ib = self.anc_b[None, :, None, :].expand(B, H, T, -1)
+        u = (z.gather(-1, ia) - z.gather(-1, ib)).view(B, H, T, self.tph, self.nap)
+        # coarse-to-fine bit curriculum (anneal_frac > 0 drives hardness 0 -> 1): only the first nb bits of each
+        # table address are used (the rest read as 0), nb growing from 4 to nap -- big drawers first, which match by
+        # chance and so give a learning signal, then finer ones. Memory is per sequence, so the layout may change.
+        nb = min(self.nap, 4 + round(self.hardness * (self.nap - 4))) if self.nap > 4 else self.nap
+        active = (torch.arange(self.nap, device=u.device) < nb)
+        c = ((u > 0).long() * self.pow2 * active).sum(-1)
+        tau = self.log_tau.exp()
+        mb, jb = (-u.abs().masked_fill(~active, float("inf"))).topk(self.bitflip, dim=-1)
+        mb = -mb
+        subs = torch.arange(2 ** self.bitflip, device=u.device)
+        sel = ((subs[:, None] >> torch.arange(self.bitflip, device=u.device)[None, :]) & 1)
+        flipmask = (sel[None, None, None, None] * self.pow2[jb][..., None, :]).sum(-1)
+        cells = c[..., None] ^ flipmask                                          # [B,H,T,tph,2^b]
+        w = torch.exp(-(sel.float()[None, None, None, None] * mb[..., None, :]).sum(-1) / tau)
+        w = w / w.sum(-1, keepdim=True)                                          # per table: sums to 1
+        cells = cells + (torch.arange(self.tph, device=u.device) * self.K)[:, None]
+        w = w.reshape(B, H, T, -1)
+        return cells.reshape(B, H, T, -1), w / w.norm(dim=-1, keepdim=True)
+
+    def forward(self, x, sequential=False):
+        B, T, d = x.shape
+        dh, m = d // self.H, 2 ** self.bitflip
+        v = self.v(x).view(B, T, self.H, dh).transpose(1, 2)                     # [B,H,T,dh]
+        idx, w = self.sparse_addr(self.qk(x).view(B, T, self.H, self.dk).transpose(1, 2))
+        beta = torch.sigmoid(self.beta(x)).transpose(1, 2)                        # [B,H,T]
+        M = v.new_zeros(B, self.H, self.tph * self.K, dh)
+        n = idx.shape[-1]
+        outs = []
+        step = 1 if sequential else self.chunk
+        for c0 in range(0, T, step):
+            ic, wc = idx[:, :, c0:c0 + step], w[:, :, c0:c0 + step]
+            c = ic.shape[2]
+            flat = ic.reshape(B, self.H, c * n, 1).expand(-1, -1, -1, dh)
+            KS = (wc[..., None] * M.gather(2, flat).view(B, self.H, c, n, dh)).sum(3)
+            it, wt = ic.view(B, self.H, c, self.tph, m), wc.view(B, self.H, c, self.tph, m)
+            eq = it[:, :, :, None, :, :, None] == it[:, :, None, :, :, None, :]    # same cell, per table
+            KK = (eq * wt[:, :, :, None, :, :, None] * wt[:, :, None, :, :, None, :]).sum((-1, -2, -3))
+            o, U = delta_chunk(KK, KK, KS, KS, v[:, :, c0:c0 + c], beta[:, :, c0:c0 + c])
+            M = M.scatter_add(2, flat, (wc[..., None] * U[:, :, :, None, :]).reshape(B, self.H, c * n, dh))
+            outs.append(o)
+        out = torch.cat(outs, 2)
+        if self.out_gate:
+            out = self.norm(out) * torch.sigmoid(self.gate(x)).view(B, T, self.H, dh).transpose(1, 2)
+        return out.transpose(1, 2).reshape(B, T, d)
+
+
+class DeltaLinearMixer(nn.Module):
+    """Fair dense baseline (DeltaNet): S <- S + beta_t k_t (v_t - S^T k_t)^T, o_t = S_t^T q_t, with L2-normalised
+    elu+1 features of size feat (state feat x dh per head, as linear attention) and the same RMS-norm + gate.
+    Chunked WY form."""
+    def __init__(self, d, H, feat=256, out_gate=True, chunk=32, **_):
+        super().__init__()
+        self.H, self.feat, self.out_gate, self.chunk = H, feat, out_gate, chunk
+        self.qk = nn.Linear(d, 2 * H * feat, bias=False)
+        self.v = nn.Linear(d, d, bias=False)
+        self.beta = nn.Linear(d, H)
+        if out_gate:
+            self.gate = nn.Linear(d, d, bias=True)
+            self.norm = nn.RMSNorm(d // H)
+
+    def forward(self, x, sequential=False):
+        B, T, d = x.shape
+        dh = d // self.H
+        q, k = self.qk(x).view(B, T, 2, self.H, self.feat).permute(2, 0, 3, 1, 4)
+        q, k = F.normalize(F.elu(q) + 1, dim=-1), F.normalize(F.elu(k) + 1, dim=-1)
+        v = self.v(x).view(B, T, self.H, dh).transpose(1, 2)
+        beta = torch.sigmoid(self.beta(x)).transpose(1, 2)
+        S = v.new_zeros(B, self.H, self.feat, dh)
+        outs = []
+        step = 1 if sequential else self.chunk
+        for c0 in range(0, T, step):
+            qc, kc = q[:, :, c0:c0 + step], k[:, :, c0:c0 + step]
+            o, U = delta_chunk(kc @ kc.transpose(-1, -2), qc @ kc.transpose(-1, -2), kc @ S, qc @ S,
+                               v[:, :, c0:c0 + step], beta[:, :, c0:c0 + step])
+            S = S + kc.transpose(-1, -2) @ U
+            outs.append(o)
+        out = torch.cat(outs, 2)
+        if self.out_gate:
+            out = self.norm(out) * torch.sigmoid(self.gate(x)).view(B, T, self.H, dh).transpose(1, 2)
+        return out.transpose(1, 2).reshape(B, T, d)
+
+
 MIXERS = {
     "softmax": SoftmaxMixer,
     "linear": LinearMixer,
@@ -258,6 +449,8 @@ MIXERS = {
     "softmax_rope": lambda **kw: SoftmaxMixer(use_rope=True, **kw),
     "local": LocalSoftmaxMixer,
     "hybrid": HybridMixer,
+    "lut_delta": DeltaDrawerMixer,
+    "linear_delta": DeltaLinearMixer,
 }
 
 

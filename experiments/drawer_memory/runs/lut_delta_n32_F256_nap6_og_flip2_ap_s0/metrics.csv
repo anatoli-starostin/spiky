@@ -1,0 +1,2 @@
+step,loss,eval_acc,cpu_temp,sys_power,elapsed_s,acc_updated,acc_static
+250,5.5923,0.0036,74.44023895263672,9.578951835632324,636.5,,

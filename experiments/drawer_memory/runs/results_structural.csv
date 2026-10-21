@@ -1,0 +1,4 @@
+block,mixer,n_pairs,feat,nap,seed,steps,best_acc,final_acc,train_s,pause_s,max_cpu_temp,name
+X,lut_hard_tied,LM,1024,8,0,4000,2.0465,2.0465,3036.9,960.7,87.1,lm_lut_hard_tied_F1024_nap8_og_flip2_enwik8_st4000_s0
+X,lut_hard_tied,LM,256,6,0,4000,2.062,2.062,4843.1,1571.2,94.9,lm_lut_hard_tied_F256_nap6_og_sgn_flip2_enwik8_st4000_s0
+X,lut_hard_tied,LM,256,6,0,4000,2.0473,2.0473,3700.8,1180.9,89.7,lm_lut_hard_tied_F256_nap6_og_kc_flip2_enwik8_st4000_s0

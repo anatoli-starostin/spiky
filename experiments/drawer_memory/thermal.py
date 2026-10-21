@@ -49,6 +49,26 @@ class Thermal:
             print(f"[thermal] resumed at {self.cpu_temp():.1f}C after {waited:.0f}s", flush=True)
         return waited
 
+    @staticmethod
+    def on_ac():
+        """True when the Mac draws from the power adapter (pmset). Unknown -> True."""
+        try:
+            return "Battery Power" not in subprocess.run(["pmset", "-g", "batt"], capture_output=True,
+                                                         text=True, timeout=10).stdout
+        except Exception:
+            return True
+
+    def wait_power(self, why="", poll=60):
+        """Block while running on battery (laptop unplugged). Returns seconds waited."""
+        t0 = time.time()
+        if self.on_ac():
+            return 0.0
+        print(f"[power] {why} on battery, paused until the adapter is connected...", flush=True)
+        while not self.on_ac():
+            time.sleep(poll)
+        print(f"[power] resumed after {time.time() - t0:.0f}s", flush=True)
+        return time.time() - t0
+
     def close(self):
         self._proc.terminate()
         if self._log:

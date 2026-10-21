@@ -85,6 +85,11 @@ def main():
     p.add_argument("--resume_at", type=float, default=70.0)
     p.add_argument("--write", default="add", choices=["add", "decay", "ema"])
     p.add_argument("--read_power", type=int, default=1)
+    p.add_argument("--learned_addr", type=int, default=0, help="control: learned cell keys, top-k cells")
+    p.add_argument("--init_mem", action="store_true", help="drawers: learned initial cell contents")
+    p.add_argument("--out_gate", action="store_true", help="drawers: RMS-norm + gate on the read")
+    p.add_argument("--signed", action="store_true", help="drawers: Count-Sketch +-1 signed writes/reads")
+    p.add_argument("--keycheck", action="store_true", help="drawers: weight tables by query . cell mean address")
     p.add_argument("--bitflip", type=int, default=0, help="drawers: soft read over cells from flipping b least-certain bits")
     p.add_argument("--topk", type=int, default=0, help="drawers: bounded soft read of the k most likely cells")
     p.add_argument("--anneal_frac", type=float, default=0.0, help="ramp drawer hardness 0->1 over this share of steps")
@@ -102,7 +107,7 @@ def main():
     train, val, chars = load_corpus(a.corpus)
     torch.manual_seed(a.seed)
     model = Model(len(chars), d=a.d, layers=a.layers, mixer=a.mixer, feat=a.feat, nap=a.nap,
-                  shift_k=a.shift_k, anchor_seed=a.seed + 1, write=a.write, read_power=a.read_power, topk=a.topk, bitflip=a.bitflip,
+                  shift_k=a.shift_k, anchor_seed=a.seed + 1, write=a.write, read_power=a.read_power, topk=a.topk, bitflip=a.bitflip, init_mem=a.init_mem, out_gate=a.out_gate, learned_addr=a.learned_addr, signed=a.signed, keycheck=a.keycheck,
                   window=a.window).to(dev)
     n_params = sum(p.numel() for p in model.parameters())
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.1)

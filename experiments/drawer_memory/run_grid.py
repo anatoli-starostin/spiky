@@ -119,6 +119,64 @@ GRIDS["e8confirm"] = [dict(block="E4", mixer="linear", **E8b),
 GRIDS["e8confirm"] += [dict(block="E5", mixer="linear", **dict(E8, steps=4000)),
                        dict(block="E5", mixer="lut_hard_tied", bitflip=2, **dict(E8, nap=6, steps=4000))]
 GRIDS["pilot8"] = GRIDS["pilot8"] + GRIDS["e8confirm"]
+# augment (2026-10-20): ideas from Sparse Delta Memory on the setting where the text gap shows (enwik8, 4,000 steps,
+# 4 x 6-bit tables). Baselines: flip-2 drawers 2.150 bpc, linear attention 2.057.
+A4K = dict(script="train_lm.py", corpus="enwik8", feat=256, nap=6, steps=4000, seed=0, block="A2")
+GRIDS["augment"] = [dict(mixer="lut_hard_tied", bitflip=4, **A4K),
+                    dict(mixer="lut_hard_tied", bitflip=2, init_mem=True, **A4K),
+                    dict(mixer="lut_hard_tied", bitflip=2, out_gate=True, **A4K),
+                    dict(mixer="lut_hard_tied", bitflip=4, init_mem=True, out_gate=True, **A4K)]
+GRIDS["pilot8"] = GRIDS["pilot8"] + GRIDS["augment"]
+# scalecheck (2026-10-20): will it fly at scale? (1) fixed vs learned addressing, everything else identical
+# (4 x 64-cell tables, 4 cells per token, softmax-weighted); (2) gap vs model size, linear vs flip-2 drawers.
+# revised 21:20 after the gated read beat linear attention: fair control first (same gate on linear attention),
+# a second seed, then addressing and scaling with the gate on every model.
+GRIDS["scalecheck"] = [dict(mixer="linear", out_gate=True, **dict(A4K, block="G")),
+                       # seed 1 dropped 23:25 (user: gate verdict is clear)
+                       dict(mixer="lut_hard_tied", learned_addr=4, out_gate=True, **dict(A4K, block="L"))]
+GRIDS["scalecheck"] += [dict(block="S2", script="train_lm.py", corpus="enwik8", feat=256, nap=6, steps=4000, seed=0,
+                             d=dd, layers=4, T=256, mixer=m, out_gate=True, **({"bitflip": 2} if m != "linear" else {}))
+                        for dd in (192, 256) for m in ("linear", "lut_hard_tied")]
+# structural (2026-10-20 23:40): techniques native to drawers, all with the gated read and flip-2 (16 cells touched per
+# head, equal decode cost); compare with gated linear attention 2.005 / gated drawers 2.051.
+# (1) bigger tables at the same cost: 4 x 8 bits (memory 1024); (2) Count-Sketch signed writes; (3) key-checked reads.
+GRIDS["structural"] = [dict(mixer="lut_hard_tied", bitflip=2, out_gate=True, **dict(A4K, block="X", feat=1024, nap=8)),
+                       dict(mixer="lut_hard_tied", bitflip=2, out_gate=True, signed=True, **dict(A4K, block="X")),
+                       dict(mixer="lut_hard_tied", bitflip=2, out_gate=True, keycheck=True, **dict(A4K, block="X"))]
+# delta (2026-10-21 08:00): delta writes (read, then correct the cell towards the value, learned write strength)
+# on recall with 8 of 16 keys re-assigned -- additive memories stall at ~98% on updated keys. Matched pairs:
+# additive vs delta, drawers (4 x 6 bits, flip-2) vs linear attention (DeltaNet); all with the gated read.
+D = dict(block="D", n_pairs=16, feat=256, nap=6, updates=8, anchor_per_seed=True, out_gate=True, seed=0)
+GRIDS["delta"] = [dict(mixer="lut_delta", bitflip=2, **D), dict(mixer="linear_delta", **D)]
+# additive gated references dropped 10:20 (user: ~98% ceiling already known). enwik8: delta drawers vs gated DeltaNet
+GRIDS["delta_lm"] = [dict(mixer="lut_delta", bitflip=2, out_gate=True, **dict(A4K, block="D2")),
+                     dict(mixer="linear_delta", out_gate=True, **dict(A4K, block="D2"))]
+GRIDS["pilot8"] = GRIDS["pilot8"] + GRIDS["scalecheck"] + GRIDS["structural"]
+
+# capacity (2026-10-21 11:00): at EQUAL COST PER TOKEN, can a big sparse memory store more associations than a
+# dense one? Delta drawers touch 16 cells per head (4 tables, flip-2) whatever the memory size; DeltaNet with a
+# feat-wide state touches feat rows. Equal cost = DeltaNet feat 16; feat 64 / 256 are 4x / 16x the cost.
+# Plain recall, n pairs (sequence 4n). cap64 runs on the M1, cap128 on the M4.
+def _cap(n):
+    C = dict(block="C", n_pairs=n, out_gate=True, anchor_per_seed=True, seed=0, steps=3000)
+    return [dict(mixer="lut_delta", feat=4096, nap=10, bitflip=2, **C), dict(mixer="linear_delta", feat=16, **C),
+            dict(mixer="linear_delta", feat=256, **C), dict(mixer="lut_delta", feat=256, nap=6, bitflip=2, **C),
+            dict(mixer="linear_delta", feat=64, **C), dict(mixer="lut_delta", feat=1024, nap=8, bitflip=2, **C)]
+GRIDS["cap64"], GRIDS["cap128"] = _cap(64), _cap(128)
+# capmini (2026-10-21 12:35): small, fast early-signal version -- 32 pairs (sequence 128), 1,500 steps; the larger
+# grids are paused (resumable) and continue only if drawers show an advantage here.
+_M = dict(block="M", n_pairs=32, out_gate=True, anchor_per_seed=True, seed=0, steps=1500)
+# 13:25: at 1,500 steps even DeltaNet 256 stayed at chance (0.8%) -> too short to tell anything; v2 = 3,000 steps
+_M2 = dict(_M, steps=3000)
+GRIDS["capmini2_m4"] = [dict(mixer="lut_delta", feat=4096, nap=10, bitflip=2, anneal_frac=0.5, **_M2),
+                        dict(mixer="linear_delta", feat=256, **_M2)]
+GRIDS["capmini2_m1"] = [dict(mixer="linear_delta", feat=16, **_M2), dict(mixer="lut_delta", feat=256, nap=6, bitflip=2, **_M2)]
+GRIDS["capmini_a"] = [dict(mixer="lut_delta", feat=1024, nap=8, bitflip=2, **_M), dict(mixer="linear_delta", feat=16, **_M)]
+# capmini_c (13:15): 4,096 cells never left chance in 1,500 steps (no chance matches -> no signal). Coarse-to-fine bit
+# curriculum: 4 active bits per table at the start, all 10 by 50% of training.
+GRIDS["capmini_c"] = [dict(mixer="lut_delta", feat=4096, nap=10, bitflip=2, anneal_frac=0.5, **_M)]   # M4
+GRIDS["capmini_d"] = [dict(mixer="lut_delta", feat=256, nap=6, bitflip=2, **_M)]                        # M1
+GRIDS["capmini_b"] = [dict(mixer="lut_delta", feat=4096, nap=10, bitflip=2, **_M), dict(mixer="linear_delta", feat=256, **_M)]
 
 
 def nap_of(c):
@@ -128,7 +186,10 @@ def nap_of(c):
 def run_name(c):
     if c.get("block") is None:  # legacy names (pilot / tied)
         return f"{c['mixer']}_n{c['n_pairs']}_F{c['feat']}_s{c.get('seed', 0)}"
-    extra = (f"_flip{c['bitflip']}" if c.get("bitflip") else "") + \
+    extra = (f"_learned{c['learned_addr']}" if c.get("learned_addr") else "") + \
+            ("_im" if c.get("init_mem") else "") + ("_og" if c.get("out_gate") else "") + \
+            ("_sgn" if c.get("signed") else "") + ("_kc" if c.get("keycheck") else "") + \
+            (f"_flip{c['bitflip']}" if c.get("bitflip") else "") + \
             (f"_top{c['topk']}" if c.get("topk") else "") + \
             (f"_{c['corpus']}" if c.get("corpus", "shakespeare") != "shakespeare" else "") + \
             (f"_st{c['steps']}" if c.get("script") == "train_lm.py" and c.get("steps", 3000) != 3000 else "") + \
@@ -189,7 +250,8 @@ def write_reports(grid, current=None):
     text = "\n".join([f"Grid: {GRID}"] + lines) + "\n"
     open(os.path.join(RUNS, f"PROGRESS_{GRID}.md"), "w").write(text)
     open(os.path.join(RUNS, "PROGRESS.md"), "w").write(text)  # always the currently running grid
-    subprocess.run([PY, os.path.join(HERE, "build_report.py")], capture_output=True)  # refresh live HTML report
+    if True:
+        subprocess.run([PY, os.path.join(HERE, "build_report.py")], capture_output=True)  # refresh live HTML report
 
 
 GRID = sys.argv[1] if len(sys.argv) > 1 else "night"
@@ -214,6 +276,7 @@ def main():
                 print(f"skip {name} (seed 0 failed)", flush=True)
                 continue
         write_reports(grid, current=f"{name} (cooling)")
+        th.wait_power(why=f"before {name}")
         th.wait_below(COOL_TO, why=f"before {name}")
         write_reports(grid, current=name)
         print(f"=== {name}  start cpu {th.cpu_temp():.1f}C  {time.strftime('%H:%M:%S')}", flush=True)
@@ -230,6 +293,14 @@ def main():
             rc = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT).returncode
         print(f"=== {name}  end rc={rc} cpu {th.cpu_temp():.1f}C  {time.strftime('%H:%M:%S')}", flush=True)
         write_reports(grid)
+        if os.environ.get("LAB_PUSH"):  # two-Mac setup: publish each finished run to the shared repo
+            g = lambda *a: subprocess.run(["git", "-C", HERE, *a], capture_output=True, text=True)
+            g("add", os.path.join(RUNS, name), os.path.join(RUNS, f"results_{GRID}.csv"), os.path.join(RUNS, f"PROGRESS_{GRID}.md"))
+            g("commit", "-m", f"run {name} ({os.uname().nodename.split('.')[0]})")
+            for _ in range(4):
+                if g("pull", "--rebase", "-q").returncode == 0 and g("push", "-q").returncode == 0:
+                    break
+                time.sleep(20)
     th.close()
     write_reports(grid)
     print(open(os.path.join(RUNS, f"PROGRESS_{GRID}.md")).read(), flush=True)

@@ -1,0 +1,12 @@
+{
+  "name": "lut_delta_n32_F4096_nap10_og_flip2_st1500_ap_s0",
+  "final_acc": 0.003692626953125,
+  "best_acc": 0.00421142578125,
+  "params": 560970,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 1893.9,
+  "thermal_pause_s": 10.1,
+  "max_cpu_temp": 92.5,
+  "device": "mps"
+}

@@ -1,0 +1,12 @@
+{
+  "name": "lut_delta_n16_F256_nap6_og_flip2_upd8_ap_s0",
+  "final_acc": 0.99884033203125,
+  "best_acc": 0.99884033203125,
+  "params": 560970,
+  "final_acc_updated": 0.9981689453125,
+  "final_acc_static": 0.99951171875,
+  "train_s": 2214.2,
+  "thermal_pause_s": 70.0,
+  "max_cpu_temp": 89.3,
+  "device": "mps"
+}

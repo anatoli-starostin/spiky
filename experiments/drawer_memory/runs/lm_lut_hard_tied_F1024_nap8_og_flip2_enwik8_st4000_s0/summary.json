@@ -1,0 +1,12 @@
+{
+  "name": "lm_lut_hard_tied_F1024_nap8_og_flip2_enwik8_st4000_s0",
+  "final_val_bpc": 2.0465,
+  "best_val_bpc": 2.0465,
+  "params": 1119620,
+  "train_s": 3036.9,
+  "thermal_pause_s": 960.7,
+  "max_cpu_temp": 87.1,
+  "device": "mps",
+  "final_acc": 2.0465,
+  "best_acc": 2.0465
+}

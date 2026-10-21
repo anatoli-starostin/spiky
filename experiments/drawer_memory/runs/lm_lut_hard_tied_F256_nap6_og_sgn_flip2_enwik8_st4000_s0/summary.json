@@ -1,0 +1,12 @@
+{
+  "name": "lm_lut_hard_tied_F256_nap6_og_sgn_flip2_enwik8_st4000_s0",
+  "final_val_bpc": 2.062,
+  "best_val_bpc": 2.062,
+  "params": 1119620,
+  "train_s": 4843.1,
+  "thermal_pause_s": 1571.2,
+  "max_cpu_temp": 94.9,
+  "device": "mps",
+  "final_acc": 2.062,
+  "best_acc": 2.062
+}

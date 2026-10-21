@@ -65,6 +65,12 @@ def label(cfg):
         base += {"decay": ", decay write", "ema": ", overwrite-style (EMA) write"}[cfg["write"]]
     if cfg.get("read_power", 1) != 1:
         base += f", match count^{cfg['read_power']}"
+    if cfg.get("learned_addr"):
+        base += f", LEARNED addressing (top-{cfg['learned_addr']} by learned cell keys, control)"
+    if cfg.get("init_mem"):
+        base += ", learned initial memory"
+    if cfg.get("out_gate"):
+        base += ", normed + gated read"
     if cfg.get("bitflip"):
         base += f", soft read over {2 ** cfg['bitflip']} cells (flip {cfg['bitflip']} least-certain bits)"
     if cfg.get("topk"):
@@ -150,7 +156,8 @@ def legend(slots_labels):
 def setting_key(cfg, lm):
     if lm:
         if cfg.get("corpus") == "enwik8":
-            return f"enwik8 (byte-level Wikipedia), d={cfg.get('d', 128)}, {cfg.get('layers', 4)} layers, T={cfg.get('T', 256)}"
+            return (f"enwik8 (byte-level Wikipedia), d={cfg.get('d', 128)}, {cfg.get('layers', 4)} layers, "
+                    f"T={cfg.get('T', 256)}, {cfg.get('steps', 3000):,} steps")
         if cfg.get("d", 128) != 128 or cfg.get("T", 256) != 256:
             return f"Tiny Shakespeare, scale-up: d={cfg['d']}, {cfg['layers']} layers, T={cfg['T']}"
         return "Tiny Shakespeare, char-level, 4 layers, T=256"
@@ -372,14 +379,18 @@ def main():
             sections.append(bench_section(notes))
         elif g in run_grid.GRIDS:
             sections.append(batch_section(g, notes, runs))
-    nav = '<a href="#findings">key findings</a> · ' + " · ".join(f'<a href="#{g}">{esc(notes.get("batches", {}).get(g, {}).get("short", g) if g != "bench" else "speed benchmark")}</a>' for g in order)
+    nav = '<a href="#data">1 data and tasks</a> · <a href="#model">2 model and training</a> · <a href="#findings">3 key findings</a> · ' + " · ".join(f'<a href="#{g}">{esc("batch " + notes.get("batches", {}).get(g, {}).get("short", g) if g != "bench" else "speed benchmark")}</a>' for g in order)
     n_done = sum(1 for r in runs.values() if r["summary"])
     doc = f"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Drawer memory — live experiment report</title><style>{CSS}</style></head><body><main>
 <h1>Drawer memory: live experiment report</h1>
 <p class="sub">LUT-addressed memory written at inference time as a replacement for attention. Generated {time.strftime('%Y-%m-%d %H:%M')} from {n_done} finished runs; abstract last revised {esc(notes.get('abstract_updated', ''))}.</p>
 <div class="abstract"><h2>Abstract</h2>{notes['abstract']}</div>
-<section id="findings"><h2>Key findings — current state of knowledge</h2>{notes.get('findings', '')}</section>
+<nav>{nav}</nav>
+<section id="data"><h2>1. Data and tasks</h2>{notes.get('chapter_data', '')}</section>
+<section id="model"><h2>2. Model and training</h2>{notes.get('chapter_model', '')}</section>
+<section id="findings"><h2>3. Key findings — current state of knowledge</h2>{notes.get('findings', '')}</section>
+<section><h2>4. Experiments, batch by batch</h2><p>Each batch below states its question, setup and conclusion, followed by its learning curves and a table of every run. Batches are in chronological order; later batches supersede earlier conclusions where they conflict (the key findings above are kept current).</p></section>
 <nav>{nav}</nav>
 {''.join(sections)}
 <section><h2>Glossary</h2>{notes.get('glossary', '')}</section>

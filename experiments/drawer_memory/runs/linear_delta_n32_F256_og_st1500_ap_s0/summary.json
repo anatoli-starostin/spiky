@@ -1,0 +1,12 @@
+{
+  "name": "linear_delta_n32_F256_og_st1500_ap_s0",
+  "final_acc": 0.008209228515625,
+  "best_acc": 0.008209228515625,
+  "params": 1052488,
+  "final_acc_updated": null,
+  "final_acc_static": null,
+  "train_s": 660.9,
+  "thermal_pause_s": 0.0,
+  "max_cpu_temp": 79.9,
+  "device": "mps"
+}
