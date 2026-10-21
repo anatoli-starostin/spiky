@@ -3,6 +3,7 @@ torchvision>=0.16.2
 pillow~=10.4.0
 setuptools>=70
 numpy>=1.26.4
+safetensors
 matplotlib~=3.9.2
 scipy~=1.13.1
 tqdm~=4.66.5
