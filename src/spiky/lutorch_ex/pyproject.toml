@@ -18,7 +18,9 @@ license = { text = "MIT" }
 authors = [{ name = "Anatoli Starostin", email = "anatoli.starostin@gmail.com" }]
 requires-python = ">=3.10"
 # ninja is required by torch.utils.cpp_extension.load to JIT-build the CUDA extensions from csrc/.
-dependencies = ["torch>=2.1", "ninja"]
+# torch is capped below 2.10: the suite is developed and green on torch 2.9.1 (Triton 3.5.1); newer Inductor/Triton
+# fuse and tile differently, which breaks the Inductor-fusion tests (test_fused_read) and moves float32 results by an ulp.
+dependencies = ["torch>=2.1,<2.10", "ninja"]
 
 [project.optional-dependencies]
 # safetensors output for export_deployment (safetensors.torch needs numpy to write); without them the export

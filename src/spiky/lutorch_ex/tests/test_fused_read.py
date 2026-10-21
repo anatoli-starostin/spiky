@@ -188,7 +188,9 @@ def test_static_shape_bare_scatter_fails_loudly_above_2_pow_34():
     """Pinned PyTorch behaviour (torch 2.9.1): a bare index_add_ scatter compiled with STATIC shapes fails to compile
     once numel * d_out > 2^34 (Triton 'XBLOCK' too large) - a loud error, never silent corruption. The library's real
     path compiles with dynamic shapes and is unaffected (previous test, same order of size). If this ever stops
-    raising, the static-shape behaviour changed: re-check it, then drop or invert this test."""
+    raising, the static-shape behaviour changed: re-check it, then drop or invert this test. (Measured: on torch
+    2.14.1 / Triton 3.8.0 the same call compiles and the result is exact, so the test is only valid on the pinned
+    torch 2.9.1 / Triton 3.5.1; lutorch_ex's pyproject caps torch below 2.10.)"""
     _need_gib(20)
     import torch._dynamo
     torch._dynamo.reset()

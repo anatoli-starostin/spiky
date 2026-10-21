@@ -1,4 +1,4 @@
-torch>=2.1.2
+torch>=2.1.2,<2.10
 torchvision>=0.16.2
 pillow~=10.4.0
 setuptools>=70
