@@ -32,4 +32,5 @@ export TRAIN_EXTRA="--lut-ffn --no-lr-rescale --lut-ffn-h 32 --lut-ffn-tph 32 --
 # (e.g. NUM_ITERATIONS=3 for a smoke run).
 export NUM_ITERATIONS=${NUM_ITERATIONS:-5568}
 
+export LAUNCHER=${LAUNCHER:-runs/lut_ffn_d24_h32_tph32_1xh100.sh}   # recorded in pin_config.json and the train.log header
 exec bash runs/baseline_d24_1xh100.sh "$@"

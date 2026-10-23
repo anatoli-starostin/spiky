@@ -33,4 +33,5 @@ export EXTRA_TAGS="${EXTRA_TAGS:-},ffn=confidenceLUT,read_top_n=1,r=768,tph=64,n
 # base LRs get sqrt(B/B_ref)=1.4142x rescaled, which is NOT the tuned recipe). Keep it in the default.
 export TRAIN_EXTRA="--lut-ffn --no-lr-rescale ${TRAIN_EXTRA:-}"
 
+export LAUNCHER=${LAUNCHER:-runs/lut_ffn_d24_1xh100.sh}   # recorded in pin_config.json and the train.log header
 exec bash runs/baseline_d24_1xh100.sh "$@"

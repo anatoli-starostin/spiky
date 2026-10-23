@@ -88,20 +88,34 @@ if [ -n "$LATEST" ]; then
     fi
 fi
 
-python runs/make_pin_config.py --dbs "$DBS" --save-every "$SAVE_EVERY" --out "$RESULTS/pin_config.json"
+# The exact base_train argv, built once so the same list is both launched and recorded (pin_config + train.log).
+read -ra EXTRA_ARGS <<< "${TRAIN_EXTRA:-}"
+TRAIN_ARGS=(
+    --depth=24 --target-param-data-ratio=8 --device-batch-size="$DBS" --fp8
+    --save-every="$SAVE_EVERY" --model-tag="$MODEL_TAG"
+    --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group="$WANDB_GROUP_NAME"
+    --wandb-tags="arch=${ARCH_TAG:-dense},precision=fp8,seed=42,gpus=1xH100,dbs=$DBS${EXTRA_TAGS:-}"
+    --wandb-notes-file=runs/lut_wandb_notes.md --pin-config="$RESULTS/pin_config.json"
+    --log-every=1 --core-metric-every=500 "${ITER_ARGS[@]}" "${RESUME_ARGS[@]}" "${EXTRA_ARGS[@]}"
+)
+TRAIN_ARGS_STR=$(printf '%q ' "${TRAIN_ARGS[@]}")
+LAUNCHER=${LAUNCHER:-runs/baseline_d24_1xh100.sh}
+
+python runs/make_pin_config.py --dbs "$DBS" --save-every "$SAVE_EVERY" --out "$RESULTS/pin_config.json" \
+    --run-name "$RUN_NAME" --model-tag "$MODEL_TAG" --launcher "$LAUNCHER" --train-args="${TRAIN_ARGS_STR% }"
 
 if [ -z "$LATEST" ] || [ "$LATEST" -lt "$FINAL_STEP" ]; then
     ( while sleep 300; do prune_checkpoints; done ) &
     PRUNER=$!
     trap 'kill $PRUNER 2>/dev/null || true' EXIT
+    # Header: what this launch is, in the log itself (a resume appends a new header).
+    {
+        echo "=== $(date -Is) launch: $LAUNCHER | run=$RUN_NAME model_tag=$MODEL_TAG | commit $(git rev-parse --short HEAD)$(git status --porcelain -- . | grep -q . && echo ' (dirty tree)')"
+        echo "=== env: TRAIN_EXTRA='${TRAIN_EXTRA:-}' NUM_ITERATIONS='${NUM_ITERATIONS:-}' DBS=$DBS SAVE_EVERY=$SAVE_EVERY KEEP_CKPTS=$KEEP_CKPTS"
+        echo "=== cmd: torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- ${TRAIN_ARGS_STR% }"
+    } | tee -a "$RESULTS/train.log"
     # WANDB_RUN_ID + WANDB_RESUME=allow (from lut_env.sh) make a restart continue the same wandb run.
-    torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- \
-        --depth=24 --target-param-data-ratio=8 --device-batch-size="$DBS" --fp8 \
-        --save-every="$SAVE_EVERY" --model-tag="$MODEL_TAG" \
-        --run="$RUN_NAME" --wandb-project="$WANDB_PROJECT_NAME" --wandb-group="$WANDB_GROUP_NAME" \
-        --wandb-tags="arch=${ARCH_TAG:-dense},precision=fp8,seed=42,gpus=1xH100,dbs=$DBS${EXTRA_TAGS:-}" \
-        --wandb-notes-file=runs/lut_wandb_notes.md --pin-config="$RESULTS/pin_config.json" \
-        --log-every=1 --core-metric-every=500 "${ITER_ARGS[@]}" "${RESUME_ARGS[@]}" ${TRAIN_EXTRA:-} 2>&1 | tee -a "$RESULTS/train.log"
+    torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- "${TRAIN_ARGS[@]}" 2>&1 | tee -a "$RESULTS/train.log"
     kill $PRUNER 2>/dev/null || true
     prune_checkpoints
 fi

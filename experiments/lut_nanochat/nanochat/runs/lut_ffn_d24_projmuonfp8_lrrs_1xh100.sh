@@ -35,4 +35,5 @@ export TRAIN_EXTRA="--lut-ffn --lut-ffn-proj-fp8-muon ${TRAIN_EXTRA:-}"
 # Pin the horizon to v2 parity (5568); without it base_train auto-derives a shorter one. Env-overridable.
 export NUM_ITERATIONS=${NUM_ITERATIONS:-5568}
 
+export LAUNCHER=${LAUNCHER:-runs/lut_ffn_d24_projmuonfp8_lrrs_1xh100.sh}   # recorded in pin_config.json and the train.log header
 exec bash runs/baseline_d24_1xh100.sh "$@"

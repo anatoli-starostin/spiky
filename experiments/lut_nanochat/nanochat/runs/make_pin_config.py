@@ -10,6 +10,12 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--dbs", type=int, required=True)
 parser.add_argument("--save-every", type=int, required=True)
 parser.add_argument("--out", required=True)
+# What THIS run actually launched (optional so callers that predate them keep working). Pass the argv as
+# --train-args=<string> (with '=') because it starts with '--'.
+parser.add_argument("--run-name", default=None)
+parser.add_argument("--model-tag", default=None)
+parser.add_argument("--launcher", default=None)
+parser.add_argument("--train-args", default=None, help="the exact base_train argv, shell-quoted")
 args = parser.parse_args()
 
 pins = json.load(open("../pins.json"))
@@ -53,10 +59,18 @@ cfg = {
     },
     "launch": {
         "nproc_per_node": 1, "device_batch_size": args.dbs, "grad_accum_steps": 1048576 // (args.dbs * 2048),
-        "save_every": args.save_every, "flags": "--depth=24 --target-param-data-ratio=8 --fp8",
+        "save_every": args.save_every,
+        # the real argv when the launcher passes it; the old hardcoded base flags otherwise
+        "flags": args.train_args if args.train_args else "--depth=24 --target-param-data-ratio=8 --fp8",
+        "run_name": args.run_name, "model_tag": args.model_tag, "launcher": args.launcher,
+        "train_extra": os.environ.get("TRAIN_EXTRA"), "num_iterations_env": os.environ.get("NUM_ITERATIONS"),
         "nanochat_base_dir": os.environ.get("NANOCHAT_BASE_DIR"),
     },
 }
+if args.run_name:
+    # static.wandb comes from ../pins.json and names the dense baseline; record what this run really uses.
+    cfg["static"]["wandb"]["run_name"] = args.run_name
+    cfg["static"]["wandb"]["group"] = os.environ.get("WANDB_GROUP_NAME", cfg["static"]["wandb"]["group"])
 json.dump(cfg, open(args.out, "w"), indent=1)
 print(f"pin config written: {args.out} (dbs {args.dbs}, grad_accum {cfg['launch']['grad_accum_steps']}, "
       f"tree dirty: {cfg['runtime']['vendored_tree_dirty']})")

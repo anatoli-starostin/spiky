@@ -27,4 +27,5 @@ export TRAIN_EXTRA="--lut-ffn --no-lr-rescale --lut-ffn-h 32 --lut-ffn-tph 32 --
 # Pin the training horizon to v2 parity (5568) exactly as the nap=8 fork does; env-overridable (e.g. NUM_ITERATIONS=3 for smoke).
 export NUM_ITERATIONS=${NUM_ITERATIONS:-5568}
 
+export LAUNCHER=${LAUNCHER:-runs/lut_ffn_d24_h32_tph32_nap9_1xh100.sh}   # recorded in pin_config.json and the train.log header
 exec bash runs/baseline_d24_1xh100.sh "$@"
