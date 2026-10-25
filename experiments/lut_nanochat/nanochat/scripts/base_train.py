@@ -150,6 +150,12 @@ else:
     except Exception as e:
         print0(f"WARNING: wandb.init failed ({type(e).__name__}: {e}); continuing WITHOUT wandb logging")
         wandb_run = DummyWandb()
+if not use_dummy_wandb and not isinstance(wandb_run, DummyWandb):
+    # [lut_nanochat] every wandb_run.log() call (train step, val eval, CORE eval) bumps wandb's internal _step, so
+    # the evals pushed later points to _step = step + (number of earlier eval log calls), e.g. 251, 502, ... for
+    # eval-every=250. All our logs carry an explicit "step" key: make it the x-axis of every metric.
+    wandb_run.define_metric("step")
+    wandb_run.define_metric("*", step_metric="step")
 
 # Flash Attention status
 from nanochat.flash_attention import USE_FA3
