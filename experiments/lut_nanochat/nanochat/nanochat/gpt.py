@@ -417,7 +417,7 @@ class GPT(nn.Module):
         }
 
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, lut_lr=3e-3,
-                        matrix_optimizer='muon', adamw_matrix_lr=1e-3, adamw_matrix_betas=(0.9, 0.95), adamw_matrix_wd=0.1):
+                        matrix_optimizer='muon', adamw_matrix_lr=3e-4, adamw_matrix_betas=(0.9, 0.95), adamw_matrix_wd=0.1):
         model_dim = self.config.n_embd
 
         # [lut_nanochat] LUT-FFN params (4-D tables, 0-D confidence scalars, projection weights+biases)

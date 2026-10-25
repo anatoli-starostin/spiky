@@ -3,12 +3,12 @@
 # full 5,568-step schedule, one H100. Fork of d24-dense-1xh100-s0 (runs/baseline_d24_1xh100.sh): same model, data,
 # fp8, batch, seed, LR rescale (ON, as in the dense baseline) and WSD schedule; ONLY the matrix optimizer changes.
 # Experiment: results/d24-dense-adamw-lr<LR>-1xh100-s0-2k/README.md
-#   ADAMW_LR=1e-3 bash runs/dense_adamw_d24_2k_1xh100.sh      # base LR of the matrix AdamW (default 1e-3)
+#   ADAMW_LR=3e-4 bash runs/dense_adamw_d24_2k_1xh100.sh      # base LR of the matrix AdamW (default 3e-4)
 #   SMOKE=1 bash runs/dense_adamw_d24_2k_1xh100.sh            # 12-step smoke (wandb tag "smoke")
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-LR=${ADAMW_LR:-1e-3}
+LR=${ADAMW_LR:-3e-4}
 if [ "${SMOKE:-0}" = "1" ]; then
     export RUN_NAME=${RUN_NAME:-d24-dense-adamw-lr${LR}-1xh100-s0-2k-smoke}
     export MODEL_TAG=${MODEL_TAG:-d24_dense_adamw_lr${LR}_2k_smoke}
