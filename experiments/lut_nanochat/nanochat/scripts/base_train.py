@@ -96,6 +96,10 @@ parser.add_argument("--embedding-lr", type=float, default=0.3, help="learning ra
 parser.add_argument("--unembedding-lr", type=float, default=0.008, help="learning rate for unembedding parameters (Adam)")
 parser.add_argument("--weight-decay", type=float, default=0.28, help="cautious weight decay for the Muon optimizer (for weights)")
 parser.add_argument("--matrix-lr", type=float, default=0.02, help="learning rate for matrix parameters (Muon)")
+parser.add_argument("--matrix-optimizer", type=str, default="muon", choices=["muon", "adamw"], help="[lut_nanochat] optimizer for the transformer matrices (default muon = nanochat; adamw = dense ablation)")
+parser.add_argument("--adamw-matrix-lr", type=float, default=1e-3, help="[lut_nanochat] base LR of the matrix AdamW (--matrix-optimizer=adamw); scaled by 1/sqrt(dmodel/768) and batch_lr_scale like the other AdamW groups")
+parser.add_argument("--adamw-matrix-wd", type=float, default=0.1, help="[lut_nanochat] decoupled weight decay of the matrix AdamW (constant over training)")
+parser.add_argument("--adamw-matrix-betas", type=float, nargs=2, default=(0.9, 0.95), help="[lut_nanochat] betas of the matrix AdamW")
 parser.add_argument("--scalar-lr", type=float, default=0.5, help="learning rate for scalars (resid_lambdas, x0_lambdas)")
 parser.add_argument("--warmup-steps", type=int, default=40, help="number of steps for LR warmup")
 parser.add_argument("--warmdown-ratio", type=float, default=0.65, help="ratio of iterations for LR warmdown")
@@ -413,6 +417,9 @@ optimizer = model.setup_optimizer(
     weight_decay=weight_decay_scaled,
     # [lut_nanochat] LUT-FFN AdamW group
     lut_lr=args.lut_ffn_lr * batch_lr_scale,
+    # [lut_nanochat] matrix optimizer ablation (default muon = unchanged)
+    matrix_optimizer=args.matrix_optimizer, adamw_matrix_lr=args.adamw_matrix_lr * batch_lr_scale,
+    adamw_matrix_betas=tuple(args.adamw_matrix_betas), adamw_matrix_wd=args.adamw_matrix_wd,
 )
 
 if resuming:
@@ -722,7 +729,7 @@ while True:
             "train/loss": debiased_smooth_loss,
             "train/loss_raw": train_loss_f,  # [lut_nanochat] last micro-batch loss, unsmoothed
             "train/tokens_seen": total_batch_size * (step + 1),  # [lut_nanochat]
-            "train/lr_matrix": next(g["lr"] for g in optimizer.param_groups if g["kind"] == "muon"),  # [lut_nanochat]
+            "train/lr_matrix": next(g["lr"] for g in optimizer.param_groups if g.get("is_matrix")),  # [lut_nanochat]
             "train/lrm": lrm,
             "train/dt": dt,
             "train/tok_per_sec": tok_per_sec,
