@@ -348,6 +348,12 @@ if lut_cfg.enabled:
     torch._dynamo.config.force_parameter_static_shapes = False
     torch._dynamo.config.cache_size_limit = max(getattr(torch._dynamo.config, "cache_size_limit", 8), 256)
     print0("[lut_nanochat] dynamo: force_parameter_static_shapes=False, cache_size_limit>=256 (LUT heterogeneous-rank params)")
+if args.matrix_optimizer == "adamw":
+    # With --matrix-optimizer=adamw the 2-D matrices go through the compiled adamw_step_fused (one specialization per
+    # distinct param shape), which exceeds dynamo's default recompile limit of 8. Lift it; Muon runs are unaffected.
+    import torch._dynamo
+    torch._dynamo.config.cache_size_limit = max(getattr(torch._dynamo.config, "cache_size_limit", 8), 256)
+    print0("[dense-adamw] dynamo cache_size_limit>=256 (adamw_step_fused per-shape specializations)")
 model = torch.compile(model, dynamic=False) # the inputs to model will never change shape so dynamic=False is safe
 
 # -----------------------------------------------------------------------------
