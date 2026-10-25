@@ -45,10 +45,10 @@
 ```bash
 mkdir -p ../results/d24-dense-1xh100-s0
 if ! command -v uv; then curl -LsSf https://astral.sh/uv/install.sh | sh; source ~/.local/bin/env; fi
-uv venv && uv sync --extra gpu                 # installs torch 2.9.1+cu128 etc. from the vendored uv.lock
+uv venv && uv sync --extra gpu --frozen              # installs torch 2.9.1+cu128 etc. from the vendored uv.lock
 export WANDB_API_KEY=...                       # the operator provides it; NEVER write it into any file in the repo
 source runs/lut_env.sh && source .venv/bin/activate
-python runs/env_smoke_test.py
+PYTHONPATH=$PWD python runs/env_smoke_test.py   # PYTHONPATH needed: the script dir, not the cwd, is on sys.path
 ```
 **Proceed only if the last line is `SMOKE TEST: OK`.** It checks:
 - torch is `2.9.1+cu128`;

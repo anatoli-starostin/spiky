@@ -120,6 +120,9 @@ if [ -z "$LATEST" ] || [ "$LATEST" -lt "$FINAL_STEP" ]; then
     prune_checkpoints
 fi
 
+# SKIP_BASE_EVAL=1 (default off): partial runs (--max-steps) have no final checkpoint at the horizon; skip eval + report.
+if [ "${SKIP_BASE_EVAL:-0}" = "1" ]; then echo "SKIP_BASE_EVAL=1: skipping base_eval / report_results"; exit 0; fi
+
 # --- standalone base_eval: the number we report (full CORE, not the 500-per-task in-training subsample) ---
 torchrun --standalone --nproc_per_node=1 -m scripts.base_eval -- \
     --device-batch-size="$DBS" --model-tag="$MODEL_TAG" ${EVAL_EXTRA:-} 2>&1 | tee "$RESULTS/base_eval.log"
