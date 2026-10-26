@@ -27,3 +27,34 @@ Smoke: the replay logs the first run's rows (count reported), val at 2000 matche
 
 ## Status
 Setup only (this PR). After approval: smoke (own task) -> full run (own task) -> results (compare vs Muon over the full schedule).
+
+## RESULT (run finished 2026-10-26 17:08 UTC, exit 0)
+- Steps 2000 -> 5568, ~8.17-8.21 s/step, ~128k tok/s (typical; the first step after resume 114 s incl. startup), total training time 768.7 min (including the 2000 replayed steps' bookkeeping, as logged), peak memory 55,276 MiB allocated / 57,468 MiB reserved, grad accum 32. One resume (`resumes.log`, from step 2000 as designed); no WARNING/ERROR/Traceback/NaN and no loss spike in the log (largest single-step loss increase after 2100: +0.031, Muon has +0.037).
+- Final in-training val bpb 0.763161 (step 5568), standalone base_eval val bpb 0.764247. **Standalone full CORE 0.2125**, in-training CORE (subsample) 0.2225 at 5568. `report_results` verdict line: `FAIL: below the GPT-2 bar` (0.2125 < 0.256525).
+- wandb: https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-adamw-lr3e-4-1xh100-s0-5568-from2k-94a95f93
+
+## COMPARISON (full schedule 0-5568, Muon vs AdamW)
+Muon = `d24-dense-1xh100-s0` (wandb `d24-dense-1xh100-s0-4bad20ea`), AdamW = this run (steps < 2000 are the replayed copy of the first run). Same model, data, batch, WSD schedule, seed. Data: `compare.csv`, plot: `compare.png` (dashed line = step 2000, where the AdamW run was resumed). CORE in the table is the in-training subsample CORE (every 500); the standalone full CORE is below.
+
+| step | val bpb Muon | val bpb AdamW | delta (AdamW-Muon) | CORE Muon | CORE AdamW | delta |
+|---|---|---|---|---|---|---|
+| 500 | 0.9022 | 1.0512 | +0.1490 | 0.1228 | 0.0514 | -0.0714 |
+| 1000 | 0.8455 | 0.9354 | +0.0900 | 0.1714 | 0.1249 | -0.0465 |
+| 2000 | 0.8090 | 0.8588 | +0.0499 | 0.1907 | 0.1553 | -0.0353 |
+| 3000 | 0.7727 | 0.8180 | +0.0453 | 0.2297 | 0.1780 | -0.0518 |
+| 4000 | 0.7469 | 0.7918 | +0.0449 | 0.2380 | 0.1924 | -0.0456 |
+| 5000 | 0.7267 | 0.7716 | +0.0449 | 0.2469 | 0.2107 | -0.0362 |
+| 5568 | 0.7193 | 0.7632 | +0.0438 | 0.2547 | 0.2225 | -0.0321 |
+
+Standalone base_eval full CORE: **Muon 0.2547 vs AdamW 0.2125 (delta -0.0422)**; standalone val bpb 0.7207 vs 0.7642 (+0.0435). Final train loss (mean of last 50 steps): Muon 2.345, AdamW 2.508.
+
+**Final gap: +0.0438 bpb (AdamW worse).** In steps: Muon reaches AdamW's final val bpb (0.7632) at step ~3355 (linear interpolation on the 250-step val grid), i.e. AdamW needs 5568 steps for what Muon does in ~3355: Muon is ~2200 steps (40%) ahead, ~1.66x step-efficiency at the end of the schedule (at 2000: Muon matched AdamW's bpb at step ~830, 2.4x).
+
+**Verdict.**
+- At the end of the schedule Muon still delivers a clear, consistent advantage: -0.044 val bpb and +0.042 full CORE (about 5x the CORE per-run noise of ~0.008, about 4x the step-0 init noise of ~0.01 in bpb). The gap is not noise.
+- After step 2000 the gap shrinks only slightly: +0.050 (2000) -> +0.048 (2500) -> +0.045 (3000) and then flat at +0.044..0.045 until the end (5568: +0.0438). The change (~0.006 bpb) is of the order of the init noise, so read it as "stable, at most a small shrink"; the LR decay did not close it. CORE gaps fluctuate between -0.03 and -0.054 with no trend (noise-limited).
+- In step-equivalents the lead moves from ~1170 steps (2000) to ~2200 steps (5568), while the relative advantage drops from 2.4x to 1.66x.
+
+**Caveats.** One seed per optimizer; AdamW LR 3e-4 / wd 0.1 untuned (a tuned AdamW could close part of the gap), Muon at its default; dataloader resume at 2000 is approximate (data order after 2000 differs from an uninterrupted run; model/optimizer state exact); step-0 init noise ~0.01 bpb, CORE noise ~0.008; the in-training CORE is a subsample, the standalone one is the full CORE. The `report_results` line `FAIL: below the GPT-2 bar` is the fixed threshold (0.2565) for this model size, not an invalid run (Muon's 0.2547 is also just below it).
+
+wandb: AdamW continuation https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-adamw-lr3e-4-1xh100-s0-5568-from2k-94a95f93 ; Muon reference https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-1xh100-s0-4bad20ea ; first AdamW run (steps 0-2000) https://wandb.ai/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-adamw-lr3e-4-1xh100-s0-2k-213e13da
