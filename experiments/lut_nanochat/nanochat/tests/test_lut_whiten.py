@@ -26,7 +26,7 @@ def cond(x):
 cg, cu = cond(g.reshape(G, -1, d)), cond(u.reshape(G, -1, d))
 print("cond(grad^T grad) %.1f -> cond(update^T update) %.1f" % (cg, cu))
 assert cu < 0.2 * cg
-assert torch.allclose(p0 - p, u, atol=1e-6)
+assert torch.allclose(p0 - p, u.reshape(p.shape), atol=1e-6)
 for _ in range(3):
     lut_whiten_step(p, g, st, 1.0, 0.9, 0.3, 1e-3, 1e-3)
 assert st['step'] == 4 and torch.isfinite(p).all()
