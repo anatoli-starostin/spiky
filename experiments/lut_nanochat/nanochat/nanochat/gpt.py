@@ -416,7 +416,8 @@ class GPT(nn.Module):
             'total': total,
         }
 
-    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, lut_lr=3e-3):
+    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, lut_lr=3e-3,
+                        lut_table_optimizer='adamw', lut_whiten_beta=0.9, lut_whiten_rms=0.3):
         model_dim = self.config.n_embd
 
         # [lut_nanochat] LUT-FFN params (4-D tables, 0-D confidence scalars, projection weights+biases)
@@ -456,6 +457,14 @@ class GPT(nn.Module):
             dict(kind='adamw', params=smear_params, lr=0.2, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
         ]
         # [lut_nanochat] LUT-FFN params: AdamW (tables/scalars/projections), no weight decay on the lookup.
+        # [lut_nanochat] lut_table_optimizer='whiten': the 4-D tables get the Muon-analogue update (optim.lut_whiten_step),
+        # everything else in the LUT set (confidence scalars, projections, biases) stays AdamW.
+        if lut_table_optimizer == 'whiten':
+            table_params = [p for p in lut_params if p.ndim == 4]
+            lut_params = [p for p in lut_params if p.ndim != 4]
+            assert table_params, "lut_table_optimizer='whiten' but no 4-D LUT tables found"
+            param_groups.append(dict(kind='lutw', params=table_params, lr=lut_lr * dmodel_lr_scale, beta1=lut_whiten_beta,
+                                     rms=lut_whiten_rms, eps_white=1e-3, eps_row=1e-3, weight_decay=0.0))
         if lut_params:
             param_groups.append(dict(kind='adamw', params=lut_params, lr=lut_lr * dmodel_lr_scale,
                                      betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0))
