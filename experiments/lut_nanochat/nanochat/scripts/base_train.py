@@ -105,6 +105,7 @@ parser.add_argument("--warmup-steps", type=int, default=40, help="number of step
 parser.add_argument("--warmdown-ratio", type=float, default=0.65, help="ratio of iterations for LR warmdown")
 parser.add_argument("--final-lr-frac", type=float, default=0.05, help="final LR as fraction of initial LR")
 parser.add_argument("--resume-from-step", type=int, default=-1, help="resume training from this step (-1 = disable)")
+parser.add_argument("--replay-wandb-from", type=str, default="", help="[lut_nanochat] entity/project/run_id of an earlier wandb run: when a FRESH wandb run starts with --resume-from-step=N, its logged rows with step < N are replayed into the new run so it shows the full curves (never replays into an already-existing run, so crash-resumes do not duplicate)")
 # Evaluation
 parser.add_argument("--eval-every", type=int, default=250, help="evaluate val bpb every N steps (-1 = disable)")
 parser.add_argument("--eval-tokens", type=int, default=80*524288, help="number of tokens to evaluate val loss on")
@@ -156,6 +157,24 @@ if not use_dummy_wandb and not isinstance(wandb_run, DummyWandb):
     # eval-every=250. All our logs carry an explicit "step" key: make it the x-axis of every metric.
     wandb_run.define_metric("step")
     wandb_run.define_metric("*", step_metric="step")
+
+    # [lut_nanochat] replay of the history of the run this one continues (see --replay-wandb-from).
+    if args.replay_wandb_from and args.resume_from_step > 0 and not wandb_run.resumed:
+        try:
+            _src = wandb.Api(timeout=120).run(args.replay_wandb_from)
+            _n = 0
+            for _row in _src.scan_history():
+                _st = _row.get("step")
+                if _st is None or _st >= args.resume_from_step:
+                    continue
+                wandb_run.log({k: v for k, v in _row.items() if not k.startswith("_") and v is not None})
+                _n += 1
+            wandb_run.config.update({"replayed_from_run": args.replay_wandb_from,
+                                     "replayed_steps": f"0-{args.resume_from_step - 1}", "replayed_rows": _n},
+                                    allow_val_change=True)
+            print0(f"[replay] logged {_n} rows (step < {args.resume_from_step}) from {args.replay_wandb_from}")
+        except Exception as e:
+            print0(f"WARNING: wandb replay from {args.replay_wandb_from} failed ({type(e).__name__}: {e}); continuing without it")
 
 # Flash Attention status
 from nanochat.flash_attention import USE_FA3
