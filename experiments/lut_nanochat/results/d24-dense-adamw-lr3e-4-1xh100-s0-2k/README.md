@@ -23,3 +23,29 @@ Train loss (10-step smoothed) and val bpb at 250/500/.../2000, CORE at 500/1000/
 
 ## Status
 Setup only (this PR). After approval: smoke -> full run -> results.
+
+## COMPARISON (steps 0-2000, Muon reference vs AdamW matrices)
+Runs (wandb `spiky-nanochat`, group `nanochat_baseline`):
+- AdamW: https://forge.coreweave.com/wandb/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-adamw-lr3e-4-1xh100-s0-2k-213e13da
+- Muon reference: https://forge.coreweave.com/wandb/anatoli-starostin-relocation/spiky-nanochat/runs/d24-dense-1xh100-s0-4bad20ea
+
+Files: `compare.csv` (per-step train loss, `train/lr_matrix`, val bpb, CORE for both), `compare.png` (train loss 10-step mean, val bpb, CORE). Both histories read with the `step` key.
+
+**Config check.** Identical in both: batch (device 16, total_batch_size -1 = default 2^20 tokens), seq 2048, fp8 tensorwise, seed 42, embedding/unembedding/scalar/final_lr_frac, matrix_lr 0.02 (Muon group), lr-rescale on (Muon `lr_matrix` = 0.02 x 1.4142 = 0.0283; AdamW 3e-4 after the cancelling factors). `train/lrm` is identical at every step 0-2000 (max abs diff 0), so the WSD schedule is the same: the Muon run has `num_iterations=-1` (auto) vs explicit 5568 in the AdamW run, but the schedules coincide over 0-2000. Differences: the matrix optimizer (the point of the experiment), `max_steps=2001` for AdamW, `save_every` (250 vs 500), and new AdamW/LUT-ffn config keys absent from the older reference config (LUT-ffn is off). Step-0 val bpb differs slightly (3.171 vs 3.181), i.e. init/nondeterminism noise of ~0.01.
+
+| step | val bpb Muon | val bpb AdamW | delta (AdamW-Muon) | CORE Muon | CORE AdamW | delta |
+|---|---|---|---|---|---|---|
+| 250 | 0.9924 | 1.2812 | +0.2888 | | | |
+| 500 | 0.9022 | 1.0512 | +0.1490 | 0.1228 | 0.0514 | -0.0714 |
+| 750 | 0.8651 | 0.9783 | +0.1132 | | | |
+| 1000 | 0.8455 | 0.9354 | +0.0900 | 0.1714 | 0.1249 | -0.0465 |
+| 1250 | 0.8321 | 0.9092 | +0.0771 | | | |
+| 1500 | 0.8229 | 0.8862 | +0.0633 | 0.1807 | 0.1363 | -0.0444 |
+| 1750 | 0.8160 | 0.8719 | +0.0559 | | | |
+| 2000 | 0.8090 | 0.8588 | +0.0499 | 0.1907 | 0.1553 | -0.0353 |
+
+Train loss, mean of steps 1951-2000: Muon 2.662, AdamW 2.822 (+0.16).
+
+**Verdict.** At 2000 steps Muon is clearly ahead: -0.050 bpb (0.809 vs 0.859) and +0.035 CORE (0.191 vs 0.155; the CORE gap is 0.07 at step 500 and narrows). The gap shrinks monotonically (0.29 -> 0.05 bpb), so this is mostly a speed-up, not a fixed offset, and it is still closing. In steps: Muon reaches AdamW's step-2000 bpb (0.8588) at about step 830 (interpolated between 750 and 1000), a ~2.4x speed-up in steps at that point. Reading the other way, AdamW reaches Muon's step-500 bpb (0.902) at ~1330 steps (2.7x) and Muon's step-750 bpb (0.865) at ~1880 steps (2.5x); AdamW has not reached Muon's bpb at step 1000 or later within 2000 steps (so "AdamW needs > 2000 steps" for Muon@1000 and beyond; extrapolation from this curve would be unreliable). Wall-clock per step was not compared here.
+
+**Caveats.** One seed per setting (step-0 offset ~0.01 bpb suggests noise at about that level, small relative to the gaps). AdamW LR 3e-4 and wd 0.1 were set by hand and not tuned; a better AdamW LR could shrink the gap, so this is Muon vs *this* AdamW, not vs AdamW at its best. Step 2000 is mid-schedule of a 5568-step WSD run (stable LR phase, not decayed), so these are not final-quality numbers and the gap at the end of training may differ. CORE is a noisy 4-point metric at this scale; val bpb is the more reliable signal. The steps-to-equal values are linear interpolations over 250-step eval spacing.
