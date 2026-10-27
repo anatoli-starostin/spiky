@@ -86,9 +86,8 @@ class LUTFeedForward(nn.Module):
             if isinstance(m, nn.Linear):
                 m._lut_no_fp8 = True
                 if cfg.proj_fp8_muon:
-                    for p in m.parameters(recurse=False):
-                        if p.ndim >= 2:
-                            p._lut_to_muon = True
+                    # module-level flag (a param attribute is lost when resume does load_state_dict(assign=True))
+                    m._lut_weight_to_muon = True
 
         if device is not None:
             self.to(device)
