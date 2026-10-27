@@ -426,10 +426,12 @@ class GPT(nn.Module):
         # A param tagged _lut_to_muon (the projection weights in LUTFFNConfig.proj_fp8_muon mode) is left OUT
         # of the LUT AdamW group so it falls through into matrix_params -> Muon (it is a 2-D fp32-master matrix).
         lut_param_ids, lut_params = set(), []
+        to_muon_ids = {id(sm.weight) for m in self.transformer.h.modules() if getattr(m, "_is_lut_ffn", False)
+                       for sm in m.modules() if getattr(sm, "_lut_weight_to_muon", False) and sm.weight.ndim >= 2}
         for m in self.transformer.h.modules():
             if getattr(m, "_is_lut_ffn", False):
                 for p in m.parameters():
-                    if id(p) not in lut_param_ids and not getattr(p, "_lut_to_muon", False):
+                    if id(p) not in lut_param_ids and id(p) not in to_muon_ids:
                         lut_param_ids.add(id(p)); lut_params.append(p)
 
         # Separate out all parameters into groups
