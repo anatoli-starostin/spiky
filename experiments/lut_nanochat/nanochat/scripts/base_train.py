@@ -72,6 +72,9 @@ parser.add_argument("--lut-ffn-tv-lambda", type=float, default=10.0, help="[lut_
 parser.add_argument("--lut-ffn-lr", type=float, default=3e-3, help="[lut_nanochat] AdamW LR for LUT-FFN params (scaled by 1/sqrt(dmodel/768))")
 parser.add_argument("--lut-ffn-proj-bf16", action="store_true", help="[lut_nanochat] bf16 projection GEMMs")
 parser.add_argument("--lut-ffn-proj-fp8-muon", action="store_true", help="[lut_nanochat] run the ProjectionMHL compress/decompress GEMMs in fp8 (ProjectionMHL native fp8_projections, fp32 masters, cartridge still fp32) and optimise the projection WEIGHTS with Muon at matrix-lr instead of the default fp32 island + AdamW LUT group. Orthogonal to geometry/fused; default off.")
+parser.add_argument("--lut-table-optimizer", type=str, default="adamw", choices=["adamw", "whiten"], help="[lut_nanochat] optimizer for the 4-D LUT tables (adamw = baseline; whiten = Muon analogue: momentum -> per-head dxd whitening -> per-cell row normalisation, see optim.lut_whiten_step). Scalars/projections stay AdamW.")
+parser.add_argument("--lut-whiten-beta", type=float, default=0.9, help="[lut_nanochat] momentum of the whiten table optimizer")
+parser.add_argument("--lut-whiten-rms", type=float, default=0.3, help="[lut_nanochat] per-element RMS of the whitened, row-normalised update (multiplied by the table LR)")
 parser.add_argument("--no-lr-rescale", action="store_true", help="[lut_nanochat] disable the batch-size LR rescaling (force batch_lr_scale=1.0 instead of sqrt(B/B_ref)); LRs stay at their configured base values. The per-dim AdamW 1/sqrt(dmodel/768) correction in setup_optimizer is NOT affected by this flag.")
 # Runtime
 parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (empty = autodetect)")
@@ -413,6 +416,7 @@ optimizer = model.setup_optimizer(
     weight_decay=weight_decay_scaled,
     # [lut_nanochat] LUT-FFN AdamW group
     lut_lr=args.lut_ffn_lr * batch_lr_scale,
+    lut_table_optimizer=args.lut_table_optimizer, lut_whiten_beta=args.lut_whiten_beta, lut_whiten_rms=args.lut_whiten_rms,
 )
 
 if resuming:
