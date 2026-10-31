@@ -37,7 +37,8 @@ class LUTStack(MultiHeadLUT):
 
 class DominanceStackLUT(MultiHeadLUT):
     def __init__(self, spec: LUTSpec, second: MultiHeadLUT, *, dom_seed: int = 0, dom_weight_init_std=None,
-                 dom_nop=None, dom_vote: str = "delta", dom_normalize: str = "none"):
+                 dom_nop=None, dom_vote: str = "delta", dom_normalize: str = "none",
+                 post_norm: str = "none"):
         super().__init__(spec)
         dom_spec = LUTSpec(h_in=spec.h_in, h_out=spec.h_out, tph=spec.tph, nap=spec.nap,
                            d_in=spec.d_in, d_out=spec.d_out, anchor_mode="pairs")
@@ -47,6 +48,30 @@ class DominanceStackLUT(MultiHeadLUT):
         if (s2.h_in, s2.d_in) != (spec.h_out, spec.d_out):
             raise ValueError(f"second layer input [{s2.h_in},{s2.d_in}] != dominance output [{spec.h_out},{spec.d_out}]")
         self.second = second
+        # post_norm: "none" | "ln" (LayerNorm over the d_out coordinates, learnable affine, w=1 b=0) | "ln_noaffine".
+        # Applied on [B, G, d_out] per token and head, between the Dominance layer and the second layer. The Dominance
+        # output is exactly zero-sum per head, so the mean is already 0 and LN is a per-token rescale to unit variance.
+        if post_norm not in ("none", "ln", "ln_noaffine"):
+            raise ValueError(f"unknown post_norm {post_norm!r}")
+        self.post_norm = post_norm
+        self.norm = None if post_norm == "none" else torch.nn.LayerNorm(
+            spec.d_out, elementwise_affine=(post_norm == "ln"))
+        self.reset_hidden_std()
+
+    def reset_hidden_std(self):
+        self._hs_sum, self._hs_n = 0.0, 0
+
+    def mean_hidden_std(self) -> float:
+        """Mean over tokens and heads of the std (over the d_out coords) of the Dominance output, accumulated over
+        eval-mode forwards since the last ``reset_hidden_std`` (before the LN)."""
+        return self._hs_sum / max(self._hs_n, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.second(self.dom(x))
+        h = self.dom(x)
+        if not self.training:
+            with torch.no_grad():
+                sd = h.detach().float().std(dim=-1, unbiased=False)
+                self._hs_sum += float(sd.sum()); self._hs_n += sd.numel()
+        if self.norm is not None:
+            h = self.norm(h)
+        return self.second(h)

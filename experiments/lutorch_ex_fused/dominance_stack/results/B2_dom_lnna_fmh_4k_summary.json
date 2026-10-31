@@ -1,0 +1,13 @@
+{
+  "exp_name": "dominance_stack_B2_dom_lnna_fmh_4k",
+  "cartridge": "dom_fmh",
+  "best_val_bpb": 1.409081117956759,
+  "final_val_bpb": 1.409081117956759,
+  "total_params": 74529024,
+  "table_params": 44040192,
+  "mean_step_ms": 217.65492635789258,
+  "peak_gb": 7.79,
+  "hours": 0.2902,
+  "n_steps": 4000,
+  "run_name": "dominance_stack_B2_dom_lnna_fmh_4k_1031_110302"
+}

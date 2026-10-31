@@ -38,3 +38,18 @@ def test_plugs_into_projection_and_tv_sees_second_layer():
     out = m(torch.randn(33, 384, device="cuda"))
     assert out.shape == (33, 384)
     assert cell_tv_penalty(m).numel() == 1
+
+
+def test_post_norm_ln():
+    import pytest
+    from spiky.lutorch_ex import LUTSpec
+    from spiky.lutorch_ex.cartridges import FusedManifestoHardLUT
+    spec = LUTSpec(h_in=8, h_out=8, tph=64, nap=8, d_in=48, d_out=48, anchor_mode="pairs")
+    for pn, n_par in (("ln", 96), ("ln_noaffine", 0)):
+        st = DominanceStackLUT(spec, FusedManifestoHardLUT(spec, weight="rational", seed=1), dom_seed=2, post_norm=pn).cuda()
+        assert sum(p.numel() for p in st.norm.parameters()) == n_par
+        x = torch.randn(16, 8, 48, device="cuda", requires_grad=True)
+        y = st(x); y.sum().backward()
+        h = st.dom(x)
+        assert torch.allclose(st.norm(h).std(-1, unbiased=False), torch.ones(16, 8, device="cuda"), atol=1e-3)
+        st.eval(); st(x); assert st.mean_hidden_std() > 0

@@ -153,7 +153,8 @@ def build_cartridge(cfg, seed):
     if name == "dom_fmh":     # B: Dominance (hard read, 'same' anchors, nop=nap) -> FusedManifestoHard rational (as A)
         second = FusedManifestoHardLUT(spec, weight="rational", **common)
         return DominanceStackLUT(spec, second, dom_seed=seed + int(cfg.get("dom_seed_offset", 1000)),
-                                 dom_weight_init_std=cfg.get("dom_weight_init_std"))   # None -> sqrt(d_out/(2*tph*nop))
+                                 dom_weight_init_std=cfg.get("dom_weight_init_std"),
+                                 post_norm=cfg.get("post_norm", "none"))   # None -> sqrt(d_out/(2*tph*nop))
     if name == "fmh_fmh":     # D: FusedManifestoHard (small tph, ~table budget of B's Dominance layer) -> FusedManifestoHard
         tph1 = int(cfg["ctrl_tph1"])
         spec1 = LUTSpec(h_in=spec.h_in, h_out=spec.h_out, tph=tph1, nap=spec.nap, d_in=spec.d_in, d_out=spec.d_out,
@@ -301,7 +302,7 @@ if os.path.exists(CKPT):
 csv_f = open(os.path.join(OUT_DIR, "metrics.csv"), "a", newline="")
 csv_w = csv.writer(csv_f)
 if start_step == 1:
-    csv_w.writerow(["step", "train_loss", "val_bpb", "lut_tv", "step_ms"]); csv_f.flush()
+    csv_w.writerow(["step", "train_loss", "val_bpb", "lut_tv", "step_ms", "hidden_std_pre_ln"]); csv_f.flush()
 
 # --------------------------------------------------------------------------- train loop
 step_times = []
@@ -334,10 +335,18 @@ for step in range(start_step, N_STEPS + 1):
         model.eval()
         bpb = evaluate_bpb_fixed(model, tok, token_bytes, SEQ, DEVICE, **EVAL)
         model.train()
+        stacks = [b.ffn.cart for b in model.blocks if isinstance(b.ffn.cart, DominanceStackLUT)]
+        hstd = sum(c.mean_hidden_std() for c in stacks) / len(stacks) if stacks else float("nan")
+        hstd_l = [round(c.mean_hidden_std(), 4) for c in stacks]
+        for c in stacks: c.reset_hidden_std()
         best = min(best, bpb)
         print(f"[VAL] step {step}: bpb={bpb:.4f} (best {best:.4f})")
-        wb.log({"step": step, "val_bpb": bpb}, step=step)
-        csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}"]); csv_f.flush()
+        if stacks:
+            print(f"[VAL] hidden std before LN (mean over tokens, heads; per layer {hstd_l}): {hstd:.4f}")
+            wb.log({"step": step, "val_bpb": bpb, "hidden_std_pre_ln": hstd}, step=step)
+        else:
+            wb.log({"step": step, "val_bpb": bpb}, step=step)
+        csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}", f"{hstd:.5f}"]); csv_f.flush()
     if step % CKPT_EVERY == 0 or step == N_STEPS:
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "step": step}, CKPT)
 
