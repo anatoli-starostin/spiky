@@ -18,6 +18,7 @@ from spiky.lutorch_ex import LUTSpec
 from spiky.lutorch_ex.lut_base import MultiHeadLUT
 
 from dominance_fast import DominanceLUTFast
+from dominance_conf import DominanceConfFast
 
 
 class LUTStack(MultiHeadLUT):
@@ -38,12 +39,15 @@ class LUTStack(MultiHeadLUT):
 class DominanceStackLUT(MultiHeadLUT):
     def __init__(self, spec: LUTSpec, second: MultiHeadLUT, *, dom_seed: int = 0, dom_weight_init_std=None,
                  dom_nop=None, dom_vote: str = "delta", dom_normalize: str = "none",
-                 post_norm: str = "none"):
+                 post_norm: str = "none", dom_conf: bool = False, beta_init: float = 2.0, gamma_init: float = 1.0):
         super().__init__(spec)
         dom_spec = LUTSpec(h_in=spec.h_in, h_out=spec.h_out, tph=spec.tph, nap=spec.nap,
                            d_in=spec.d_in, d_out=spec.d_out, anchor_mode="pairs")
-        self.dom = DominanceLUTFast(dom_spec, nop=dom_nop, output_anchors="same", vote=dom_vote,
-                                    normalize=dom_normalize, seed=dom_seed, weight_init_std=dom_weight_init_std)
+        dkw = dict(nop=dom_nop, output_anchors="same", vote=dom_vote, normalize=dom_normalize, seed=dom_seed,
+                   weight_init_std=dom_weight_init_std)
+        # dom_conf: layer 1 is the ConfidenceLUT(n=1)-scored Dominance (``DominanceConfFast``), rows scaled by the score s
+        self.dom = (DominanceConfFast(dom_spec, beta_init=beta_init, gamma_init=gamma_init, **dkw) if dom_conf
+                    else DominanceLUTFast(dom_spec, **dkw))
         s2 = second.spec
         if (s2.h_in, s2.d_in) != (spec.h_out, spec.d_out):
             raise ValueError(f"second layer input [{s2.h_in},{s2.d_in}] != dominance output [{spec.h_out},{spec.d_out}]")
@@ -60,6 +64,11 @@ class DominanceStackLUT(MultiHeadLUT):
 
     def reset_hidden_std(self):
         self._hs_sum, self._hs_n = 0.0, 0
+        if isinstance(self.dom, DominanceConfFast):
+            self.dom.reset_score_stat()
+
+    def mean_score(self) -> float:
+        return self.dom.mean_score() if isinstance(self.dom, DominanceConfFast) else float("nan")
 
     def mean_hidden_std(self) -> float:
         """Mean over tokens and heads of the std (over the d_out coords) of the Dominance output, accumulated over

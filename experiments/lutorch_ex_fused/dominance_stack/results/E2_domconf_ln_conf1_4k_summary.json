@@ -1,0 +1,13 @@
+{
+  "exp_name": "dominance_stack_E2_domconf_ln_conf1_4k",
+  "cartridge": "domconf_conf1",
+  "best_val_bpb": 1.38341722455497,
+  "final_val_bpb": 1.38341722455497,
+  "total_params": 74529624,
+  "table_params": 44040192,
+  "mean_step_ms": 242.05414830150931,
+  "peak_gb": 7.809,
+  "hours": 0.3182,
+  "n_steps": 4000,
+  "run_name": "dominance_stack_E2_domconf_ln_conf1_4k_1031_125713"
+}

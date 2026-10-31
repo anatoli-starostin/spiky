@@ -155,6 +155,17 @@ def build_cartridge(cfg, seed):
         return DominanceStackLUT(spec, second, dom_seed=seed + int(cfg.get("dom_seed_offset", 1000)),
                                  dom_weight_init_std=cfg.get("dom_weight_init_std"),
                                  post_norm=cfg.get("post_norm", "none"))   # None -> sqrt(d_out/(2*tph*nop))
+    if name in ("domconf_fmh", "domconf_conf1"):   # E1/E2: Dominance on ConfidenceLUT n=1 -> LN -> layer 2 (hard rational / conf n=1)
+        if name == "domconf_fmh":
+            second = FusedManifestoHardLUT(spec, weight="rational", **common)
+        else:
+            second = FusedConfidenceLUT(spec, read_top_n=1, beta_init=cfg["lut_learned_margin_beta_init"],
+                                        gamma_init=cfg["lut_learned_margin_gamma_init"], **common)
+        return DominanceStackLUT(spec, second, dom_seed=seed + int(cfg.get("dom_seed_offset", 1000)),
+                                 dom_weight_init_std=cfg.get("dom_weight_init_std"),
+                                 post_norm=cfg.get("post_norm", "none"), dom_conf=True,
+                                 beta_init=cfg["lut_learned_margin_beta_init"],
+                                 gamma_init=cfg["lut_learned_margin_gamma_init"])
     if name == "fmh_fmh":     # D: FusedManifestoHard (small tph, ~table budget of B's Dominance layer) -> FusedManifestoHard
         tph1 = int(cfg["ctrl_tph1"])
         spec1 = LUTSpec(h_in=spec.h_in, h_out=spec.h_out, tph=tph1, nap=spec.nap, d_in=spec.d_in, d_out=spec.d_out,
@@ -164,12 +175,11 @@ def build_cartridge(cfg, seed):
         second = FusedManifestoHardLUT(spec, weight="rational", **common)
         return LUTStack(spec, first, second)
     if name in ("conf_n2", "conf_n1"):
+        tau = dict(read_tau_init=cfg["lut_read_tau"], read_tau_learnable=bool(cfg["lut_read_tau_learnable"])) \
+            if name == "conf_n2" else {}            # tau exists only for n=2 (n=1 raises if given)
         return FusedConfidenceLUT(spec, read_top_n=(2 if name == "conf_n2" else 1),
                                   beta_init=cfg["lut_learned_margin_beta_init"],
-                                  gamma_init=cfg["lut_learned_margin_gamma_init"],
-                                  read_tau_init=cfg["lut_read_tau"],
-                                  read_tau_learnable=bool(cfg["lut_read_tau_learnable"]),
-                                  **common)
+                                  gamma_init=cfg["lut_learned_margin_gamma_init"], **tau, **common)
     raise ValueError(f"unknown cartridge {name!r}")
 
 
@@ -261,6 +271,21 @@ with torch.no_grad():
                                    .normal_(0.0, 0.02, generator=gC)
                                    .to(proj.compress.weight.device, proj.compress.weight.dtype))
 
+# DominanceConf: the score s (~0.2 at init) shrinks the Borda output; rescale the delta tables of each Dominance layer so the
+# pre-LN hidden std is 1 at init. Calibrated on N(0,1) tokens (= the LN'd FFN input) through the layer's own (init) compress
+# projection, with a private generator (global RNG untouched). Only the init scale; LN makes the scale unimportant.
+if cfg.get("dom_calibrate", False):
+    with torch.no_grad():
+        gcal = torch.Generator(device=DEVICE).manual_seed(12345)
+        xcal = torch.randn(4096, cfg["n_embd"], device=DEVICE, generator=gcal)
+        for i, b in enumerate(model.blocks):
+            st, proj = b.ffn.cart, b.ffn.proj
+            hh = st.dom(proj.compress(xcal).reshape(4096, cfg["lut_n_heads"], cfg["lut_inner_in_dim"]))
+            sd = hh.std(dim=-1, unbiased=False).mean().item()
+            st.dom.weights.mul_(1.0 / sd)
+            hh2 = st.dom(proj.compress(xcal).reshape(4096, cfg["lut_n_heads"], cfg["lut_inner_in_dim"]))
+            print(f"[calib] block {i}: dom hidden std at init {sd:.4f} -> rescaled x{1.0/sd:.3f} -> {hh2.std(dim=-1, unbiased=False).mean().item():.4f}")
+
 total_params = sum(p.numel() for p in model.parameters())
 print(f"cartridge={cfg['cartridge']} blocks={len(model.blocks)} params={total_params:,} "
       f"tables_std(b0)={final_lut(model.blocks[0].ffn.cart).weights.std().item():.6f} "
@@ -302,7 +327,7 @@ if os.path.exists(CKPT):
 csv_f = open(os.path.join(OUT_DIR, "metrics.csv"), "a", newline="")
 csv_w = csv.writer(csv_f)
 if start_step == 1:
-    csv_w.writerow(["step", "train_loss", "val_bpb", "lut_tv", "step_ms", "hidden_std_pre_ln"]); csv_f.flush()
+    csv_w.writerow(["step", "train_loss", "val_bpb", "lut_tv", "step_ms", "hidden_std_pre_ln", "score_mean"]); csv_f.flush()
 
 # --------------------------------------------------------------------------- train loop
 step_times = []
@@ -338,15 +363,19 @@ for step in range(start_step, N_STEPS + 1):
         stacks = [b.ffn.cart for b in model.blocks if isinstance(b.ffn.cart, DominanceStackLUT)]
         hstd = sum(c.mean_hidden_std() for c in stacks) / len(stacks) if stacks else float("nan")
         hstd_l = [round(c.mean_hidden_std(), 4) for c in stacks]
+        sc = sum(c.mean_score() for c in stacks) / len(stacks) if stacks else float("nan")
+        sc_l = [round(c.mean_score(), 4) for c in stacks]
         for c in stacks: c.reset_hidden_std()
         best = min(best, bpb)
         print(f"[VAL] step {step}: bpb={bpb:.4f} (best {best:.4f})")
         if stacks:
             print(f"[VAL] hidden std before LN (mean over tokens, heads; per layer {hstd_l}): {hstd:.4f}")
-            wb.log({"step": step, "val_bpb": bpb, "hidden_std_pre_ln": hstd}, step=step)
+            if sc == sc:
+                print(f"[VAL] mean score s (per layer {sc_l}): {sc:.4f}")
+            wb.log({"step": step, "val_bpb": bpb, "hidden_std_pre_ln": hstd, **({"score_mean": sc} if sc == sc else {})}, step=step)
         else:
             wb.log({"step": step, "val_bpb": bpb}, step=step)
-        csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}", f"{hstd:.5f}"]); csv_f.flush()
+        csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}", f"{hstd:.5f}", f"{sc:.5f}"]); csv_f.flush()
     if step % CKPT_EVERY == 0 or step == N_STEPS:
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "step": step}, CKPT)
 

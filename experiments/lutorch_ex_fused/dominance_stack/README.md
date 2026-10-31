@@ -100,3 +100,55 @@ hard LUT layers, no dominance, no LN) gets 1.40335, the same as B/B1/B2 (within 
 0.8× B's per-step cost: **the loss is explained by stacking a second LUT layer (depth) in this recipe, not by the Dominance
 operator**; Dominance is neither better nor worse than a plain hard LUT as layer 1 here. Not established: 1 seed, 4k steps only,
 no 48k runs were made.
+
+## Dominance on the ConfidenceLUT(n=1) cartridge (follow-up, 4000 steps, 1 seed each)
+`dominance_conf.py` `DominanceConfFast` (option `dom_conf=True` of `DominanceStackLUT`): each table reads its single addressed
+row (nop=8 deltas, hard detached address) and multiplies it by the library's n=1 confidence score
+`s = (Σ_j m_j)·exp(γ Σ_j log σ(β m_j))`, `m_j=|u_j|` the table's 8 probe margins; `log β`, `log γ` are learnable scalars per layer
+(init 2, 1, exactly `ConfidenceBase`). Borda aggregation within heads as in DominanceLUT (dense signed-incidence bmm of
+`dominance_fast`), then `nn.LayerNorm(48)` with affine, then layer 2. Same anchors/pairs as before (tph 64, nap=nop=8,
+`output_anchors='same'`, seeds as B). **Gradients:** no two-cell rational surrogate (that is the hard-Dominance one); as in
+ConfidenceLUT n=1 the input gradient reaches `z` only through `s` (all 8 margins), tables get `s·g_row`, β/γ through `s`. The score is
+computed in autograd with the library's own `ConfidenceLUT._score` (unbound; backward into margins, β, γ and `z[a]-z[b]` is
+autograd's); the row read × score × Borda is one `autograd.Function` with hand-written backward (`g_row=gy@Mᵀ`, `dW=index_add(s·g_row)`,
+`ds=<g_row,row>`). No table dropout / regulariser on the Dominance layer (as in B).
+**Tests** (`test_dominance_conf.py`, 49 pass in total with `python -m pytest -q .`): value and gradients (tables, log β, log γ, input) vs an
+independent float64 plain-PyTorch reference with explicit loops over heads/tables and pairs (3 geometries, CPU and CUDA);
+fast vs the module's plain-torch path at the experiment geometry; the score equals `FusedConfidenceLUT` n=1's (outputs of an
+all-ones table, same anchors) and `ConfidenceLUT._score` bit-exactly; zero-sum Borda output; stacks with `FusedManifestoHard` and `FusedConfidenceLUT` n=1 as layer 2.
+**Init scale:** s ≈ 0.2 at init, so the unscaled Borda output had std 0.265 (per layer 0.265–0.268, on N(0,1) tokens through the
+init compress projection); `train.py` (`dom_calibrate`) multiplies the delta tables by 1/std (×3.73–3.77, a private RNG; global
+RNG stream unchanged) → pre-LN std 1.000 in every layer at init.
+
+Runs (`configs/{E1_domconf_ln_fmh,E2_domconf_ln_conf1,F_conf_n1}_4k.json`, launcher `run_4k_conf.sh`, one sequential job; same data/seed/schedule;
+W&B project `Spiky`, group `lutorch_ex_fused_dominance_stack`; figure `val_bpb_4k_conf.png`, `plot_curves_conf.py`; `results/`):
+E1 = DominanceConf → LN(affine) → FusedManifestoHard rational (as B1 layer 2); E2 = DominanceConf → LN(affine) → FusedConfidence n=1
+(layer 2 with β,γ init 2,1, dropout 0.2); F = single FusedConfidence n=1. (`train.py` fix: `conf_n1` used to pass `read_tau_*`, which n=1 rejects.)
+
+| | val_bpb @4000 | ms/step | peak GB | params | table params |
+|---|---:|---:|---:|---:|---:|
+| A FusedManifestoHard rational | 1.36198 | 141.4 | 7.69 | 68.24M | 37.75M |
+| B Dominance(hard) → MH | 1.40976 (rerun 1.40700) | 202.0 | 7.79 | 74.53M | 44.04M |
+| B1 Dominance → LN → MH | 1.40608 | 222.4 | 7.79 | 74.53M | 44.04M |
+| C FusedConfidence n=2 | 1.33472 | 152.7 | 7.69 | 68.24M | 37.75M |
+| D MH(tph 11) → MH | 1.40335 | 163.4 | 7.79 | 74.73M | 44.24M |
+| **E1 DominanceConf → LN → MH** | **1.40199** | 239.6 | 7.81 | 74.53M | 44.04M |
+| **E2 DominanceConf → LN → Conf n=1** | **1.38342** | 242.1 | 7.81 | 74.53M | 44.04M |
+| **F FusedConfidence n=1** | **1.33343** | 154.2 | 7.69 | 68.24M | 37.75M |
+
+(ms/step: mean over steps >10; earlier rows are not rerun, timings vary between sessions by ~5%.) Noise at 4k ≈ 0.003 (B rerun).
+
+Diagnostics at each eval (`hidden_std_pre_ln`, `score_mean` in the csv/W&B; means over tokens, heads, 6 layers): pre-LN std is 1.0 at init,
+then 2.4 (E1) / 2.4 (E2) at step 250, peaks 4.8 / 5.6 (steps 750–1250) and ends 3.8 / 5.3; per layer at 4000 E1: 2.0, 4.4, 5.2, 4.6, 4.1, 2.8.
+The score mean s: 0.46 at step 250, max 0.83 (E1, step 750), 0.50 (E1) / 0.59 (E2) at 4000. So the scale grows ×4–5 after init (the compress
+projection widens the margins and s is superlinear in them); LN removes it and the init rescale was not what mattered.
+
+**Read.**
+* Confidence in the Dominance layer does **not** close the gap to A: E1 1.402 vs A 1.362 (+0.040), E2 1.383 (+0.021). It is nowhere near F/C
+  (E1 +0.069, E2 +0.050 vs F; F is 0.001 better than C n=2 here, within noise, and 0.029 better than A).
+* E1 vs D (depth control, two hard-ish layers, no dominance, 1.40335): E1 − D = −0.001, i.e. no difference (noise 0.003); E1 vs B1 −0.004 (≈noise).
+  Putting the confidence score on the Dominance layer's first layer does not help when layer 2 is hard: the stack is still about as bad as any 2-layer hard stack (+0.04 vs A).
+* E1 vs F: the 2-layer stack with a confidence first layer is 0.069 worse than the single confidence layer, at 1.55× the step time and 6.3M more params.
+* E2 vs E1: −0.0186, 4–6× the noise, so layer 2 matters: a confidence layer 2 recovers about half of the depth penalty (E2 is still +0.021 vs A, +0.050 vs F).
+  Layer 1 and 2 together are not additive-good: the best 2-layer stack is still worse than the single confidence cartridge. (No E2' with a hard layer 1 and confidence layer 2 was run, so how much of E2's gain is layer 2 alone is not separated.)
+* Not established: 1 seed, 4k steps (ranking at 48k can differ), no 48k runs; Dominance-layer hyperparameters (delta init, lr, TV, no table dropout) untuned.
