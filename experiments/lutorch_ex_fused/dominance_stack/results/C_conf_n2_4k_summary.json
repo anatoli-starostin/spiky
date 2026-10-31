@@ -1,0 +1,13 @@
+{
+  "exp_name": "dominance_stack_C_conf_n2_4k",
+  "cartridge": "conf_n2",
+  "best_val_bpb": 1.3347157434259813,
+  "final_val_bpb": 1.3347157434259813,
+  "total_params": 68237586,
+  "table_params": 37748736,
+  "mean_step_ms": 152.73623076165728,
+  "peak_gb": 7.686,
+  "hours": 0.1957,
+  "n_steps": 4000,
+  "run_name": "dominance_stack_C_conf_n2_4k_1031_001433"
+}

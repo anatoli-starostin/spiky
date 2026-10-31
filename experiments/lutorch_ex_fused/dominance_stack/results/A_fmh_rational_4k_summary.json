@@ -1,0 +1,13 @@
+{
+  "exp_name": "dominance_stack_A_fmh_rational_4k",
+  "cartridge": "fmh_rational",
+  "best_val_bpb": 1.3619829685450817,
+  "final_val_bpb": 1.3619829685450817,
+  "total_params": 68237568,
+  "table_params": 37748736,
+  "mean_step_ms": 141.40600194987798,
+  "peak_gb": 7.686,
+  "hours": 0.1824,
+  "n_steps": 4000,
+  "run_name": "dominance_stack_A_fmh_rational_4k_1030_234728"
+}
