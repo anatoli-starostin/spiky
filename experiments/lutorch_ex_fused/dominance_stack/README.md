@@ -152,3 +152,34 @@ projection widens the margins and s is superlinear in them); LN removes it and t
 * E2 vs E1: −0.0186, 4–6× the noise, so layer 2 matters: a confidence layer 2 recovers about half of the depth penalty (E2 is still +0.021 vs A, +0.050 vs F).
   Layer 1 and 2 together are not additive-good: the best 2-layer stack is still worse than the single confidence cartridge. (No E2' with a hard layer 1 and confidence layer 2 was run, so how much of E2's gain is layer 2 alone is not separated.)
 * Not established: 1 seed, 4k steps (ranking at 48k can differ), no 48k runs; Dominance-layer hyperparameters (delta init, lr, TV, no table dropout) untuned.
+
+## E2 at 48000 steps (report-style schedule, 1 seed)
+`configs/E2_domconf_ln_conf1_48k.json` = the 4k E2 config with only `n_steps` 48000, `eval_every` 500 (and `exp_name`); lr 3e-4, warmup 0.1,
+cosine to 0.1·lr, 24576 tokens/step, seed 1. Launcher `run_48k_E2.sh` (checkpoint every 2000 steps, resumable; it did not need to resume),
+W&B project `Spiky`, group `lutorch_ex_fused_dominance_stack`, run `dominance_stack_E2_domconf_ln_conf1_48k_main`. Figure `val_bpb_48k_E2.png`
+(`plot_curves_48k.py`); csv/summary in `results/E2_domconf_ln_conf1_48k_*`. The report's per-step curves are not in the repo, so the report's
+final 48k values are drawn as horizontal lines.
+
+| | val_bpb @48000 |
+|---|---:|
+| dense FFN (report) | 1.08936 |
+| FusedConfidenceLUT n=2 (report) | 1.08653 |
+| FusedConfidenceLUT n=1 (report) | 1.09698 |
+| FusedManifestoHardLUT rational (report) | 1.13242 |
+| FusedManifestoHardLUT soft-sign (report) | 1.13780 |
+| **E2 DominanceConf → LN → Conf n=1 (this run)** | **1.11984** |
+
+E2 48k: 3.51 h, mean 240.8 ms/step (median 240, p99 281 over the logged steps; one logged outlier of 1159 ms), peak GPU memory 7.81 GB,
+74.53M params (44.04M table params). val_bpb: 500: 2.286, 1000: 1.924, 2000: 1.706, 4000: 1.477, 8000: 1.284, 16000: 1.208, 24000: 1.174,
+32000: 1.149, 40000: 1.130, 44000: 1.123, 48000: 1.1198 (monotone decreasing). E2 crosses the report's hard-LUT rational line at ≈ step 38.5k.
+Diagnostics: pre-LN std 1.5 (500) → 7.5 (peak ≈16k) → 6.5 (48000); mean score s 0.32 → 0.78 (≈16k) → 0.67; at 48000 per layer pre-LN std
+3.3, 6.4, 8.8, 7.4, 6.9, 5.8.
+
+**Read.**
+* vs the 4k runs (4k: A 1.36198, E2 1.38342, F 1.33343): at 4k E2 was +0.021 vs A (worse than the hard LUT); at 48k E2 is **−0.0126 vs
+  FusedManifestoHard rational (1.13242)** and −0.018 vs soft-sign, so the 4k ranking (E2 worse than A) reverses with the long schedule.
+* vs the confidence cartridge: E2 is +0.0229 vs ConfidenceLUT n=1 (1.09698), +0.0333 vs n=2 (1.08653) and +0.0305 vs dense (1.08936).
+  At 4k the gap E2 − F was +0.050; it shrinks to +0.023 at 48k but the single confidence layer is still clearly better, at 1.57× the step time (240.8 vs ~154 ms)
+  and 6.3M more params.
+* Not established: 1 seed (report-quoted noise at 48k ≈ 0.001, much smaller than all gaps above); report numbers come from the report runs,
+  not re-run here (different session/hardware timing is irrelevant to bpb but not excluded); no 48k run of E1/F in this setup.
