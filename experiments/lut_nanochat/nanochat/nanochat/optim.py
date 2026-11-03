@@ -181,6 +181,40 @@ def muon_step_fused(
 
 # -----------------------------------------------------------------------------
 
+@torch.no_grad()
+def lut_whiten_step(p, grad, state, lr, beta1, rms_target, eps_white, eps_row):
+    """[lut_nanochat] Muon analogue for LUT tables p, grad of shape [G, tph, K, d] (G heads, tph tables/head, K cells/table, d width).
+
+    A table read is linear in the cell vector, so there is no matrix product to orthogonalise across cells. What *is* lopsided
+    (see results/lut-grad-spectra-analysis) is the d-dim direction: per head all 64 tables' gradients share a few dominant
+    directions. The update is therefore
+      1. momentum  m <- beta1 m + (1-beta1) g (bias-corrected)
+      2. width-side whitening per head: U = m (m^T m + eps I)^(-1/2)   (rows pooled over the head's tph*K cells)
+      3. per-cell row normalisation to a fixed RMS (Adam-like per-cell step size; never-hit cells have m=0 and stay 0)
+      4. p <- p - lr * U     (no weight decay)
+    """
+    if not state:
+        state['step'] = 0
+        state['exp_avg'] = torch.zeros_like(p)
+    state['step'] += 1
+    m = state['exp_avg']
+    m.lerp_(grad, 1 - beta1)
+    G, T, K, d = p.shape
+    u = (m / (1 - beta1 ** state['step'])).reshape(G, T * K, d).float()
+    C = u.transpose(1, 2) @ u                                              # [G, d, d]
+    ev, V = torch.linalg.eigh(C)
+    ev = ev.clamp_min(0)
+    ev = ev + eps_white * ev.mean(dim=1, keepdim=True) + 1e-30
+    W = (V * ev.rsqrt().unsqueeze(1)) @ V.transpose(1, 2)                  # C^(-1/2)
+    u = u @ W
+    rn = u.norm(dim=-1, keepdim=True)
+    nz = (rn > 0).float()
+    mean_rn = rn.sum(dim=1, keepdim=True) / nz.sum(dim=1, keepdim=True).clamp_min(1)
+    u = u / (rn + eps_row * mean_rn + 1e-30) * (rms_target * d ** 0.5)
+    p.add_(u.reshape(p.shape).to(p.dtype), alpha=-lr)
+    return u
+
+
 class MuonAdamW(torch.optim.Optimizer):
     """
     Combined optimizer: Muon for 2D matrix params, AdamW for others.
@@ -442,6 +476,9 @@ class MuonAdamW(torch.optim.Optimizer):
                 reduce_infos.append(self._reduce_adamw(group, world_size))
             elif group['kind'] == 'muon':
                 reduce_infos.append(self._reduce_muon(group, world_size))
+            elif group['kind'] == 'lutw':
+                assert world_size == 1, "lutw (LUT table whitening) optimizer is single-rank only"
+                reduce_infos.append(None)
             else:
                 raise ValueError(f"Unknown optimizer kind: {group['kind']}")
 
@@ -452,6 +489,10 @@ class MuonAdamW(torch.optim.Optimizer):
                 self._compute_adamw(group, info, gather_list, rank, world_size)
             elif group['kind'] == 'muon':
                 self._compute_muon(group, info, gather_list, rank)
+            elif group['kind'] == 'lutw':
+                for p in group['params']:
+                    lut_whiten_step(p, p.grad, self.state[p], group['lr'], group['beta1'], group['rms'],
+                                    group['eps_white'], group['eps_row'])
             else:
                 raise ValueError(f"Unknown optimizer kind: {group['kind']}")
 

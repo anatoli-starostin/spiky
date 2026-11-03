@@ -1,0 +1,20 @@
+{
+ "results_folder": "d24-lutffn-confn1-1xh100-s0-whiten500",
+ "launcher": "runs/lut_ffn_d24_whiten500_1xh100.sh",
+ "commit": "3627c60a",
+ "tree_dirty": false,
+ "wandb": "anatoli-starostin-relocation/spiky-nanochat/runs/d24-lutffn-confn1-1xh100-s0-whiten500-c57246a7",
+ "group": "nanochat_lut_ffn",
+ "tags": "whiten500",
+ "launch_env": "TRAIN_EXTRA='--lut-ffn --no-lr-rescale --lut-table-optimizer=whiten --max-steps=501 ' NUM_ITERATIONS='5568' DBS=16 SAVE_EVERY=250 KEEP_CKPTS=4",
+ "argv": "torchrun --standalone --nproc_per_node=1 -m scripts.base_train -- --depth=24 --target-param-data-ratio=8 --device-batch-size=16 --fp8 --save-every=250 --model-tag=d24_lutffn_confn1_1xh100_whiten500 --run=d24-lutffn-confn1-1xh100-s0-whiten500 --wandb-project=spiky-nanochat --wandb-group=nanochat_lut_ffn --log-every=1 --core-metric-every=500 --num-iterations=5568 --lut-ffn --no-lr-rescale --lut-table-optimizer=whiten --max-steps=501 (full argv incl. pin-config/tags in train.log header)",
+ "lut_whiten_defaults": {
+  "beta1": 0.9,
+  "rms": 0.3,
+  "eps_rel": 0.001
+ },
+ "worker": "ds-h100-anatoly (1xH100)",
+ "started": "2026-10-26T20:48:10Z",
+ "ended": "2026-10-26T23:08:11Z",
+ "checkpoints_on_worker": "/home/lab-ds-h100-anatoly/work/nanochat_base/base_checkpoints/d24_lutffn_confn1_1xh100_whiten500 -> results/.../checkpoints (steps 250, 500; not committed)"
+}
