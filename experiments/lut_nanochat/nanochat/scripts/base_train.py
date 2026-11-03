@@ -66,7 +66,7 @@ parser.add_argument("--lut-ffn-read-top-n", type=int, default=1, help="[lut_nano
 parser.add_argument("--lut-ffn-beta", type=float, default=2.0, help="[lut_nanochat] ConfidenceLUT beta_init")
 parser.add_argument("--lut-ffn-gamma", type=float, default=1.0, help="[lut_nanochat] ConfidenceLUT gamma_init")
 parser.add_argument("--lut-ffn-seed", type=int, default=1, help="[lut_nanochat] ConfidenceLUT anchor/table seed")
-parser.add_argument("--lut-ffn-weight-init-std", type=float, default=1e-3, help="[lut_nanochat] LUT table init std")
+parser.add_argument("--lut-ffn-weight-init-std", type=float, default=3e-4, help="[lut_nanochat] LUT table init std")
 parser.add_argument("--lut-ffn-table-dropout", type=float, default=0.2, help="[lut_nanochat] LUT table dropout rate")
 parser.add_argument("--lut-ffn-tv-lambda", type=float, default=10.0, help="[lut_nanochat] cell-TV penalty weight (<=0 disables)")
 parser.add_argument("--lut-ffn-lr", type=float, default=3e-3, help="[lut_nanochat] AdamW LR for LUT-FFN params (scaled by 1/sqrt(dmodel/768))")
@@ -99,11 +99,16 @@ parser.add_argument("--embedding-lr", type=float, default=0.3, help="learning ra
 parser.add_argument("--unembedding-lr", type=float, default=0.008, help="learning rate for unembedding parameters (Adam)")
 parser.add_argument("--weight-decay", type=float, default=0.28, help="cautious weight decay for the Muon optimizer (for weights)")
 parser.add_argument("--matrix-lr", type=float, default=0.02, help="learning rate for matrix parameters (Muon)")
+parser.add_argument("--matrix-optimizer", type=str, default="muon", choices=["muon", "adamw"], help="[lut_nanochat] optimizer for the transformer matrices (default muon = nanochat; adamw = dense ablation)")
+parser.add_argument("--adamw-matrix-lr", type=float, default=3e-4, help="[lut_nanochat] base LR of the matrix AdamW (--matrix-optimizer=adamw); scaled by 1/sqrt(dmodel/768) and batch_lr_scale like the other AdamW groups")
+parser.add_argument("--adamw-matrix-wd", type=float, default=0.1, help="[lut_nanochat] decoupled weight decay of the matrix AdamW (constant over training)")
+parser.add_argument("--adamw-matrix-betas", type=float, nargs=2, default=(0.9, 0.95), help="[lut_nanochat] betas of the matrix AdamW")
 parser.add_argument("--scalar-lr", type=float, default=0.5, help="learning rate for scalars (resid_lambdas, x0_lambdas)")
 parser.add_argument("--warmup-steps", type=int, default=40, help="number of steps for LR warmup")
 parser.add_argument("--warmdown-ratio", type=float, default=0.65, help="ratio of iterations for LR warmdown")
 parser.add_argument("--final-lr-frac", type=float, default=0.05, help="final LR as fraction of initial LR")
 parser.add_argument("--resume-from-step", type=int, default=-1, help="resume training from this step (-1 = disable)")
+parser.add_argument("--replay-wandb-from", type=str, default="", help="[lut_nanochat] entity/project/run_id of an earlier wandb run: when a FRESH wandb run starts with --resume-from-step=N, its logged rows with step < N are replayed into the new run so it shows the full curves (never replays into an already-existing run, so crash-resumes do not duplicate)")
 # Evaluation
 parser.add_argument("--eval-every", type=int, default=250, help="evaluate val bpb every N steps (-1 = disable)")
 parser.add_argument("--eval-tokens", type=int, default=80*524288, help="number of tokens to evaluate val loss on")
@@ -149,6 +154,30 @@ else:
     except Exception as e:
         print0(f"WARNING: wandb.init failed ({type(e).__name__}: {e}); continuing WITHOUT wandb logging")
         wandb_run = DummyWandb()
+if not use_dummy_wandb and not isinstance(wandb_run, DummyWandb):
+    # [lut_nanochat] every wandb_run.log() call (train step, val eval, CORE eval) bumps wandb's internal _step, so
+    # the evals pushed later points to _step = step + (number of earlier eval log calls), e.g. 251, 502, ... for
+    # eval-every=250. All our logs carry an explicit "step" key: make it the x-axis of every metric.
+    wandb_run.define_metric("step")
+    wandb_run.define_metric("*", step_metric="step")
+
+    # [lut_nanochat] replay of the history of the run this one continues (see --replay-wandb-from).
+    if args.replay_wandb_from and args.resume_from_step > 0 and not wandb_run.resumed:
+        try:
+            _src = wandb.Api(timeout=120).run(args.replay_wandb_from)
+            _n = 0
+            for _row in _src.scan_history():
+                _st = _row.get("step")
+                if _st is None or _st >= args.resume_from_step:
+                    continue
+                wandb_run.log({k: v for k, v in _row.items() if not k.startswith("_") and v is not None})
+                _n += 1
+            wandb_run.config.update({"replayed_from_run": args.replay_wandb_from,
+                                     "replayed_steps": f"0-{args.resume_from_step - 1}", "replayed_rows": _n},
+                                    allow_val_change=True)
+            print0(f"[replay] logged {_n} rows (step < {args.resume_from_step}) from {args.replay_wandb_from}")
+        except Exception as e:
+            print0(f"WARNING: wandb replay from {args.replay_wandb_from} failed ({type(e).__name__}: {e}); continuing without it")
 
 # Flash Attention status
 from nanochat.flash_attention import USE_FA3
@@ -341,6 +370,12 @@ if lut_cfg.enabled:
     torch._dynamo.config.force_parameter_static_shapes = False
     torch._dynamo.config.cache_size_limit = max(getattr(torch._dynamo.config, "cache_size_limit", 8), 256)
     print0("[lut_nanochat] dynamo: force_parameter_static_shapes=False, cache_size_limit>=256 (LUT heterogeneous-rank params)")
+if args.matrix_optimizer == "adamw":
+    # With --matrix-optimizer=adamw the 2-D matrices go through the compiled adamw_step_fused (one specialization per
+    # distinct param shape), which exceeds dynamo's default recompile limit of 8. Lift it; Muon runs are unaffected.
+    import torch._dynamo
+    torch._dynamo.config.cache_size_limit = max(getattr(torch._dynamo.config, "cache_size_limit", 8), 256)
+    print0("[dense-adamw] dynamo cache_size_limit>=256 (adamw_step_fused per-shape specializations)")
 model = torch.compile(model, dynamic=False) # the inputs to model will never change shape so dynamic=False is safe
 
 # -----------------------------------------------------------------------------
@@ -417,6 +452,9 @@ optimizer = model.setup_optimizer(
     # [lut_nanochat] LUT-FFN AdamW group
     lut_lr=args.lut_ffn_lr * batch_lr_scale,
     lut_table_optimizer=args.lut_table_optimizer, lut_whiten_beta=args.lut_whiten_beta, lut_whiten_rms=args.lut_whiten_rms,
+    # [lut_nanochat] matrix optimizer ablation (default muon = unchanged)
+    matrix_optimizer=args.matrix_optimizer, adamw_matrix_lr=args.adamw_matrix_lr * batch_lr_scale,
+    adamw_matrix_betas=tuple(args.adamw_matrix_betas), adamw_matrix_wd=args.adamw_matrix_wd,
 )
 
 if resuming:
@@ -726,7 +764,7 @@ while True:
             "train/loss": debiased_smooth_loss,
             "train/loss_raw": train_loss_f,  # [lut_nanochat] last micro-batch loss, unsmoothed
             "train/tokens_seen": total_batch_size * (step + 1),  # [lut_nanochat]
-            "train/lr_matrix": next(g["lr"] for g in optimizer.param_groups if g["kind"] == "muon"),  # [lut_nanochat]
+            "train/lr_matrix": next(g["lr"] for g in optimizer.param_groups if g.get("is_matrix")),  # [lut_nanochat]
             "train/lrm": lrm,
             "train/dt": dt,
             "train/tok_per_sec": tok_per_sec,
