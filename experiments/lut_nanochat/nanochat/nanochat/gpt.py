@@ -416,7 +416,8 @@ class GPT(nn.Module):
             'total': total,
         }
 
-    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, lut_lr=3e-3):
+    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, lut_lr=3e-3,
+                        matrix_optimizer='muon', adamw_matrix_lr=3e-4, adamw_matrix_betas=(0.9, 0.95), adamw_matrix_wd=0.1):
         model_dim = self.config.n_embd
 
         # [lut_nanochat] LUT-FFN params (4-D tables, 0-D confidence scalars, projection weights+biases)
@@ -460,11 +461,18 @@ class GPT(nn.Module):
             param_groups.append(dict(kind='adamw', params=lut_params, lr=lut_lr * dmodel_lr_scale,
                                      betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0))
         # Muon groups (matrix params, grouped by shape for stacking)
+        # [lut_nanochat] matrix_optimizer='adamw': the transformer matrices use AdamW instead of Muon (dense Muon-vs-AdamW
+        # ablation). Same shape grouping; lr gets the same 1/sqrt(dmodel/768) factor as the other AdamW groups (the caller
+        # multiplies by batch_lr_scale); weight decay is constant (the Muon wd schedule only touches kind=='muon' groups).
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
+            if matrix_optimizer == 'adamw':
+                param_groups.append(dict(kind='adamw', is_matrix=True, params=group_params, lr=adamw_matrix_lr * dmodel_lr_scale,
+                                         betas=adamw_matrix_betas, eps=1e-8, weight_decay=adamw_matrix_wd))
+                continue
             param_groups.append(dict(
                 kind='muon', params=group_params, lr=matrix_lr,
-                momentum=0.95, ns_steps=5, beta2=0.9, weight_decay=weight_decay,
+                momentum=0.95, ns_steps=5, beta2=0.9, weight_decay=weight_decay, is_matrix=True,
             ))
 
         optimizer = MuonAdamW(param_groups)
