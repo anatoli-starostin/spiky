@@ -2,7 +2,7 @@
 
 This area of the [Spiky wiki](../README.md) is a guide to what was tried with lookup-table (LUT) models in this repository: the LUT primitives, how they are optimised, the architectures built from them, and the problems around them. Each page tells the story at an abstract level (ideas, models, math, what worked and what did not) and links to the code, runs and notes in this repository for the details. Pages carry evidence labels (see [`CONVENTIONS.md`](../CONVENTIONS.md)), so start with the section that matches your interest from the map below.
 
-**Status: in progress.** The lookup table primitives and the optimisation pages are written; the architectures are written and the lookup-related problems are still a stub.
+**Status: in progress.** The lookup table primitives and the optimisation pages are written; the architectures and the lookup-related problems (lutwalker2d) are written.
 
 ## Where it all started
 
