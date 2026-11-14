@@ -8,7 +8,7 @@ SpNet is the simulator of spiking neural networks in [Spiky](https://github.com/
 
 - [Model and usage](model-and-usage.md): neurons, synapses, delays, STDP, synapse growth, and the sequence of calls that builds and runs a network.
 - [The math](math.md): the equations as implemented (neuron, delays, STDP, weight update) and, element by element, where they agree with Izhikevich's original program and where they differ.
-- [The SpNet notebook](notebook.md): what `spnet.ipynb` builds and what its outputs show.
+- [`spnet.ipynb`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/workbooks/spnet.ipynb): a notebook that builds a network of one million neurons and about 91 million synapses and runs it on a GPU.
 
 ## Known and unknown
 
