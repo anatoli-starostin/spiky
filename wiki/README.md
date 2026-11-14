@@ -8,7 +8,6 @@ A guide to what was tried with lookup-table (LUT) models in this repository: the
 
 - **Thesis** (Izhikevich, *Spiking Manifesto*, 2025): the brain encodes information in the order of spikes; algorithms based on sorting and permutations can compete with matrix multiplication.
 - **Primitive:** the differentiable lookup table, an abstract model of changes in spiking activity, without modelling spiking neurons.
-- **Bet:** spikes are very energy efficient; an abstract LUT primitive can be equally efficient, especially on dedicated lookup hardware, with some gain on GPUs too.
 
 ## What we need from the primitive
 
