@@ -8,7 +8,7 @@ The lutwalker2d experiment: solving the walker2d control problem with lookup tab
 
 ## Planned sources
 
-Branches and folders in [`SOURCES.md`](../SOURCES.md) that feed this page (not yet extracted):
+Branches and folders that will feed this page:
 
 - `experiments/walker2d-lut` (main)
 - `research/walker2d-lut`, `live/walker2d-viz`, `sync/walker2d-viz-from-live` (not yet reviewed)

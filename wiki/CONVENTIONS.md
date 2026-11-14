@@ -3,7 +3,6 @@
 ## Principles
 
 - **Abstract story, concrete links.** Pages explain ideas, models and math at a readable level; code, runs and raw numbers live in the source repos and are linked, not copied.
-- **Nothing is left behind.** Every piece of knowledge found in a source we analyse lands somewhere in the wiki unless it is explicitly dropped by an editorial decision. Drops are recorded in [`SOURCES.md`](SOURCES.md).
 - **Models and math over particular numbers.** Report headline results and what they show; avoid big result tables unless the comparison is the point.
 - **Slow and reviewed.** One topic per pull request, reviewed by a maintainer before merge.
 
@@ -39,7 +38,6 @@ Plain markdown with LaTeX, rendered by GitHub.
 
 - Cite sources as links to the repository, **pinned to a branch or commit**. For branches that may be deleted, prefer a commit URL.
 - Use relative links between wiki pages.
-- Keep [`SOURCES.md`](SOURCES.md) in sync: tick a source when its content has landed in the wiki, and link the pull request.
 - Do not put secrets, keys, or private correspondence in the wiki.
 
 ## Terms
