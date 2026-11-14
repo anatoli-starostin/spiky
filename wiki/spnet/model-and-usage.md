@@ -4,7 +4,9 @@ What the simulator computes and how to drive it. Everything here is read from th
 
 ## Idea / model
 
-The architecture document describes SpNet as an implementation of the spiking network model of the polychronization paper (Izhikevich, 2003), with neuron dynamics, STDP learning and no backpropagation ([architecture](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/doc/spiky/spiky_highlevel_architecture.md)). Time is discrete: the network advances in *ticks*, and a spike emitted by a neuron reaches its targets after the delay of each synapse.
+The equations as implemented, and a comparison with Izhikevich's original program (links to its code on his website), are on the [math page](math.md); this page keeps the parameters and the usage.
+
+The architecture document describes SpNet as an implementation of the spiking network model of the polychronization paper (Izhikevich, Neural Computation 2006; the document says 2003), with neuron dynamics, STDP learning and no backpropagation ([architecture](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/doc/spiky/spiky_highlevel_architecture.md)). Time is discrete: the network advances in *ticks*, and a spike emitted by a neuron reaches its targets after the delay of each synapse.
 
 **Neurons.** Each neuron type is a [`NeuronMeta`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet/spnet.py#L12-L40) with the Izhikevich equations (as in the comment of the class)
 
@@ -30,7 +32,7 @@ The native engine must be built (`pip install -v ./native/spiky`, step 4b of the
 4. `spnet.process_ticks(...)` advances the network by a number of ticks with input spikes (dense, or sparse as a list of neuron identifiers per tick) and `do_train` switching STDP on or off.
 5. `export_neuron_data` returns the recorded spikes or voltages of chosen neurons per tick; `export_input_synaptic_weights` and `export_synapses` read the weights back.
 
-Tests are run with `python run_tests_with_different_seeds.py` in [`src/spiky/spnet/tests`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet/tests): growth, topology and math tests on CPU and GPU, float32 and int32, two seeds. The runtime test is written to compare spikes, voltages and synaptic weights with reference files (CSV) next to it; the test name suggests the reference is the original Izhikevich model, which the repository does not state.
+Tests are run with `python run_tests_with_different_seeds.py` in [`src/spiky/spnet/tests`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet/tests): growth, topology and math tests on CPU and GPU, float32 and int32, two seeds. The runtime test is written to compare spikes, voltages and synaptic weights with reference files (CSV) next to it; the test says its parameters match an `izhikevitch_model.cpp` ([test](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet/tests/test_izhikevitch_runtime.py#L49)) that is not in the repository, so the origin of the reference files is not recorded.
 
 ## Open ideas
 

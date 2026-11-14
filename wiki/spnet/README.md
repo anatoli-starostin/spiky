@@ -7,6 +7,7 @@ SpNet is the simulator of spiking neural networks in [Spiky](https://github.com/
 ## Pages
 
 - [Model and usage](model-and-usage.md): neurons, synapses, delays, STDP, synapse growth, and the sequence of calls that builds and runs a network.
+- [The math](math.md): the equations as implemented (neuron, delays, STDP, weight update) and, element by element, where they agree with Izhikevich's original program and where they differ.
 - [The SpNet notebook](notebook.md): what `spnet.ipynb` builds and what its outputs show.
 
 ## Known and unknown
@@ -17,6 +18,7 @@ SpNet is the simulator of spiking neural networks in [Spiky](https://github.com/
 
 ## Sources
 
+- Izhikevich's original program: [Polychronization: Computation With Spikes](https://www.izhikevich.org/publications/spnet.htm) with [`spnet.m`](https://www.izhikevich.org/publications/spnet.m) and [`spnet.cpp`](https://www.izhikevich.org/publications/spnet.cpp); archived copies are linked on the [math page](math.md#the-original).
 - [Spiky programming guide](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/doc/spiky/programming_guide.md), sections SPNet and Synapse Growth; [architecture diagram](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/doc/spiky/spiky_highlevel_architecture.md).
 - [`spnet.py`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet/spnet.py) and [`synapse_growth.py`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/util/synapse_growth.py); the CUDA code is in [`native/spiky/spnet`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/native/spiky/spnet) and [`native/spiky/synapse_growth`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/native/spiky/synapse_growth).
 - [`spnet.ipynb`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/workbooks/spnet.ipynb) and its paired [`spnet.py`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/workbooks/spnet.py); tests in [`src/spiky/spnet/tests`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet/tests).
