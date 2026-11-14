@@ -1,6 +1,6 @@
 # Basic optimisers applied to LUTs
 
-Short notes on the standard optimisers we tried on LUT parameters (SGD, Adam, Lion, Muon) and what they do on table rows. Each technique is one short subsection with a few sentences and links. Optimisers built for the LUT structure (per-row, per-cell, bit latents) are on [Special LUT optimisers](special-optimisers.md); learning rates, schedules and precision are on [Training efficiency](training-efficiency.md). No evaluation numbers are given here (the evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages); most nanochat runs at `e85a5ce` are single seeds with the old evaluation (see [`CONVENTIONS.md`](../CONVENTIONS.md)), and many were killed early.
+Short notes on the standard optimisers we tried on LUT parameters (SGD, Adam, Lion, Muon) and what they do on table rows. Each technique is one short subsection with a few sentences and links. Optimisers built for the LUT structure (per-row, per-cell, bit latents) are on [Special LUT optimisers](special-optimisers.md); learning rates, schedules and precision are on [Training efficiency](training-efficiency.md). No evaluation numbers are given here (the evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages); most nanochat runs at `e85a5ce` are single seeds with the old evaluation (see [`CONVENTIONS.md`](../../CONVENTIONS.md)), and many were killed early.
 
 ## Contents
 

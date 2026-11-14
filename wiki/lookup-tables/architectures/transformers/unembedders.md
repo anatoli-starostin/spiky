@@ -2,7 +2,7 @@
 
 The output layer of a language model maps the hidden width to the vocabulary: a $D \times V$ matrix, 12.6M weights at width 384 and vocabulary 32768, read in full for every token. It is one of the two matrix multiplications that remain in a LUT model with LUT SDPA (the other is the attention score, see [LUT attention](lut-attention.md#lut-sdpa)). The June 2026 report names a LUT-based unembedder as an open problem: the difficulty is producing magnitude-coded logits over 32768 classes from a rank-coded representation, in a way that keeps the gradient signal a cross-entropy loss expects. This page collects what we tried: LUT heads of several kinds, code scoring, a vector-quantised vocabulary, weight tying, and why the plain linear head stayed.
 
-**Scales.** The early heads were tried at byte level (vocabulary 257, context 32 or 128), where a direct table over the vocabulary is cheap, and at the NanoChat BPE scale (vocabulary 32768, context 512, the fast test scale of [Transformers](README.md)), where it is not. Numbers are old-evaluation numbers of [`CONVENTIONS.md`](../../CONVENTIONS.md), single seeds, comparable only inside their own batch of runs; byte-level numbers are validation cross-entropy, BPE numbers bits per byte.
+**Scales.** The early heads were tried at byte level (vocabulary 257, context 32 or 128), where a direct table over the vocabulary is cheap, and at the NanoChat BPE scale (vocabulary 32768, context 512, the fast test scale of [Transformers](README.md)), where it is not. Numbers are old-evaluation numbers of [`CONVENTIONS.md`](../../../CONVENTIONS.md), single seeds, comparable only inside their own batch of runs; byte-level numbers are validation cross-entropy, BPE numbers bits per byte.
 
 ## Idea / model
 

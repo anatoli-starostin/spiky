@@ -1,6 +1,6 @@
 # Ternary routing
 
-Hyperplane routing whose weights are only $-1$, $0$ or $+1$: the address is then computed with adds and subtracts alone. The page tells the whole story: the construction, the standardised variant, and what we found about making the weights sparse. The place of ternary routing among the other address mechanisms is in [Hashing mechanics 5](hashing.md#5-ternary-approach); the write-up of the idea is the paper *Ternary Anchoring Lookup Tables* ([LaTeX source][talut-tex], [PDF][talut-pdf]). The evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages. All runs are single seeds with the old evaluation (see [`CONVENTIONS.md`](../CONVENTIONS.md)).
+Hyperplane routing whose weights are only $-1$, $0$ or $+1$: the address is then computed with adds and subtracts alone. The page tells the whole story: the construction, the standardised variant, and what we found about making the weights sparse. The place of ternary routing among the other address mechanisms is in [Hashing mechanics 5](hashing.md#5-ternary-approach); the write-up of the idea is the paper *Ternary Anchoring Lookup Tables* ([LaTeX source][talut-tex], [PDF][talut-pdf]). The evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages. All runs are single seeds with the old evaluation (see [`CONVENTIONS.md`](../../CONVENTIONS.md)).
 
 ## Contents
 

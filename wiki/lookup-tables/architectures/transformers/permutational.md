@@ -2,7 +2,7 @@
 
 A transformer in which every decision is based only on the rankings of vectors, with no real magnitudes passing between blocks. This follows the pure permutational line of the *Spiking Manifesto*: what a spiking population computes is the mapping from the order of its input spikes to the order of its output spikes, so the model should read orders and write orders. The line was worked on mainly in April and May 2026, overlapping with [LUT attention](lut-attention.md), and ended with a compromise: magnitudes are allowed at a few interfaces, and a second, Euclidean residual stream (the dual stream) carries them.
 
-**Scales.** The pure line started at byte level (vocabulary 257; context 32, then 128) and moved on 2026-04-29 to the NanoChat BPE setting with vocabulary 32768 and context 512 (the fast test scale of [Transformers](README.md)). All numbers on this page are old-evaluation numbers of [`CONVENTIONS.md`](../../CONVENTIONS.md), single seeds, comparable only inside their own batch of runs. Byte-level numbers are validation cross-entropy (nats), BPE numbers are bits per byte.
+**Scales.** The pure line started at byte level (vocabulary 257; context 32, then 128) and moved on 2026-04-29 to the NanoChat BPE setting with vocabulary 32768 and context 512 (the fast test scale of [Transformers](README.md)). All numbers on this page are old-evaluation numbers of [`CONVENTIONS.md`](../../../CONVENTIONS.md), single seeds, comparable only inside their own batch of runs. Byte-level numbers are validation cross-entropy (nats), BPE numbers are bits per byte.
 
 ## Idea / model
 

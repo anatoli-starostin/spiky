@@ -1,5 +1,7 @@
 # Wiki conventions
 
+These conventions apply to the whole Spiky wiki, in every area.
+
 ## Principles
 
 - **Abstract story, concrete links.** Pages explain ideas, models and math at a readable level; code, runs and raw numbers live in the source repos and are linked, not copied.

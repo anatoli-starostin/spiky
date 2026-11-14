@@ -1,6 +1,6 @@
 # 3. LUT architectures
 
-This section describes the model families built on lookup-table layers: what each one computes, how well it worked, and what we know so far about the representations the models learn (a question we are only starting to answer). Replacing a matrix multiplication by a table lookup is not a drop-in swap, so every page starts from the idea, then points to the code ("Where it lives", links pinned to commits of [`anatoli-starostin/spiky`](https://github.com/anatoli-starostin/spiky)). Numbers state their setting (for language models the context length and vocabulary size), and those from old branches carry the evaluation caveat of [`CONVENTIONS.md`](../CONVENTIONS.md). The picture in short comes first; the lists below lead to the details.
+This section describes the model families built on lookup-table layers: what each one computes, how well it worked, and what we know so far about the representations the models learn (a question we are only starting to answer). Replacing a matrix multiplication by a table lookup is not a drop-in swap, so every page starts from the idea, then points to the code ("Where it lives", links pinned to commits of [`anatoli-starostin/spiky`](https://github.com/anatoli-starostin/spiky)). Numbers state their setting (for language models the context length and vocabulary size), and those from old branches carry the evaluation caveat of [`CONVENTIONS.md`](../../CONVENTIONS.md). The picture in short comes first; the lists below lead to the details.
 
 ## The picture in short
 

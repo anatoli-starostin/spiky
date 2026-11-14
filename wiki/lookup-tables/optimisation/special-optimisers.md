@@ -1,6 +1,6 @@
 # Special LUT optimisers
 
-Short notes on optimisers designed for the LUT structure: one open idea, the optimisers that exist in the code, and the row-visit-aware and discrete-weight variants that did not beat plain Adam or Lion. This is a research direction, not an established topic: no dedicated LUT optimiser has been shown to beat the standard ones of [Basic optimisers](basic-optimisers.md). Each technique is one short subsection with a few sentences and links. No evaluation numbers are given here (the evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages). Most runs are single seeds at `e85a5ce`, with the old evaluation (see [`CONVENTIONS.md`](../CONVENTIONS.md)), and many were killed early.
+Short notes on optimisers designed for the LUT structure: one open idea, the optimisers that exist in the code, and the row-visit-aware and discrete-weight variants that did not beat plain Adam or Lion. This is a research direction, not an established topic: no dedicated LUT optimiser has been shown to beat the standard ones of [Basic optimisers](basic-optimisers.md). Each technique is one short subsection with a few sentences and links. No evaluation numbers are given here (the evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages). Most runs are single seeds at `e85a5ce`, with the old evaluation (see [`CONVENTIONS.md`](../../CONVENTIONS.md)), and many were killed early.
 
 ## Contents
 

@@ -1,6 +1,6 @@
 # Normalisation
 
-Short notes on the normalisations we tried around LUTs: standard LayerNorm (which works) with QK norm as an example, the norm in front of the tables, and a handful of output-side and weight-side normalisations that were tried once. Each technique is one short subsection with a few sentences and links. No evaluation numbers are given here (the evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages); many nanochat runs at `e85a5ce` are single seeds with the old evaluation (see [`CONVENTIONS.md`](../CONVENTIONS.md)), and many were killed early, so "equal" means equal along the trajectory at the same step.
+Short notes on the normalisations we tried around LUTs: standard LayerNorm (which works) with QK norm as an example, the norm in front of the tables, and a handful of output-side and weight-side normalisations that were tried once. Each technique is one short subsection with a few sentences and links. No evaluation numbers are given here (the evidence is summarised in short paragraphs that link to the [Architectures](../architectures/README.md) pages); many nanochat runs at `e85a5ce` are single seeds with the old evaluation (see [`CONVENTIONS.md`](../../CONVENTIONS.md)), and many were killed early, so "equal" means equal along the trajectory at the same step.
 
 ## Contents
 
