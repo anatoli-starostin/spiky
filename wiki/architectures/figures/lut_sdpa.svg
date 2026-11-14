@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="640" viewBox="0 0 900 640" role="img"><title>LUT SDPA: data flow of one attention layer</title><rect width="900" height="640" fill="#ffffff"/>
+<text x="450.0" y="26.0" font-family="Helvetica, Arial, sans-serif" font-size="17" text-anchor="middle" fill="#1f2933" font-weight="bold">LUT SDPA: one attention layer</text>
+<text x="450.0" y="46.0" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">table sizes are those of the June 2026 LUTGPT recipe</text>
+<rect x="300.0" y="62.0" width="300.0" height="52.0" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="450.0" y="83.4" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">x  (rank-coded stream, width E)</text>
+<text x="450.0" y="100.3" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">a vector whose order is what the tables read</text>
+<rect x="300.0" y="136.0" width="300.0" height="36.0" rx="8" fill="#fef9c3" stroke="#a16207" stroke-width="1.5"/>
+<text x="450.0" y="157.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">MeanAbsNorm</text>
+<polyline points="450.0,114.0 450.0,125.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="450.0,136.0 445.2,124.8 454.8,124.8" fill="#1f2933"/>
+<rect x="70.0" y="218.0" width="330.0" height="62.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="235.0" y="244.4" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">qk_lut  (LUT, nap 4)</text>
+<text x="235.0" y="261.3" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">emits q and k as real vectors</text>
+<rect x="560.0" y="218.0" width="270.0" height="76.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="695.0" y="243.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">v_lut  (LUT, nap 6)</text>
+<text x="695.0" y="259.9" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">emits v, blended by attention scores;</text>
+<text x="695.0" y="276.8" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">the blend is read permutationally</text>
+<polyline points="450.0,172.0 450.0,196.0" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="235.0,196.0 695.0,196.0" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="235.0,196.0 235.0,207.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="235.0,218.0 230.2,206.8 239.8,206.8" fill="#1f2933"/>
+<polyline points="695.0,196.0 695.0,207.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="695.0,218.0 690.2,206.8 699.8,206.8" fill="#1f2933"/>
+<rect x="62.0" y="304.0" width="360.0" height="240.0" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text x="72.0" y="536.0" font-family="Helvetica, Arial, sans-serif" font-size="12" text-anchor="start" fill="#52606d" font-style="italic">classic scaled-dot-product attention</text>
+<rect x="70.0" y="330.0" width="330.0" height="42.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="235.0" y="346.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">LayerNorm on q and k</text>
+<text x="235.0" y="363.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">width d_qk each</text>
+<rect x="70.0" y="392.0" width="330.0" height="36.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="235.0" y="413.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">RoPE on q and k</text>
+<rect x="70.0" y="450.0" width="330.0" height="76.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="235.0" y="475.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">scores = q kᵀ / √d_qk</text>
+<text x="235.0" y="491.9" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">causal mask, then softmax</text>
+<text x="235.0" y="508.8" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">over the earlier tokens</text>
+<polyline points="235.0,280.0 235.0,319.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="235.0,330.0 230.2,318.8 239.8,318.8" fill="#1f2933"/>
+<polyline points="235.0,372.0 235.0,381.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="235.0,392.0 230.2,380.8 239.8,380.8" fill="#1f2933"/>
+<polyline points="235.0,428.0 235.0,439.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="235.0,450.0 230.2,438.8 239.8,438.8" fill="#1f2933"/>
+<rect x="560.0" y="456.0" width="270.0" height="64.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="695.0" y="483.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">weighted sum of v</text>
+<text x="695.0" y="500.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">weights = the softmax of the scores</text>
+<polyline points="400.0,488.0 549.9,488.0" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="560.0,488.0 548.8,492.8 548.8,483.2" fill="#1f2933"/>
+<polyline points="695.0,294.0 695.0,445.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="695.0,456.0 690.2,444.8 699.8,444.8" fill="#1f2933"/>
+<rect x="560.0" y="552.0" width="270.0" height="56.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="695.0" y="575.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">out_proj  (LUT, nap 7)</text>
+<text x="695.0" y="592.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">back to width E</text>
+<polyline points="695.0,520.0 695.0,541.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="695.0,552.0 690.2,540.8 699.8,540.8" fill="#1f2933"/>
+<rect x="300.0" y="557.0" width="190.0" height="46.0" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="395.0" y="575.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">x + out_proj(...)</text>
+<text x="395.0" y="592.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">next block</text>
+<polyline points="560.0,580.0 500.1,580.0" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="490.0,580.0 501.2,575.2 501.2,584.8" fill="#1f2933"/>
+<polyline points="300.0,88.0 24.0,88.0 24.0,580.0" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="5 4"/>
+<polyline points="24.0,580.0 289.9,580.0" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="5 4"/>
+<polygon points="300.0,580.0 288.8,584.8 288.8,575.2" fill="#15803d"/>
+<text x="32.0" y="340.0" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" fill="#15803d">skip</text>
+<rect x="725.0" y="340.0" width="12.0" height="12.0" rx="2" fill="#dbeafe" stroke="#2563eb" stroke-width="1.2"/>
+<text x="743.0" y="350.5" font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="start" fill="#52606d">lookup table</text>
+<rect x="725.0" y="360.0" width="12.0" height="12.0" rx="2" fill="#f1f5f9" stroke="#64748b" stroke-width="1.2"/>
+<text x="743.0" y="370.5" font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="start" fill="#52606d">classic operation</text>
+<rect x="725.0" y="380.0" width="12.0" height="12.0" rx="2" fill="#dcfce7" stroke="#15803d" stroke-width="1.2"/>
+<text x="743.0" y="390.5" font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="start" fill="#52606d">residual stream</text>
+</svg>

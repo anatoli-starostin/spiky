@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560" role="img"><title>Wiring of the convolutional LUT layers</title><rect width="980" height="560" fill="#ffffff"/>
+<text x="490.0" y="26.0" font-family="Helvetica, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1f2933" font-weight="bold">Two ways to wire a LUT layer to an image</text>
+<polyline points="490.0,44.0 490.0,520.0" fill="none" stroke="#cbd5e1" stroke-width="1.2" stroke-linejoin="round" stroke-dasharray="4 4"/>
+<text x="245.0" y="58.0" font-family="Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="middle" fill="#1f2933" font-weight="bold">Conv2DLUT: one table set shared by every patch</text>
+<rect x="70.0" y="76.0" width="350.0" height="46.0" rx="8" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="245.0" y="94.4" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">input  [B, C, H, W]</text>
+<text x="245.0" y="111.3" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">image or feature map</text>
+<rect x="70.0" y="148.0" width="350.0" height="52.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="245.0" y="169.6" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">unfold  (kernel k, stride s)</text>
+<text x="245.0" y="185.9" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">P = Hp x Wp patches, each a vector of C k k numbers</text>
+<polyline points="245.0,122.0 245.0,137.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="245.0,148.0 240.2,136.8 249.8,136.8" fill="#1f2933"/>
+<rect x="70.0" y="226.0" width="350.0" height="86.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="245.0" y="256.5" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">MultiHeadLut, applied to every patch</text>
+<text x="245.0" y="272.8" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">same anchor pairs and tables at every position</text>
+<text x="245.0" y="289.0" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">(weights shared, as in a convolution)</text>
+<polyline points="245.0,200.0 245.0,215.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="245.0,226.0 240.2,214.8 249.8,214.8" fill="#1f2933"/>
+<rect x="70.0" y="338.0" width="350.0" height="52.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="245.0" y="359.6" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">output per patch  [B P, out_channels]</text>
+<text x="245.0" y="375.9" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">sum of the rows read in each head</text>
+<polyline points="245.0,312.0 245.0,327.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="245.0,338.0 240.2,326.8 249.8,326.8" fill="#1f2933"/>
+<rect x="70.0" y="416.0" width="350.0" height="46.0" rx="8" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="245.0" y="434.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">reshape  [B, out_channels, Hp, Wp]</text>
+<text x="245.0" y="451.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">next layer or pooling</text>
+<polyline points="245.0,390.0 245.0,405.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="245.0,416.0 240.2,404.8 249.8,404.8" fill="#1f2933"/>
+<text x="735.0" y="58.0" font-family="Helvetica, Arial, sans-serif" font-size="13.5" text-anchor="middle" fill="#1f2933" font-weight="bold">ProjectionLUT: one head per patch</text>
+<rect x="560.0" y="76.0" width="350.0" height="46.0" rx="8" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="735.0" y="94.4" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">input  [B, H, W]</text>
+<text x="735.0" y="111.3" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">one flat grid</text>
+<rect x="560.0" y="148.0" width="350.0" height="52.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="735.0" y="169.6" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">patch windows (kernel k, stride s)</text>
+<text x="735.0" y="185.9" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">head p may use only the cells of window p as anchors</text>
+<polyline points="735.0,122.0 735.0,137.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="735.0,148.0 730.2,136.8 739.8,136.8" fill="#1f2933"/>
+<rect x="560.0" y="226.0" width="350.0" height="86.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="735.0" y="256.5" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">MultiHeadLut with P heads</text>
+<text x="735.0" y="272.8" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">each patch has its own tables</text>
+<text x="735.0" y="289.0" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">(no sharing across positions)</text>
+<polyline points="735.0,200.0 735.0,215.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="735.0,226.0 730.2,214.8 739.8,214.8" fill="#1f2933"/>
+<rect x="560.0" y="338.0" width="350.0" height="52.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="735.0" y="359.6" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">per-patch outputs  [B, P, O]</text>
+<text x="735.0" y="375.9" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">O numbers per patch</text>
+<polyline points="735.0,312.0 735.0,327.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="735.0,338.0 730.2,326.8 739.8,326.8" fill="#1f2933"/>
+<rect x="560.0" y="416.0" width="350.0" height="62.0" rx="8" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="735.0" y="434.5" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">optional fold: scatter-add</text>
+<text x="735.0" y="450.8" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">each patch writes its O numbers to O of the</text>
+<text x="735.0" y="467.0" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">cells of its window in an output grid [B, H, W]</text>
+<polyline points="735.0,390.0 735.0,405.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="735.0,416.0 730.2,404.8 739.8,404.8" fill="#1f2933"/>
+<text x="490.0" y="548.0" font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#52606d">Colour: blue = lookup table, grey = reshaping. Layout is schematic; code in the page.</text>
+</svg>
