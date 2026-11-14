@@ -4,7 +4,7 @@ A guide to what was tried with lookup-table (LUT) models in this repository: the
 
 **Status: in progress.** The lookup table primitives and the optimisation pages are written; the architectures are written and the lookup-related problems are still a stub.
 
-## Thesis and primitive
+## Where it all started
 
 - **Thesis** (Izhikevich, *Spiking Manifesto*, 2025): the brain encodes information in the order of spikes; algorithms based on sorting and permutations can compete with matrix multiplication.
 - **Primitive:** the differentiable lookup table, an abstract model of changes in spiking activity, without modelling spiking neurons.
