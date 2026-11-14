@@ -34,6 +34,7 @@ Plain markdown with LaTeX, rendered by GitHub.
 - No custom macros or `\newcommand`.
 - Put subscripts only inside math; write code identifiers in backticks.
 - Avoid `|` inside math in tables (use `\lvert`, `\rvert`, or move the formula out of the table).
+- Two or more `_` in one inline span can be eaten as emphasis. If the rendered page shows a raw `$`, write the span as $`...`$ (backticks inside the dollars) or move it to a display block.
 - After each formula, give a one-line plain reading, and define every symbol on first use.
 
 ## Sources and links
