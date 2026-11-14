@@ -60,9 +60,10 @@ The post names none.
 
 ## Sources
 
-- The post: [`WALKER2D_SPIKING_WRITEUP.md`][post].
+- The post: [`WALKER2D_SPIKING_WRITEUP.md`][post]. Its web version was published on GitHub Pages and is currently offline; the last full published version is the [`walker2d-spiking` page at commit `e829dbc6` of the `gh-pages` branch][web].
 - Branch map and runbook: [`experiments/walker2d-lut/README.md`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/experiments/walker2d-lut/README.md) and [`REPRODUCE.md`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/experiments/walker2d-lut/REPRODUCE.md).
 - Construction scripts: [`walker2d-spiking/`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/experiments/walker2d-lut/walker2d-spiking); the live demo stand: [`landing/walker2d-viz`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/landing/walker2d-viz).
 - The earlier research tree (other architectures, SAC, failed fits) is on the branch [`research/walker2d-lut`](https://github.com/anatoli-starostin/spiky/tree/04055f0c264cfd43b8921fc2892e8b4098c218c5); it was not reviewed for this page.
 
 [post]: https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/experiments/walker2d-lut/walker2d-spiking/WALKER2D_SPIKING_WRITEUP.md
+[web]: https://github.com/anatoli-starostin/spiky/blob/e829dbc6aeeba5a0189f290fad25d4b10d2fd469/walker2d-spiking/index.html
