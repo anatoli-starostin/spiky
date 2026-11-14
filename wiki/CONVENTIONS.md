@@ -4,7 +4,7 @@
 
 - **Abstract story, concrete links.** Pages explain ideas, models and math at a readable level; code, runs and raw numbers live in the source repos and are linked, not copied.
 - **Models and math over particular numbers.** Report headline results and what they show; avoid big result tables unless the comparison is the point.
-- **Slow and reviewed.** One topic per pull request, reviewed by a maintainer before merge.
+- **Slow and reviewed.** One topic per pull request, reviewed by the lead before merge.
 
 ## Page template
 
