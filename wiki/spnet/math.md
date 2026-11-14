@@ -52,6 +52,8 @@ Here $s_j(t)$ is 1 if neuron $j$ spikes at tick $t$ and 0 otherwise. The current
 
 ## STDP
 
+The STDP rule of Spiky's SpNet is taken from Izhikevich's `spnet` code, the original MATLAB and C programs of the [polychronization page](https://www.izhikevich.org/publications/spnet.htm); the documented differences are the cut-off of the traces, the schedule of the weight update (per call, not once per 1000 ticks) and a default learning rate that gives half the original amplitudes (table below).
+
 Let $\tau_j(t)$ be the number of ticks since the most recent spike of neuron $j$ up to and including tick $t$ itself, with 0 on the tick of the spike. Only the most recent spike counts, there is no sum over earlier spikes. The two tables of exponentially decaying values are:
 
 $$P(k)=p\rho^{k},\qquad Q(k)=q\rho^{k}$$
