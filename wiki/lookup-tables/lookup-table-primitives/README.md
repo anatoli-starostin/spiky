@@ -1,7 +1,5 @@
 # 1. Lookup table primitives (LUTs)
 
-> **Status: stub.**
-
 The primitive itself: how an input is turned into table addresses (hashing), how the output is formed from the rows that were read (readout), and how gradients flow back through both (backpropagation). The three pages are tightly linked; the third explains how gradients are calculated for the mechanisms of the first two.
 
 - [Hashing mechanics](hashing.md): pairwise comparisons, input projections, ...
