@@ -14,7 +14,7 @@ Reading: the number of tables is $N=32$ and the entry of output $o$ in the row $
 
 **Quantisation at the interfaces.** A spiking network has discrete inputs and outputs, so the policy was fine-tuned with quantisers in the loop ([exp23](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/experiments/walker2d-lut/exp23_qat_obs_quant)): the observation goes into 128 buckets through one monotone map shared by all coordinates (shared because the table compares coordinates with each other), and the action is snapped to 22 levels. The table entries themselves stay in float32.
 
-**The network** is built in closed form on the SpNet spiking engine ([`src/spiky/spnet`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet)), in three stages (2,889 neurons and 25,953 synapses in total):
+**The network** is built in closed form on the SpNet spiking engine (described in [SpNet](../../spnet/README.md); code: [`src/spiky/spnet`](https://github.com/anatoli-starostin/spiky/tree/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/src/spiky/spnet)), in three stages (2,889 neurons and 25,953 synapses in total):
 
 1. *Order detection.* Each coordinate becomes a spike whose time encodes its value (larger value, earlier spike); winner-take-all comparator pairs decide the 192 address bits from the order of arrival.
 2. *Lookup.* One neuron per table cell (2,048 cells); a cell fires only when all 6 address spikes reach it.
