@@ -2,19 +2,16 @@
 
 SpNet is the simulator of spiking neural networks in [Spiky](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/README.md): Izhikevich neurons, synapses with delays and spike-timing-dependent plasticity (STDP), and connections created by a spatial *synapse growth* engine. It runs on CUDA (and on CPU) behind a PyTorch-compatible Python class, `SpikingNet`. Its STDP rule is taken from Izhikevich's `spnet` code (the original MATLAB and C programs of the [polychronization page](https://www.izhikevich.org/publications/spnet.htm)), with differences listed on the [math page](math.md#original-and-spiky-element-by-element). It is the engine of the polychronization model that inspired the lookup-table work, and it is also the engine on which the [lutwalker2d](../lookup-tables/lookup-related-problems/luts-to-spikes.md) spiking network runs.
 
-**Status: in progress.** The pages below describe what exists and what the notebook demonstrates. Apart from the guide, the notebook, the tests and the lutwalker2d construction, the repository has no experiments, results or notes on SpNet, so this area is short on purpose.
-
 ## Pages
 
 - [Model and usage](model-and-usage.md): neurons, synapses, delays, STDP, synapse growth, and the sequence of calls that builds and runs a network.
 - [The math](math.md): the equations as implemented (neuron, delays, STDP, weight update) and, element by element, where they agree with Izhikevich's original program and where they differ.
 - [`spnet.ipynb`](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/workbooks/spnet.ipynb): a notebook that builds a network of one million neurons and about 91 million synapses and runs it on a GPU.
 
-## Known and unknown
+## What the docs and notebook show
 
-- **Known (from the code and the docs):** the neuron equations and parameters, the synapse parameters, the growth commands, the call sequence, and the tests that compare the simulator against reference spike, voltage and weight files.
-- **Known (from the notebook):** a network of one million neurons and about 91 million synapses fits and runs on one GPU, and the notebook records its spike counts and per-tick times.
-- **Unknown, not written down in the repository:** what STDP learning does to such a network over a long time, any measure of the network's behaviour beyond spike counts, a comparison with another simulator, and the GPU used for the notebook run.
+- **Code and docs:** the neuron equations and parameters, the synapse parameters, the growth commands, the call sequence, and the tests that compare the simulator against reference spike, voltage and weight files.
+- **Notebook:** a network of one million neurons and about 91 million synapses fits and runs on one GPU, and the notebook records its spike counts and per-tick times.
 
 ## Sources
 
