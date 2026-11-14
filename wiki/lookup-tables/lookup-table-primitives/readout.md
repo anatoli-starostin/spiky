@@ -211,7 +211,7 @@ Reading: for large $\tau$ this is the plain sum, for small $\tau$ it is $\mathrm
 
 **Status:** experimental.
 
-> **TODO (Architectures):** comparison with the plain sum (reinforcement-learning actor on walker2d).
+On the Walker2d control task the readout was used for the actor of the [lutwalker2d](../lookup-related-problems/luts-to-spikes.md) experiment. The exp19 README tabulates a plain-sum actor (return 5488.4 ± 179.9, three seeds) next to the log-sum-exp actor (5403.8 ± 34.4, three seeds, *claimed*, runs not carried on main); the soft maximum gave no gain, and the learned temperature rose from its initial value toward the sum in every one of those runs ([exp19 README](https://github.com/anatoli-starostin/spiky/blob/0ee6c6a7807bddae9f66a6f055b6452dba6816a4/experiments/walker2d-lut/exp19_lut-lse-expmlpcrit-t32/README.md)).
 
 #### 3.2 Sparse-output rows
 
