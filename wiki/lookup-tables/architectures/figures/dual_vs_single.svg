@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="640" viewBox="0 0 980 640" role="img"><title>Dual stream against single stream</title><rect width="980" height="640" fill="#ffffff"/>
+<text x="490.0" y="26.0" font-family="Helvetica, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1f2933" font-weight="bold">Dual stream (April to July 2026) against single stream (from July 2026)</text>
+<text x="235.0" y="56.0" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1f2933" font-weight="bold">Dual stream: two residual streams</text>
+<rect x="150.0" y="70.0" width="170.0" height="36.0" rx="8" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="235.0" y="91.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">tokens</text>
+<rect x="150.0" y="124.0" width="170.0" height="40.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="235.0" y="139.4" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">embedding</text>
+<text x="235.0" y="156.3" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">width E</text>
+<polyline points="235.0,106.0 235.0,113.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="235.0,124.0 230.2,112.8 239.8,112.8" fill="#1f2933"/>
+<rect x="40.0" y="186.0" width="270.0" height="232.0" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text x="50.0" y="410.0" font-family="Helvetica, Arial, sans-serif" font-size="12" text-anchor="start" fill="#52606d" font-style="italic">block, repeated N times</text>
+<rect x="60.0" y="210.0" width="230.0" height="78.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="175.0" y="236.5" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">attention block</text>
+<text x="175.0" y="252.8" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">rank-coded stream x, width E</text>
+<text x="175.0" y="269.0" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">qk_lut, v_lut, SDPA, out_proj</text>
+<rect x="60.0" y="312.0" width="230.0" height="46.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="175.0" y="330.6" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">residual_lut</text>
+<text x="175.0" y="346.9" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">E to D, a table read</text>
+<polyline points="235.0,164.0 235.0,199.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="235.0,210.0 230.2,198.8 239.8,198.8" fill="#1f2933"/>
+<polyline points="175.0,288.0 175.0,301.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="175.0,312.0 170.2,300.8 179.8,300.8" fill="#1f2933"/>
+<text x="40.0" y="436.0" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" fill="#6d28d9">E stream (rank-coded): x + out_proj, as in the LUT SDPA figure</text>
+<rect x="350.0" y="124.0" width="120.0" height="40.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="410.0" y="139.8" font-family="Helvetica, Arial, sans-serif" font-size="12" text-anchor="middle" fill="#1f2933" font-weight="bold">emb_resid_lut</text>
+<text x="410.0" y="155.4" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="middle" fill="#52606d">E to D</text>
+<polyline points="320.0,144.0 339.9,144.0" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="350.0,144.0 338.8,148.8 338.8,139.2" fill="#1f2933"/>
+<polyline points="290.0,335.0 410.0,335.0" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linejoin="round"/>
+<polyline points="410.0,335.0 410.0,459.9" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="410.0,470.0 405.2,458.8 414.8,458.8" fill="#15803d"/>
+<polyline points="410.0,164.0 410.0,335.0" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linejoin="round"/>
+<circle cx="410" cy="335" r="9" fill="#ffffff" stroke="#15803d" stroke-width="1.6"/>
+<text x="410.0" y="339.5" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#15803d" font-weight="bold">+</text>
+<text x="420.0" y="260.0" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" fill="#15803d" font-weight="bold">D stream:</text>
+<text x="420.0" y="275.0" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" fill="#15803d">Euclidean sum,</text>
+<text x="420.0" y="290.0" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="start" fill="#15803d">width D</text>
+<rect x="300.0" y="470.0" width="220.0" height="36.0" rx="8" fill="#fef9c3" stroke="#a16207" stroke-width="1.5"/>
+<text x="410.0" y="491.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">LayerNorm</text>
+<rect x="300.0" y="524.0" width="220.0" height="40.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="410.0" y="539.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">Linear unembedder</text>
+<text x="410.0" y="556.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">D to vocabulary</text>
+<polyline points="410.0,506.0 410.0,513.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="410.0,524.0 405.2,512.8 414.8,512.8" fill="#1f2933"/>
+<text x="755.0" y="56.0" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1f2933" font-weight="bold">Single stream</text>
+<polyline points="560.0,66.0 560.0,600.0" fill="none" stroke="#cbd5e1" stroke-width="1.2" stroke-linejoin="round" stroke-dasharray="4 4"/>
+<rect x="670.0" y="70.0" width="170.0" height="36.0" rx="8" fill="#ffffff" stroke="#334155" stroke-width="1.5"/>
+<text x="755.0" y="91.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">tokens</text>
+<rect x="670.0" y="124.0" width="170.0" height="40.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="755.0" y="139.4" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">embedding</text>
+<text x="755.0" y="156.3" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">width D</text>
+<polyline points="755.0,106.0 755.0,113.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="755.0,124.0 750.2,112.8 759.8,112.8" fill="#1f2933"/>
+<rect x="600.0" y="186.0" width="310.0" height="232.0" rx="10" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 4"/>
+<text x="610.0" y="410.0" font-family="Helvetica, Arial, sans-serif" font-size="12" text-anchor="start" fill="#52606d" font-style="italic">block, repeated N times</text>
+<rect x="620.0" y="210.0" width="270.0" height="78.0" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+<text x="755.0" y="236.5" font-family="Helvetica, Arial, sans-serif" font-size="12.5" text-anchor="middle" fill="#1f2933" font-weight="bold">attention block (the FFN line adds an FFN)</text>
+<text x="755.0" y="252.8" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">one residual stream x, width D</text>
+<text x="755.0" y="269.0" font-family="Helvetica, Arial, sans-serif" font-size="11.0" text-anchor="middle" fill="#52606d">each sub-block adds its output to x</text>
+<polyline points="755.0,164.0 755.0,199.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="755.0,210.0 750.2,198.8 759.8,198.8" fill="#1f2933"/>
+<polyline points="890.0,249.0 906.0,249.0 906.0,330.0 755.0,330.0" fill="none" stroke="#15803d" stroke-width="1.6" stroke-linejoin="round" stroke-dasharray="5 4"/>
+<rect x="620.0" y="312.0" width="270.0" height="42.0" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="1.5"/>
+<text x="755.0" y="336.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">x + sub-block output</text>
+<polyline points="755.0,288.0 755.0,301.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="755.0,312.0 750.2,300.8 759.8,300.8" fill="#1f2933"/>
+<rect x="645.0" y="470.0" width="220.0" height="36.0" rx="8" fill="#fef9c3" stroke="#a16207" stroke-width="1.5"/>
+<text x="755.0" y="491.9" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933">LayerNorm</text>
+<rect x="645.0" y="524.0" width="220.0" height="40.0" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+<text x="755.0" y="539.5" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1f2933" font-weight="bold">Linear unembedder</text>
+<text x="755.0" y="556.4" font-family="Helvetica, Arial, sans-serif" font-size="11.5" text-anchor="middle" fill="#52606d">D to vocabulary</text>
+<polyline points="755.0,506.0 755.0,513.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="755.0,524.0 750.2,512.8 759.8,512.8" fill="#1f2933"/>
+<polyline points="755.0,354.0 755.0,459.9" fill="none" stroke="#1f2933" stroke-width="1.6" stroke-linejoin="round"/>
+<polygon points="755.0,470.0 750.2,458.8 759.8,458.8" fill="#1f2933"/>
+<text x="490.0" y="616.0" font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#52606d">Colour: blue = lookup table, grey = classic operation, green = Euclidean stream. Layout is schematic.</text>
+</svg>

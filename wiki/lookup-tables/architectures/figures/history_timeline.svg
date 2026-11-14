@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="600" viewBox="0 0 1120 600" role="img"><title>Timeline of the LUT architectures, October 2025 to November 2026</title><rect width="1120" height="600" fill="#ffffff"/>
+<text x="560.0" y="28.0" font-family="Helvetica, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1f2933" font-weight="bold">How the lines moved (bars are approximate, dots are commits or documents)</text>
+<polyline points="215.0,70.0 215.0,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="218.0" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Oct</text>
+<polyline points="277.4,70.0 277.4,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="280.4" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Nov</text>
+<polyline points="337.7,70.0 337.7,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="340.7" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Dec</text>
+<polyline points="400.1,70.0 400.1,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="403.1" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Jan 2026</text>
+<polyline points="462.4,70.0 462.4,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="465.4" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Feb</text>
+<polyline points="518.8,70.0 518.8,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="521.8" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Mar</text>
+<polyline points="581.1,70.0 581.1,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="584.1" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Apr</text>
+<polyline points="641.5,70.0 641.5,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="644.5" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">May</text>
+<polyline points="703.9,70.0 703.9,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="706.9" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Jun</text>
+<polyline points="764.2,70.0 764.2,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="767.2" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Jul</text>
+<polyline points="826.6,70.0 826.6,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="829.6" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Aug</text>
+<polyline points="888.9,70.0 888.9,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="891.9" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Sep</text>
+<polyline points="949.3,70.0 949.3,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="952.3" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Oct</text>
+<polyline points="1011.7,70.0 1011.7,548.0" fill="none" stroke="#e2e8f0" stroke-width="1" stroke-linejoin="round"/>
+<text x="1014.7" y="64.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d">Nov</text>
+<text x="218.0" y="50.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d" font-weight="bold">2025</text>
+<text x="403.1" y="50.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#52606d" font-weight="bold">2026</text>
+<text x="12.0" y="114.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" fill="#1f2933" font-weight="bold">Convolutional networks</text>
+<text x="12.0" y="202.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" fill="#1f2933" font-weight="bold">Byte-level LUT attention</text>
+<text x="12.0" y="290.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" fill="#1f2933" font-weight="bold">Permutational (rank-only)</text>
+<text x="12.0" y="378.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" fill="#1f2933" font-weight="bold">LUT SDPA and dual stream</text>
+<text x="12.0" y="466.0" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="start" fill="#1f2933" font-weight="bold">FFN replacement</text>
+<rect x="303.5" y="98.0" width="255.5" height="24.0" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+<circle cx="303.5" cy="110.0" r="4.5" fill="#1f2933"/>
+<text x="297.5" y="132.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">first MNIST workbook</text>
+<text x="297.5" y="144.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">14 Nov</text>
+<circle cx="559.0" cy="110.0" r="4.5" fill="#1f2933"/>
+<text x="565.0" y="132.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">last convolution commit</text>
+<text x="565.0" y="144.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">21 Mar</text>
+<rect x="343.8" y="186.0" width="267.6" height="24.0" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<circle cx="343.8" cy="198.0" r="4.5" fill="#1f2933"/>
+<text x="337.8" y="220.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">first LUTTransformer</text>
+<text x="337.8" y="232.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">4 Dec</text>
+<circle cx="597.2" cy="198.0" r="4.5" fill="#1f2933"/>
+<text x="597.2" y="220.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="middle" fill="#1f2933">attention V3</text>
+<text x="597.2" y="232.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="middle" fill="#1f2933">9 Apr</text>
+<rect x="575.1" y="274.0" width="88.5" height="24.0" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.4"/>
+<rect x="971.4" y="274.0" width="38.2" height="24.0" rx="6" fill="#ede9fe" stroke="#6d28d9" stroke-width="1.4" stroke-dasharray="4 3"/>
+<circle cx="575.1" cy="286.0" r="4.5" fill="#1f2933"/>
+<text x="581.1" y="308.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">ranking_tools.py</text>
+<text x="581.1" y="320.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">29 Mar</text>
+<circle cx="637.5" cy="286.0" r="4.5" fill="#1f2933"/>
+<text x="643.5" y="308.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="middle" fill="#1f2933">BPE port</text>
+<text x="643.5" y="320.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="middle" fill="#1f2933">29 Apr</text>
+<circle cx="971.4" cy="286.0" r="4.5" fill="#1f2933"/>
+<text x="977.4" y="308.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">dominance stack</text>
+<text x="977.4" y="320.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">in the FFN (Oct)</text>
+<rect x="611.3" y="362.0" width="203.2" height="24.0" rx="6" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+<circle cx="611.3" cy="374.0" r="4.5" fill="#1f2933"/>
+<text x="617.3" y="396.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">byte-level exp247 to exp250</text>
+<text x="617.3" y="408.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">16 Apr</text>
+<circle cx="663.6" cy="374.0" r="4.5" fill="#1f2933"/>
+<text x="667.6" y="339.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">dual stream on BPE</text>
+<text x="667.6" y="352.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">12 May</text>
+<circle cx="667.6" cy="374.0" r="4.5" fill="#1f2933"/>
+<text x="663.6" y="396.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">RoPE runs</text>
+<text x="663.6" y="408.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">14 May</text>
+<circle cx="728.0" cy="374.0" r="4.5" fill="#1f2933"/>
+<text x="724.0" y="339.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">LUTGPT report</text>
+<text x="724.0" y="352.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">12-13 Jun</text>
+<circle cx="814.5" cy="374.0" r="4.5" fill="#1f2933"/>
+<text x="808.5" y="396.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">single stream replaces</text>
+<text x="808.5" y="408.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">the dual stream, 26 Jul</text>
+<rect x="854.7" y="450.0" width="173.0" height="24.0" rx="6" fill="#dcfce7" stroke="#15803d" stroke-width="1.4"/>
+<circle cx="695.8" cy="462.0" r="4.5" fill="#1f2933"/>
+<text x="701.8" y="484.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">first try (exp606)</text>
+<text x="701.8" y="496.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">late May</text>
+<circle cx="854.7" cy="462.0" r="4.5" fill="#1f2933"/>
+<text x="860.7" y="484.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">main line</text>
+<text x="860.7" y="496.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">15 Aug</text>
+<circle cx="893.0" cy="462.0" r="4.5" fill="#1f2933"/>
+<text x="899.0" y="427.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">FFN paper 3 Sep,</text>
+<text x="899.0" y="440.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="end" fill="#1f2933">fixed evaluation 5 Sep</text>
+<circle cx="949.3" cy="462.0" r="4.5" fill="#1f2933"/>
+<text x="945.3" y="484.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">lutorch_ex</text>
+<text x="945.3" y="496.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">1 Oct</text>
+<circle cx="977.5" cy="462.0" r="4.5" fill="#1f2933"/>
+<text x="973.5" y="427.5" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">d24 NanoChat</text>
+<text x="973.5" y="440.0" font-family="Helvetica, Arial, sans-serif" font-size="10.5" text-anchor="start" fill="#1f2933">15 Oct to Nov</text>
+<text x="560.0" y="580.0" font-family="Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle" fill="#52606d">Dates are commit dates in anatoli-starostin/spiky (see the pages for pinned links); the lines overlap on purpose.</text>
+</svg>
