@@ -14,6 +14,7 @@ import torch, torch.nn as nn
 from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.common import get_base_dir
+from noproj_geometry import make_spec, make_proj
 from model_build import build_model
 from fixed_eval import evaluate_bpb_fixed, eval_config
 import wandb_tracking
@@ -22,6 +23,13 @@ from spiky.lutorch_ex import (LUTSpec, ConfidenceLUT, QuantisedConfidenceLUT, Pr
                               FusedSoftSignHardLUT)
 
 CART = os.environ["CART"]
+# Opt-in variants (default = the original model; see noproj_geometry.py): NO_INPUT_PROJ=1 -> no input projection,
+# fan-out geometry (h_in=1, h_out=h, d_in=n_embd: every head reads the WHOLE stream); ANCHOR_MODE=single -> LUTSpec
+# anchor_mode="single" (single probes z[a]>0; needs nap <= d_in).
+NO_INPUT_PROJ = os.environ.get("NO_INPUT_PROJ", "0") == "1"
+ANCHOR_MODE = os.environ.get("ANCHOR_MODE", "pairs")
+EXTRA_TAGS = [t for t in os.environ.get("EXTRA_TAGS", "").split(",") if t]   # replaces the default tags when set
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT_OVERRIDE")                      # default: the tools' project (Spiky)
 _BUILDERS = {"fss_smooth": "FusedSoftSignSmoothLUT", "conf_n1": "ConfidenceLUT(read_top_n=1)",
              "conf_n2": "ConfidenceLUT(read_top_n=2)", "quant": "QuantisedConfidenceLUT(p2_int8, read_top_n=2)",
              "fmh": "FusedManifestoHardLUT", "fms": "FusedManifestoSoftLUT", "fss_hard": "FusedSoftSignHardLUT"}
@@ -60,8 +68,7 @@ model = build_model(cb, VOCAB, device=DEVICE)
 
 
 def make_cart(seed):
-    spec = LUTSpec(h_in=cfg["lut_n_heads"], h_out=cfg["lut_n_heads"], tph=cfg["lut_tables_per_head"],
-                   nap=cfg["lut_n_anchor_pairs"], d_in=cfg["lut_inner_in_dim"], d_out=cfg["lut_inner_out_dim"])
+    spec = make_spec(cfg, NO_INPUT_PROJ, ANCHOR_MODE)
     base = dict(seed=seed, weight_init_std=cfg["lut_init_weights_noise"], table_dropout_rate=DROP)
     if CART in ("conf_n1", "conf_n2"):
         return ConfidenceLUT(spec, read_top_n=(1 if CART == "conf_n1" else 2),
@@ -82,7 +89,7 @@ class LutorchExFFN(nn.Module):
     def __init__(self, n_embd, seed):
         super().__init__()
         self.cart = make_cart(seed)
-        self.proj = ProjectionMHL(self.cart, d_model=n_embd).float()      # fp32 island
+        self.proj = make_proj(self.cart, n_embd, NO_INPUT_PROJ).float()      # fp32 island
     def forward(self, x):
         return self.proj(x.float())
 
@@ -93,7 +100,7 @@ for i, b in enumerate(model.blocks):
     b.ffn = f; carts.append(f.cart)
 # NO manual init override: the library default (faithful OLD small-std) is now the main default.
 print(f"[init] CART={CART} ({_BUILDERS[CART]}) tables std(b0)={carts[0].weights.std().item():.6f} "
-      f"compress std(b0)={model.blocks[0].ffn.proj.compress.weight.std().item():.6f} "
+      f"compress std(b0)={'none' if NO_INPUT_PROJ else format(model.blocks[0].ffn.proj.compress.weight.std().item(), '.6f')} "
       f"decompress all_zero(b0)={bool((model.blocks[0].ffn.proj.decompress.weight==0).all().item())}")
 total_params = sum(p.numel() for p in model.parameters())
 print(f"CART={CART} blocks={len(model.blocks)} carts={len(carts)} params={total_params:,} "
@@ -133,6 +140,7 @@ def save_ckpt(step):
 
 
 wandb_tracking.GROUP = "lutorch_ex"
+if WANDB_PROJECT: wandb_tracking.PROJECT = WANDB_PROJECT
 from wandb_tracking import Tracker
 cfg_log = dict(cfg); cfg_log["exp_name"] = os.environ.get("EXP_NAME") or f"lutorch_ex_abl47_{CART}_{RUN_TAG}"; cfg_log["lut_impl"] = f"lutorch_ex_{CART}"
 # Human-readable, accurate wandb notes per run. The champion config.json carries stale "_*_note" blobs
@@ -148,10 +156,12 @@ _DESC = {"fss_smooth": "FusedSoftSignSmooth cartridge (Gen-2 soft-sign, smooth b
 for _k in [k for k in list(cfg_log) if k.endswith("_note")]:
     cfg_log.pop(_k, None)
 cfg_log["description"] = (f"{_DESC[CART]} Champion topology h8/tph64/nap8/d48 (6 blocks, ~68.2M params), "
-                          f"cell-TV lambda=10 and head-dropout 0.2, 48k-step cosine schedule, seed 1, "
-                          f"faithful small-std default init.")
+                          f"cell-TV lambda=10 and head-dropout 0.2, {N_STEPS}-step cosine schedule, seed 1, "
+                          f"faithful small-std default init."
+                          + (" No input projection: fan-out h_in=1,h_out=8,d_in=n_embd (every head reads the whole stream)." if NO_INPUT_PROJ else "")
+                          + (f" anchor_mode={ANCHOR_MODE}." if ANCHOR_MODE != "pairs" else ""))
 tracker = Tracker.start(cfg_log, OUT_DIR, grad_accum=grad_accum, total_params=total_params,
-                        extra_tags=["lutorch_ex", CART, f"tv:{TV_LAMBDA:g}", f"drop:{DROP:g}"])
+                        extra_tags=EXTRA_TAGS or ["lutorch_ex", CART, f"tv:{TV_LAMBDA:g}", f"drop:{DROP:g}"])
 csv_path = os.path.join(OUT_DIR, "metrics.csv")
 csv_f = open(csv_path, "a" if start_step else "w", newline=""); csv_w = csv.writer(csv_f)
 if not start_step:
