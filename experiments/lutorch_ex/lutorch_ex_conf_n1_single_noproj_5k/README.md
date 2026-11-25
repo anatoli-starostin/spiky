@@ -17,7 +17,7 @@ Schedule: **n_steps=5000 as a full schedule** (warm-up 10% = 500 steps, cosine t
 
 ## Results
 Params **67,350,540** (16K run: 68,237,580; difference = 6 x 147,840 = the six removed compress matrices 384x384+384). Peak mem 7.67 GB.
-Speed: **219 ms/step** mean over the logged steps (16K run on RTX 5090: ~170 ms; this is an H100, 5.3 GB-class batch 12x512x1, grad_accum 4), 0.32 h total.
+Speed: **219 ms/step** mean over the logged steps (16K run on RTX 5090: ~170 ms; this one is on an H100), 0.32 h total.
 
 | step | 5k fork (full 5K schedule) | 16K original (mid-schedule) |
 |---|---|---|
