@@ -1,0 +1,10 @@
+{
+  "exp_name": "lutorch_ex_conf_n1_single_noproj_5k16s",
+  "cart": "conf_n1",
+  "best_val_bpb": 1.2997180533110018,
+  "total_params": 67350540,
+  "peak_gb": 7.669,
+  "hours": 0.3201,
+  "n_steps": 16000,
+  "stopped_at_step": 5000
+}
