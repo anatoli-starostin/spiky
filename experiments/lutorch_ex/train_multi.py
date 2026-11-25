@@ -43,6 +43,9 @@ DEVICE = "cuda"
 torch.manual_seed(cfg["random_seed"])
 SEQ = cfg["seq_len"]; DEVICE_BS = cfg["device_batch_size"]; TOTAL_BS = cfg["total_batch_size"]
 N_STEPS = int(os.environ.get("SMOKE_STEPS", cfg["n_steps"]))
+# STOP_AT_STEP: stop after this step while the lr schedule (warm-up, cosine horizon) stays computed for N_STEPS total
+# (cuts the N_STEPS schedule short, e.g. the first 5000 steps of the 16K schedule). Default = N_STEPS (old behaviour).
+STOP_AT = int(os.environ.get("STOP_AT_STEP", N_STEPS)); assert 0 < STOP_AT <= N_STEPS
 EVAL_EVERY = int(os.environ.get("SMOKE_EVAL_EVERY", cfg["eval_every"])) if "SMOKE_STEPS" in os.environ else cfg["eval_every"]
 LR, WD, WARM = cfg["lr"], cfg["weight_decay"], cfg["lr_warmup_fraction"]
 TV_LAMBDA = float(cfg["lut_cell_smoothness"])          # 10.0
@@ -104,7 +107,7 @@ print(f"[init] CART={CART} ({_BUILDERS[CART]}) tables std(b0)={carts[0].weights.
       f"decompress all_zero(b0)={bool((model.blocks[0].ffn.proj.decompress.weight==0).all().item())}")
 total_params = sum(p.numel() for p in model.parameters())
 print(f"CART={CART} blocks={len(model.blocks)} carts={len(carts)} params={total_params:,} "
-      f"TV_lambda={TV_LAMBDA} dropout={DROP} N_STEPS={N_STEPS} RUN_TAG={RUN_TAG}")
+      f"TV_lambda={TV_LAMBDA} dropout={DROP} N_STEPS={N_STEPS} STOP_AT={STOP_AT} RUN_TAG={RUN_TAG}")
 
 lut_ids = {id(c.weights) for c in carts}
 decay, nodecay = [], []
@@ -168,7 +171,7 @@ if not start_step:
     csv_w.writerow(["step", "train_loss", "val_bpb", "lut_tv", "step_ms"])
 
 model.train(); t_run = time.time()
-for step in range(start_step + 1, N_STEPS + 1):
+for step in range(start_step + 1, STOP_AT + 1):
     s = lr_scale(step)
     for g in opt.param_groups: g["lr"] = g["initial_lr"] * s
     opt.zero_grad(set_to_none=True)
@@ -186,18 +189,18 @@ for step in range(start_step + 1, N_STEPS + 1):
     tracker.train_step(step, acc, ema, s * LR)
     if step % 20 == 0 or step == 1 or step <= 5:
         print(f"step {step:5d} loss={acc:.4f} ema={ema:.4f} tv={tv.item():.3e} lr={s*LR:.2e} step_ms={step_ms:.0f}")
-    if step % EVAL_EVERY == 0 or step == N_STEPS:
+    if step % EVAL_EVERY == 0 or step == STOP_AT:
         model.eval(); bpb = evaluate_bpb_fixed(model, tok, token_bytes, SEQ, DEVICE, **EVAL); model.train()
         best = min(best, bpb)
         print(f"[VAL] step {step}: bpb={bpb:.4f}")
         csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}"]); csv_f.flush()
-        tracker.eval_step(step, bpb, ema, {"lut_tv": float(tv.item())}, model)
-    if step % CKPT_EVERY == 0 or step == N_STEPS:
+        tracker.eval_step(step, bpb, ema, {"lut_tv": float(tv.item()), "val/bpb": bpb}, model)
+    if step % CKPT_EVERY == 0 or step == STOP_AT:
         save_ckpt(step)
 csv_f.close()
 peak = torch.cuda.max_memory_allocated() / 1e9
 summary = {"exp_name": cfg_log["exp_name"], "cart": CART, "best_val_bpb": best,
            "total_params": total_params, "peak_gb": round(peak, 3),
-           "hours": round((time.time() - t_run) / 3600, 4), "n_steps": N_STEPS}
+           "hours": round((time.time() - t_run) / 3600, 4), "n_steps": N_STEPS, "stopped_at_step": STOP_AT}
 json.dump(summary, open(os.path.join(OUT_DIR, "summary.json"), "w"), indent=2)
 print("=== DONE ===", json.dumps(summary)); tracker.finish(summary)
