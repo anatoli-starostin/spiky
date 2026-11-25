@@ -134,7 +134,7 @@ def save_ckpt(step):
 
 wandb_tracking.GROUP = "lutorch_ex"
 from wandb_tracking import Tracker
-cfg_log = dict(cfg); cfg_log["exp_name"] = f"lutorch_ex_abl47_{CART}_{RUN_TAG}"; cfg_log["lut_impl"] = f"lutorch_ex_{CART}"
+cfg_log = dict(cfg); cfg_log["exp_name"] = os.environ.get("EXP_NAME") or f"lutorch_ex_abl47_{CART}_{RUN_TAG}"; cfg_log["lut_impl"] = f"lutorch_ex_{CART}"
 # Human-readable, accurate wandb notes per run. The champion config.json carries stale "_*_note" blobs
 # (a quantised-arm description that even leaks internal task ids); strip them and set a clean description
 # of what THIS run actually trains, so the notes are correct and task-id-free from creation.
