@@ -15,6 +15,7 @@ from nanochat.tokenizer import RustBPETokenizer, get_token_bytes
 from nanochat.dataloader import tokenizing_distributed_data_loader_bos_bestfit
 from nanochat.common import get_base_dir
 from noproj_geometry import make_spec, make_proj
+from ternary_in import TernaryIn
 from model_build import build_model
 from fixed_eval import evaluate_bpb_fixed, eval_config
 import wandb_tracking
@@ -28,6 +29,10 @@ CART = os.environ["CART"]
 # anchor_mode="single" (single probes z[a]>0; needs nap <= d_in).
 NO_INPUT_PROJ = os.environ.get("NO_INPUT_PROJ", "0") == "1"
 ANCHOR_MODE = os.environ.get("ANCHOR_MODE", "pairs")
+# TERN_IN=topk|free (default none = the original model): a ternary d x d matrix T per layer in front of the FFN, which then reads T * ln2(h)
+# (ternary_in.py, a port of the deepspike-ml experiment/p384-ternin-5k16s module); TERN_K = nonzeros per row for topk (k/2 x +1, k/2 x -1).
+TERN_IN = os.environ.get("TERN_IN", "none"); TERN_K = int(os.environ.get("TERN_K", "4"))
+assert TERN_IN in ("none", "topk", "free") and (TERN_IN != "topk" or (TERN_K % 2 == 0 and 2 <= TERN_K <= 384))
 EXTRA_TAGS = [t for t in os.environ.get("EXTRA_TAGS", "").split(",") if t]   # replaces the default tags when set
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT_OVERRIDE")                      # default: the tools' project (Spiky)
 _BUILDERS = {"fss_smooth": "FusedSoftSignSmoothLUT", "conf_n1": "ConfidenceLUT(read_top_n=1)",
@@ -91,10 +96,14 @@ def make_cart(seed):
 class LutorchExFFN(nn.Module):
     def __init__(self, n_embd, seed):
         super().__init__()
+        self.tin = TernaryIn(n_embd, TERN_IN, TERN_K // 2, TERN_K // 2, 0.5, 0.5, seed=seed + 31337) if TERN_IN != "none" else None
         self.cart = make_cart(seed)
         self.proj = make_proj(self.cart, n_embd, NO_INPUT_PROJ).float()      # fp32 island
     def forward(self, x):
-        return self.proj(x.float())
+        x = x.float()
+        if self.tin is not None:
+            x = self.tin(x)                                                  # the TLUT reads T ln2(h); the votes are still written into the stream
+        return self.proj(x)
 
 
 carts = []
@@ -109,7 +118,18 @@ total_params = sum(p.numel() for p in model.parameters())
 print(f"CART={CART} blocks={len(model.blocks)} carts={len(carts)} params={total_params:,} "
       f"TV_lambda={TV_LAMBDA} dropout={DROP} N_STEPS={N_STEPS} STOP_AT={STOP_AT} RUN_TAG={RUN_TAG}")
 
+def tern_stats():
+    """Per layer nonzero fraction / flip rate (since the previous call) of the ternary input matrices ({} without them)."""
+    out = {}
+    for l, b in enumerate(model.blocks):
+        if b.ffn.tin is not None:
+            out.update({f"tern/{k}_l{l}": v for k, v in b.ffn.tin.stats().items()})
+    return out
+
+
 lut_ids = {id(c.weights) for c in carts}
+if TERN_IN != "none":
+    lut_ids |= {id(b.ffn.tin.latent) for b in model.blocks}                 # latents of T: no weight decay (like the LUT tables)
 decay, nodecay = [], []
 for p in model.parameters():
     if p.requires_grad:
@@ -163,6 +183,10 @@ cfg_log["description"] = (f"{_DESC[CART]} Champion topology h8/tph64/nap8/d48 (6
                           f"faithful small-std default init."
                           + (" No input projection: fan-out h_in=1,h_out=8,d_in=n_embd (every head reads the whole stream)." if NO_INPUT_PROJ else "")
                           + (f" anchor_mode={ANCHOR_MODE}." if ANCHOR_MODE != "pairs" else ""))
+if TERN_IN != "none":
+    cfg_log["tern_in"] = TERN_IN; cfg_log["tern_k"] = TERN_K if TERN_IN == "topk" else None
+    cfg_log["description"] += (f" + ternary 384x384 input matrix T per layer in front of the FFN (reads T*ln2(h)): "
+                               + (f"topk k={TERN_K} ({TERN_K // 2}x+1, {TERN_K // 2}x-1 per output row)" if TERN_IN == "topk" else "free (sign with learned dead zone, thr init 0.5)") + ".")
 tracker = Tracker.start(cfg_log, OUT_DIR, grad_accum=grad_accum, total_params=total_params,
                         extra_tags=EXTRA_TAGS or ["lutorch_ex", CART, f"tv:{TV_LAMBDA:g}", f"drop:{DROP:g}"])
 csv_path = os.path.join(OUT_DIR, "metrics.csv")
@@ -170,6 +194,7 @@ csv_f = open(csv_path, "a" if start_step else "w", newline=""); csv_w = csv.writ
 if not start_step:
     csv_w.writerow(["step", "train_loss", "val_bpb", "lut_tv", "step_ms"])
 
+tern_log = []
 model.train(); t_run = time.time()
 for step in range(start_step + 1, STOP_AT + 1):
     s = lr_scale(step)
@@ -194,7 +219,13 @@ for step in range(start_step + 1, STOP_AT + 1):
         best = min(best, bpb)
         print(f"[VAL] step {step}: bpb={bpb:.4f}")
         csv_w.writerow([step, f"{acc:.6f}", f"{bpb:.6f}", f"{tv.item():.6e}", f"{step_ms:.1f}"]); csv_f.flush()
-        tracker.eval_step(step, bpb, ema, {"lut_tv": float(tv.item()), "val/bpb": bpb}, model)
+        extra = {"lut_tv": float(tv.item()), "val/bpb": bpb}
+        ts = tern_stats()
+        if ts:
+            extra.update(ts)
+            print(f"[TERN] step {step}: " + " ".join(f"nz{l}={ts[f'tern/nonzero_frac_l{l}']:.4f}/flip{ts[f'tern/flip_rate_l{l}']:.4f}" for l in range(len(model.blocks))), flush=True)
+            tern_log.append(dict(step=step, **ts)); json.dump(tern_log, open(os.path.join(OUT_DIR, "tern_stats.json"), "w"), indent=1)
+        tracker.eval_step(step, bpb, ema, extra, model)
     if step % CKPT_EVERY == 0 or step == STOP_AT:
         save_ckpt(step)
 csv_f.close()
